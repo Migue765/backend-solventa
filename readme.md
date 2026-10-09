@@ -1,5 +1,86 @@
 Este es el repositorio de backend
 
+## Estructura del repositorio
+
+Monorepo con la infraestructura (Terraform) y los microservicios (Python) de Solventa, según el documento de arquitectura (contextos delimitados, puertos y adaptadores, despliegue en EKS multi-AZ con Warm Standby multirregional).
+
+```
+.
+├── terraform/                # Infraestructura como código (AWS)
+│   ├── bootstrap/            # Backend remoto del state (S3 + lock)
+│   ├── global/               # Recursos globales (DNS, replicación de ECR, IAM)
+│   ├── modules/              # Módulos reutilizables, uno por capacidad
+│   └── environments/         # Composición de módulos por ambiente
+│       ├── dev/
+│       ├── staging/
+│       └── prod/
+│           ├── primary/      # Región principal (multi-AZ)
+│           └── secondary/    # Región de recuperación (Warm Standby)
+├── services/                 # Un microservicio por carpeta (un contexto / workload)
+│   └── <servicio>/
+│       ├── src/<paquete>/
+│       │   ├── api/            # Entrada HTTP: routers y esquemas
+│       │   ├── application/    # Casos de uso y puertos
+│       │   ├── domain/         # Agregados, entidades, value objects y eventos
+│       │   └── infrastructure/ # Adaptadores: BD, mensajería, proveedores externos
+│       └── tests/
+│           ├── unit/
+│           └── integration/
+├── contracts/                # Contratos versionados
+│   ├── openapi/              # APIs síncronas
+│   └── events/               # Esquemas de eventos del Event Bus
+├── libs/                     # Librerías técnicas compartidas (sin reglas de negocio)
+│   ├── observability/        # Logs, métricas, trazas y correlationId
+│   └── messaging/            # Outbox, Inbox e idempotencia
+└── docs/
+    ├── architecture/         # Documento de arquitectura y diagramas
+    └── adr/                  # Registro de decisiones de arquitectura
+```
+
+### Microservicios
+
+| Carpeta          | Microservicio                               | Contexto                       |
+|------------------|---------------------------------------------|--------------------------------|
+| `bff-web`        | BFF Web                                     | Experiencias y API             |
+| `bff-movil`      | BFF Móvil                                   | Experiencias y API             |
+| `api-socios`     | API de Socios                               | Experiencias y API / Distribución |
+| `identidad`      | Consentimiento y KYC                        | Identidad y Cliente            |
+| `perfilamiento`  | Personalización y perfil de riesgo          | Perfilamiento y Personalización |
+| `cotizacion`     | Tarificación y Cotización                   | Cotización                     |
+| `polizas`        | Suscripción, emisión y ciclo de vida        | Producto y Suscripción / Pólizas |
+| `siniestros`     | Siniestros                                  | Siniestros                     |
+| `pagos`          | Cobros, pagos y recaudo                     | Pagos y Recaudo                |
+| `cumplimiento`   | Fraude, analítica y auditoría               | Cumplimiento y Auditoría       |
+| `integraciones`  | Adaptadores externos                        | Integraciones (puertos y adaptadores) |
+
+Reglas:
+- Cada servicio es dueño de sus datos: no se comparten tablas ni se importa código de dominio de otro servicio.
+- Los servicios se comunican solo mediante los contratos de `contracts/` (HTTP o eventos).
+- `libs/` contiene solo código técnico transversal, nunca reglas de negocio.
+
+### Módulos de Terraform
+
+| Módulo              | Recurso AWS                                         |
+|---------------------|-----------------------------------------------------|
+| `network`           | VPC multi-AZ, subredes, NAT, endpoints              |
+| `eks`               | Clúster EKS privado y node pools                    |
+| `api-gateway`       | API Gateway y VPC Link V2                           |
+| `waf`               | Reglas WAF del borde                                |
+| `rds-aurora`        | Aurora por dominio, réplica global y backups (PITR) |
+| `elasticache-redis` | Redis multi-AZ (caché no autoritativa)              |
+| `s3`                | Buckets de evidencias (versionado, Object Lock/WORM, replicación) |
+| `kms`               | Llaves de cifrado                                   |
+| `secrets-manager`   | Secretos y rotación                                 |
+| `messaging`         | Event Bus, colas y DLQ                              |
+| `ecr`               | Repositorios de imágenes                            |
+| `iam-irsa`          | Roles IAM por service account                       |
+| `observability`     | Logs, métricas, alarmas y dashboards                |
+
+Buenas prácticas:
+- Los módulos no definen providers ni backend; eso lo hace cada ambiente.
+- Cada ambiente (y cada región de `prod`) tiene su propio state remoto.
+- Las versiones de Terraform y de los providers se fijan en `versions.tf`, y `.terraform.lock.hcl` se versiona.
+
 ## Gitflow
 
 El repositorio sigue el modelo **gitflow** con dos ramas permanentes:
