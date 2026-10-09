@@ -1,0 +1,49 @@
+name: Backport to develop
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  backport:
+    if: >-
+      github.event.pull_request.merged == true &&
+      (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # Un PAT permite que el PR de backport dispare los checks (GITHUB_TOKEN no lo hace).
+          token: ${{ secrets.BACKPORT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Create backport branch
+        id: branch
+        run: |
+          branch="backport/$(date -u +%Y-%m-%d)"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            branch="${branch}-$(date -u +%H%M%S)"
+          fi
+          git checkout -b "$branch"
+          git push origin "$branch"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR to develop
+        env:
+          GH_TOKEN: ${{ secrets.BACKPORT_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          SOURCE: ${{ github.head_ref }}
+          SOURCE_PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr create \
+            --base develop \
+            --head "$BRANCH" \
+            --title "Backport $SOURCE to develop" \
+            --body "Backport automático de \`$SOURCE\` (#$SOURCE_PR) desde \`main\` hacia \`develop\`."
