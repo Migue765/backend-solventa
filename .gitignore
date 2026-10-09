@@ -61,3 +61,7 @@ venv/
 *.egg-info/
 .coverage
 htmlcov/
+
+# Bases locales
+*.db
+*.sqlite3
