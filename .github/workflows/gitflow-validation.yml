@@ -1,0 +1,41 @@
+name: Gitflow validation
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  validate-branch:
+    name: validate-branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate source and target branches
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "PR: $HEAD_REF -> $BASE_REF"
+
+          case "$BASE_REF" in
+            main)
+              allowed="release/ hotfix/"
+              ;;
+            develop)
+              allowed="feature/ backport/"
+              ;;
+            *)
+              echo "::error::Target branch '$BASE_REF' is not managed by gitflow."
+              exit 1
+              ;;
+          esac
+
+          for prefix in $allowed; do
+            if [[ "$HEAD_REF" == "$prefix"* ]]; then
+              echo "OK: '$HEAD_REF' can be merged into '$BASE_REF'."
+              exit 0
+            fi
+          done
+
+          echo "::error::'$HEAD_REF' cannot be merged into '$BASE_REF'. Allowed prefixes for '$BASE_REF': $allowed"
+          exit 1
