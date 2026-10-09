@@ -6,7 +6,7 @@ Monorepo con la infraestructura (Terraform) y los microservicios (Python) de Sol
 
 ```
 .
-├── infra/terraform/          # Infraestructura como código (AWS)
+├── terraform/                # Infraestructura como código (AWS)
 │   ├── bootstrap/            # Backend remoto del state (S3 + lock)
 │   ├── global/               # Recursos globales (DNS, replicación de ECR, IAM)
 │   ├── modules/              # Módulos reutilizables, uno por capacidad
