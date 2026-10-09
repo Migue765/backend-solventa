@@ -1,0 +1,39 @@
+# Claude / AI assistants
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs / editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs y temporales
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Variables de entorno
+.env
+.env.*
+!.env.example
+
+# Dependencias y builds
+node_modules/
+vendor/
+dist/
+build/
+target/
+bin/
+coverage/
+__pycache__/
+*.pyc
