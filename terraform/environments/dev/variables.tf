@@ -37,7 +37,7 @@ variable "vpc_cidr" {
 variable "kubernetes_version" {
   description = "Version de Kubernetes del cluster EKS."
   type        = string
-  default     = "1.33"
+  default     = "1.35"
 }
 
 variable "public_access_cidrs" {
@@ -160,13 +160,13 @@ variable "service_account_name" {
 }
 
 variable "alb_controller_chart_version" {
-  description = "Version del chart aws-load-balancer-controller (null = la ultima)."
+  description = "Version del chart aws-load-balancer-controller."
   type        = string
-  default     = null
+  default     = "3.6.0"
 }
 
 variable "metrics_server_chart_version" {
-  description = "Version del chart metrics-server (null = la ultima)."
+  description = "Version del chart metrics-server."
   type        = string
-  default     = null
+  default     = "3.14.0"
 }
