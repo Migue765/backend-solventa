@@ -3,11 +3,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
-
 from cotizacion.api.schemas import CrearCotizacionRequest, cotizacion_a_json
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
+from pydantic import ValidationError
 
 
 def cuerpo(**cambios):
@@ -52,7 +51,9 @@ def test_serializa_cotizacion_en_camel_case_y_montos_como_texto():
     cobertura = CoberturaCotizada(uuid4(), Dinero(Decimal("1000"), "COP"), Dinero.cero("COP"))
     cotizacion = Cotizacion(cliente_id=uuid4(), producto_id=uuid4(), coberturas=[cobertura])
     ahora = datetime(2026, 10, 1, tzinfo=timezone.utc)
-    cotizacion.calcular({cobertura.cobertura_id: Dinero(Decimal("15"), "COP")}, ahora, timedelta(days=30))
+    cotizacion.calcular(
+        {cobertura.cobertura_id: Dinero(Decimal("15"), "COP")}, ahora, timedelta(days=30)
+    )
 
     json = cotizacion_a_json(cotizacion)
 

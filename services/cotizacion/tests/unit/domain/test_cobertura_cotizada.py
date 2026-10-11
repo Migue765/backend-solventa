@@ -2,7 +2,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-
 from cotizacion.domain.cotizacion import CoberturaCotizada
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError

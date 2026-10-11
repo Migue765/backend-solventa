@@ -1,8 +1,7 @@
 from alembic import context
-from sqlalchemy import create_engine, pool
-
 from cotizacion.config import Config
 from cotizacion.infrastructure.persistence.models import Base
+from sqlalchemy import create_engine, pool
 
 config = context.config
 database_url = config.get_main_option("sqlalchemy.url") or Config.desde_entorno().database_url

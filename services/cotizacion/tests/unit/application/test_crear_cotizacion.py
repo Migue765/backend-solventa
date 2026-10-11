@@ -3,10 +3,13 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-
-from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacion, CrearCotizacionComando
-from cotizacion.domain.dinero import Dinero
+from cotizacion.application.crear_cotizacion import (
+    CoberturaSolicitada,
+    CrearCotizacion,
+    CrearCotizacionComando,
+)
 from cotizacion.domain.cotizacion import EstadoCotizacion
+from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError
 
 AHORA = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -36,7 +39,9 @@ def caso_de_uso(repositorio):
 
 
 def comando(*coberturas):
-    return CrearCotizacionComando(cliente_id=uuid4(), producto_id=uuid4(), moneda="COP", coberturas=coberturas)
+    return CrearCotizacionComando(
+        cliente_id=uuid4(), producto_id=uuid4(), moneda="COP", coberturas=coberturas
+    )
 
 
 def test_crea_calcula_y_guarda(caso_de_uso, repositorio):

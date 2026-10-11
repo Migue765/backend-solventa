@@ -7,7 +7,9 @@ from cotizacion.infrastructure.tarificador_tasa_fija import TarificadorTasaFija
 
 
 def test_prima_es_tasa_sobre_suma_asegurada_menos_deducible():
-    cobertura = CoberturaCotizada(uuid4(), Dinero(Decimal("1000000"), "COP"), Dinero(Decimal("100000"), "COP"))
+    cobertura = CoberturaCotizada(
+        uuid4(), Dinero(Decimal("1000000"), "COP"), Dinero(Decimal("100000"), "COP")
+    )
 
     prima = TarificadorTasaFija(Decimal("0.015")).calcular_prima(uuid4(), cobertura)
 

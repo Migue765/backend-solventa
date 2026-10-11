@@ -1,9 +1,8 @@
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
-
 from cotizacion.infrastructure.persistence.models import Base
+from sqlalchemy import create_engine, inspect
 
 
 def test_migraciones_coinciden_con_los_modelos(database_url):

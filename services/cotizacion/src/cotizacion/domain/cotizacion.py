@@ -25,7 +25,9 @@ class CoberturaCotizada:
         if self.suma_asegurada.monto <= 0:
             raise ReglaDeNegocioError("La suma asegurada debe ser mayor a cero.")
         if self.deducible.moneda != self.suma_asegurada.moneda:
-            raise ReglaDeNegocioError("El deducible y la suma asegurada deben estar en la misma moneda.")
+            raise ReglaDeNegocioError(
+                "El deducible y la suma asegurada deben estar en la misma moneda."
+            )
         if self.deducible.monto > self.suma_asegurada.monto:
             raise ReglaDeNegocioError("El deducible no puede superar la suma asegurada.")
 
@@ -60,6 +62,8 @@ class Cotizacion:
             raise ReglaDeNegocioError("Solo se puede calcular una cotización pendiente.")
         for cobertura in self.coberturas:
             cobertura.prima = primas[cobertura.cobertura_id]
-        self.prima_estimada = sum((c.prima for c in self.coberturas), start=Dinero.cero(self.moneda))
+        self.prima_estimada = sum(
+            (c.prima for c in self.coberturas), start=Dinero.cero(self.moneda)
+        )
         self.valida_hasta = ahora + vigencia
         self.estado = EstadoCotizacion.CALCULADA

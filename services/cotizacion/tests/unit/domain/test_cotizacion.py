@@ -3,7 +3,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError
@@ -48,7 +47,10 @@ def test_calcular_suma_primas_y_fija_vigencia():
     cot = cotizacion(c1, c2)
 
     cot.calcular(
-        {c1.cobertura_id: Dinero(Decimal("100"), "COP"), c2.cobertura_id: Dinero(Decimal("50.5"), "COP")},
+        {
+            c1.cobertura_id: Dinero(Decimal("100"), "COP"),
+            c2.cobertura_id: Dinero(Decimal("50.5"), "COP"),
+        },
         AHORA,
         timedelta(days=30),
     )

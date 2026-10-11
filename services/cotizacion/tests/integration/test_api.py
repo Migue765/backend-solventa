@@ -2,11 +2,12 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
-
 from cotizacion.app import create_app
 from cotizacion.config import Config
 from cotizacion.infrastructure.persistence.database import crear_sesiones
-from cotizacion.infrastructure.persistence.repositorio_cotizaciones import RepositorioCotizacionesSqlAlchemy
+from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
+    RepositorioCotizacionesSqlAlchemy,
+)
 
 
 @pytest.fixture
@@ -20,7 +21,9 @@ def solicitud(**cambios):
         "clienteId": str(uuid4()),
         "productoId": str(uuid4()),
         "moneda": "COP",
-        "coberturas": [{"coberturaId": str(uuid4()), "sumaAsegurada": "2000000", "deducible": "200000"}],
+        "coberturas": [
+            {"coberturaId": str(uuid4()), "sumaAsegurada": "2000000", "deducible": "200000"}
+        ],
     }
     cuerpo.update(cambios)
     return cuerpo
@@ -44,7 +47,9 @@ def test_crear_cotizacion_la_persiste(client, database_url):
     assert datos["estado"] == "CALCULADA"
     assert datos["primaEstimada"] == {"monto": "18000.00", "moneda": "COP"}
 
-    guardada = RepositorioCotizacionesSqlAlchemy(crear_sesiones(database_url)).obtener(UUID(datos["cotizacionId"]))
+    guardada = RepositorioCotizacionesSqlAlchemy(crear_sesiones(database_url)).obtener(
+        UUID(datos["cotizacionId"])
+    )
     assert guardada is not None
     assert guardada.prima_estimada.monto == Decimal("18000.00")
 
@@ -64,7 +69,9 @@ def test_solicitud_invalida(client):
 
 
 def test_regla_de_negocio_violada(client):
-    cuerpo = solicitud(coberturas=[{"coberturaId": str(uuid4()), "sumaAsegurada": "100", "deducible": "500"}])
+    cuerpo = solicitud(
+        coberturas=[{"coberturaId": str(uuid4()), "sumaAsegurada": "100", "deducible": "500"}]
+    )
 
     respuesta = client.post("/v1/cotizaciones", json=cuerpo)
 

@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 import pytest
-
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError
 
@@ -20,7 +19,9 @@ def test_cero():
 
 
 def test_suma_misma_moneda():
-    assert Dinero(Decimal("1.50"), "COP") + Dinero(Decimal("2"), "COP") == Dinero(Decimal("3.50"), "COP")
+    assert Dinero(Decimal("1.50"), "COP") + Dinero(Decimal("2"), "COP") == Dinero(
+        Decimal("3.50"), "COP"
+    )
 
 
 def test_no_suma_monedas_distintas():

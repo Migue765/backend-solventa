@@ -11,7 +11,9 @@ bp = Blueprint("cotizaciones", __name__, url_prefix="/v1/cotizaciones")
 def crear_cotizacion():
     cuerpo = request.get_json(silent=True)
     if cuerpo is None:
-        return jsonify(error="solicitud_invalida", mensaje="El cuerpo debe ser un JSON válido."), 400
+        return jsonify(
+            error="solicitud_invalida", mensaje="El cuerpo debe ser un JSON válido."
+        ), 400
     try:
         solicitud = CrearCotizacionRequest.model_validate(cuerpo)
     except ValidationError as e:

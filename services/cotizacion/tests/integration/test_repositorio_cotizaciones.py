@@ -5,7 +5,9 @@ from uuid import uuid4
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.infrastructure.persistence.database import crear_sesiones
-from cotizacion.infrastructure.persistence.repositorio_cotizaciones import RepositorioCotizacionesSqlAlchemy
+from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
+    RepositorioCotizacionesSqlAlchemy,
+)
 
 
 def cotizacion_calculada():
@@ -13,7 +15,10 @@ def cotizacion_calculada():
     c2 = CoberturaCotizada(uuid4(), Dinero(Decimal("500"), "COP"), Dinero.cero("COP"))
     cotizacion = Cotizacion(cliente_id=uuid4(), producto_id=uuid4(), coberturas=[c1, c2])
     cotizacion.calcular(
-        {c1.cobertura_id: Dinero(Decimal("13.50"), "COP"), c2.cobertura_id: Dinero(Decimal("7.50"), "COP")},
+        {
+            c1.cobertura_id: Dinero(Decimal("13.50"), "COP"),
+            c2.cobertura_id: Dinero(Decimal("7.50"), "COP"),
+        },
         datetime(2026, 10, 1, tzinfo=timezone.utc),
         timedelta(days=30),
     )
