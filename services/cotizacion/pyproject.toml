@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2,<4"]
+server = ["gunicorn>=23,<24"]
 dev = ["pytest>=8"]
 
 [build-system]
