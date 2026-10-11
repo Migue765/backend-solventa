@@ -44,7 +44,17 @@ jobs:
         run: python -m ruff check .
 
       - name: Comprobar tipos
-        run: python -m mypy scripts tests
+        shell: bash
+        run: |
+          python -m mypy scripts tests
+          for config in services/*/mypy.ini; do
+            [[ -f "$config" ]] || continue
+            service_directory="$(dirname "$config")"
+            python -m mypy \
+              --config-file "$config" \
+              "$service_directory/src" \
+              "$service_directory/tests"
+          done
 
       - name: Validar contratos OpenAPI
         run: python scripts/validate_openapi.py
