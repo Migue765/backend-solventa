@@ -1,10 +1,12 @@
-from datetime import timezone
+from datetime import UTC, timezone
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.infrastructure.persistence.models import CoberturaCotizadaModel, CotizacionModel
 
 
@@ -20,6 +22,42 @@ class RepositorioCotizacionesSqlAlchemy:
         with self._sesiones() as sesion:
             modelo = sesion.get(CotizacionModel, cotizacion_id)
             return _a_dominio(modelo) if modelo else None
+
+    def guardar_solicitud(self, solicitud: SolicitudCotizacion) -> None:
+        modelo = _a_modelo(solicitud.cotizacion)
+        modelo.solicitud_id = solicitud.solicitud_id
+        modelo.tipo_cliente = solicitud.tipo_cliente
+        modelo.identificacion = solicitud.identificacion
+        modelo.patente_vehiculo = solicitud.patente_vehiculo
+        modelo.correo = solicitud.correo
+        modelo.telefono = solicitud.telefono
+        modelo.idempotency_key = solicitud.idempotency_key
+        modelo.request_fingerprint = solicitud.request_fingerprint
+        modelo.creada_en = solicitud.creada_en
+        with self._sesiones.begin() as sesion:
+            sesion.add(modelo)
+
+    def buscar_por_idempotencia(
+        self, cliente_id: UUID, idempotency_key: UUID
+    ) -> SolicitudCotizacion | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(CotizacionModel).where(
+                    CotizacionModel.cliente_id == cliente_id,
+                    CotizacionModel.idempotency_key == idempotency_key,
+                )
+            )
+            return _solicitud_a_dominio(modelo) if modelo else None
+
+    def obtener_solicitud(self, solicitud_id: str, cliente_id: UUID) -> SolicitudCotizacion | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(CotizacionModel).where(
+                    CotizacionModel.solicitud_id == solicitud_id,
+                    CotizacionModel.cliente_id == cliente_id,
+                )
+            )
+            return _solicitud_a_dominio(modelo) if modelo else None
 
 
 def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
@@ -37,8 +75,9 @@ def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
                 suma_asegurada=c.suma_asegurada.monto,
                 deducible=c.deducible.monto,
                 prima=c.prima.monto,
+                orden=orden,
             )
-            for c in cotizacion.coberturas
+            for orden, c in enumerate(cotizacion.coberturas)
         ],
     )
 
@@ -65,4 +104,35 @@ def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
             )
             for c in modelo.coberturas
         ],
+    )
+
+
+def _solicitud_a_dominio(modelo: CotizacionModel) -> SolicitudCotizacion:
+    if not all(
+        (
+            modelo.solicitud_id,
+            modelo.tipo_cliente,
+            modelo.identificacion,
+            modelo.patente_vehiculo,
+            modelo.correo,
+            modelo.telefono,
+            modelo.idempotency_key,
+            modelo.request_fingerprint,
+        )
+    ):
+        raise ValueError("La cotización no contiene una solicitud completa.")
+    creada_en = modelo.creada_en
+    if creada_en.tzinfo is None:
+        creada_en = creada_en.replace(tzinfo=UTC)
+    return SolicitudCotizacion(
+        solicitud_id=modelo.solicitud_id,
+        cotizacion=_a_dominio(modelo),
+        tipo_cliente=modelo.tipo_cliente,
+        identificacion=modelo.identificacion,
+        patente_vehiculo=modelo.patente_vehiculo,
+        correo=modelo.correo,
+        telefono=modelo.telefono,
+        idempotency_key=modelo.idempotency_key,
+        request_fingerprint=modelo.request_fingerprint,
+        creada_en=creada_en,
     )

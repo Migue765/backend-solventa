@@ -1,12 +1,15 @@
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
+from cotizacion.application.registrar_solicitud import RegistrarSolicitudComando
 from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
+from cotizacion.domain.solicitud import SolicitudCotizacion
 
 
 class _Solicitud(BaseModel):
@@ -31,8 +34,31 @@ class CrearCotizacionRequest(_Solicitud):
             producto_id=self.producto_id,
             moneda=self.moneda,
             coberturas=tuple(
-                CoberturaSolicitada(c.cobertura_id, c.suma_asegurada, c.deducible) for c in self.coberturas
+                CoberturaSolicitada(c.cobertura_id, c.suma_asegurada, c.deducible)
+                for c in self.coberturas
             ),
+        )
+
+
+class RegistrarSolicitudRequest(_Solicitud):
+    cliente_id: UUID
+    producto_id: str = Field(max_length=64)
+    tipo_cliente: str = Field(pattern=r"^persona_natural$")
+    identificacion: str = Field(pattern=r"^[A-Za-z0-9.-]{6,20}$")
+    patente_vehiculo: str = Field(pattern=r"^[A-Za-z0-9-]{5,8}$")
+    correo: EmailStr
+    telefono: str = Field(pattern=r"^\+[1-9][0-9]{7,14}$")
+
+    def a_comando(self, idempotency_key: UUID) -> RegistrarSolicitudComando:
+        return RegistrarSolicitudComando(
+            cliente_id=self.cliente_id,
+            producto_id=self.producto_id,
+            tipo_cliente=self.tipo_cliente,
+            identificacion=self.identificacion.upper(),
+            patente_vehiculo=self.patente_vehiculo.upper(),
+            correo=str(self.correo).casefold(),
+            telefono=self.telefono,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -58,3 +84,31 @@ def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
             for c in cotizacion.coberturas
         ],
     }
+
+
+def producto_a_json(producto: ProductoSeguro) -> dict[str, object]:
+    return {
+        "id": producto.producto_id,
+        "nombre": producto.nombre,
+        "descripcion": producto.descripcion,
+        "disponible": producto.disponible,
+    }
+
+
+def solicitud_a_json(solicitud: SolicitudCotizacion) -> dict[str, object]:
+    return {
+        "id": solicitud.solicitud_id,
+        "productoId": _producto_publico(solicitud.cotizacion.producto_id),
+        "tipoCliente": solicitud.tipo_cliente,
+        "identificacion": solicitud.identificacion,
+        "patenteVehiculo": solicitud.patente_vehiculo,
+        "correo": solicitud.correo,
+        "telefono": solicitud.telefono,
+        "estado": "recibida",
+        "creadaEn": solicitud.creada_en.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _producto_publico(producto_interno_id: UUID) -> str:
+    producto = next(item for item in PRODUCTOS if item.producto_interno_id == producto_interno_id)
+    return producto.producto_id

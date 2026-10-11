@@ -26,6 +26,9 @@ tests/
 |--------|--------------------|--------------------------------|
 | GET    | `/ping`            | Health check                   |
 | POST   | `/v1/cotizaciones` | Crea y calcula una cotización  |
+| GET    | `/v1/productos-seguro` | Lista el catálogo de seguros |
+| POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
+| GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
 
 Ejemplo:
 
@@ -42,11 +45,17 @@ curl -X POST localhost:5000/v1/cotizaciones -H 'Content-Type: application/json' 
 
 Respuestas: `201` cotización creada, `400` solicitud inválida, `422` regla de negocio violada.
 
+La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID. La misma
+clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
+produce `409`.
+
 La prima se calcula por ahora con una tasa fija: `(sumaAsegurada - deducible) * COTIZACION_TASA_BASE`, hasta integrar el Motor de Tarificación con el perfil de riesgo.
 
 ## Base de datos
 
-Tablas `cotizaciones` y `coberturas_cotizadas`, definidas en `infrastructure/persistence/models.py` y versionadas con Alembic.
+Las solicitudes, cotizaciones calculadas y coberturas se almacenan en `cotizaciones` y
+`coberturas_cotizadas`, definidas en `infrastructure/persistence/models.py` y versionadas con
+Alembic.
 
 ```bash
 alembic upgrade head                              # aplicar migraciones
