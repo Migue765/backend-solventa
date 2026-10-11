@@ -1,5 +1,27 @@
 # Jenkins backend — preparación
 
+## Estado verificado
+
+La integración está activa para `Migue765/backend-solventa`, con la App
+`solventa-backend-jenkins-migue` (5278678), instalación 170401410 y credencial
+`solventa-backend-github-app` en el almacén exclusivo de la carpeta backend.
+El multibranch es `solventa-backend/pr-checks` y publica `Solventa Backend Jenkins`.
+
+El agente compartido conserva un ejecutor y las etiquetas Android/web, más `backend-ci`.
+Python 3.12 y virtualenv fueron comprobados. El lifecycle y la reconexión contemplan los tres
+proyectos sin cambiar las credenciales de otros repositorios. El indexado descubre PRs sin
+ejecutar builds; un colaborador solicita pruebas con un comentario nuevo `/test-jenkins`.
+Repetir la solicitud tras nuevos commits; comentarios viejos/editados o de bots se ignoran.
+
+PR #10, build #1: formato, lint, tipos, contratos y 63 pruebas exitosos, con JUnit y check
+publicado por la App backend. La ejecución comenzó con el agente encendido; la validación
+de arranque desde apagado y apagado posterior se registra por separado, no se presupone.
+
+Los pasos siguientes describen la preparación inicial. La App, credencial, multibranch y
+herramientas ya están configurados; no repetir su creación. Las protecciones GitHub y el
+traslado mediante release a `main` requieren coordinación con Migue. No hacer el check
+obligatorio antes de revisar la evidencia y su identidad publicadora.
+
 ## Alcance
 
 El pipeline reproduce la calidad de Actions: formato/lint Ruff, tipos mypy, contratos OpenAPI y pruebas raíz y de los servicios implementados. Python 3.12 y dependencias por proyecto en un virtualenv de workspace. Los servicios vacíos no se presentan como implementados ni probados. Reportes JUnit y limpieza al finalizar.
