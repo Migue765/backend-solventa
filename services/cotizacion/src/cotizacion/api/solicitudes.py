@@ -6,9 +6,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from cotizacion.api.schemas import (
     RegistrarSolicitudRequest,
+    SeleccionarOfertaRequest,
     producto_a_json,
+    resultado_ofertas_a_json,
+    seleccion_oferta_a_json,
     solicitud_a_json,
 )
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
@@ -49,6 +53,44 @@ def consultar_solicitud(solicitud_id: str) -> tuple[Response, int] | Response:
     return jsonify(solicitud_a_json(solicitud))
 
 
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/ofertas")
+def listar_ofertas(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(resultado_ofertas_a_json(_ofertas().listar(solicitud_id, cliente_id)))
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/seleccion")
+def consultar_seleccion(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(
+        seleccion_oferta_a_json(_ofertas().consultar_seleccion(solicitud_id, cliente_id))
+    )
+
+
+@bp.put("/solicitudes-cotizacion/<solicitud_id>/seleccion")
+def seleccionar_oferta(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        payload = SeleccionarOfertaRequest.model_validate(request.get_json(silent=False))
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+    except (ValidationError, TypeError):
+        return jsonify(error="solicitud_invalida"), 400
+    seleccion = _ofertas().seleccionar(
+        solicitud_id,
+        cliente_id,
+        payload.oferta_id,
+        payload.version,
+        idempotency_key,
+    )
+    return jsonify(seleccion_oferta_a_json(seleccion))
+
+
 def _registrar() -> RegistrarSolicitud:
     return cast(RegistrarSolicitud, current_app.extensions["registrar_solicitud"])
 
@@ -58,3 +100,14 @@ def _repositorio() -> RepositorioCotizacionesSqlAlchemy:
         RepositorioCotizacionesSqlAlchemy,
         current_app.extensions["repositorio_cotizaciones"],
     )
+
+
+def _ofertas() -> GestionarOfertas:
+    return cast(GestionarOfertas, current_app.extensions["gestionar_ofertas"])
+
+
+def _cliente_id() -> UUID | None:
+    try:
+        return UUID_ADAPTER.validate_python(request.args.get("clienteId"))
+    except ValidationError:
+        return None

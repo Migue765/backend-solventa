@@ -60,3 +60,21 @@ class CoberturaCotizadaModel(Base):
     orden: Mapped[int] = mapped_column(Integer)
 
     cotizacion: Mapped[CotizacionModel] = relationship(back_populates="coberturas")
+
+
+class SeleccionOfertaModel(Base):
+    __tablename__ = "selecciones_oferta"
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    oferta_id: Mapped[UUID]
+    version: Mapped[int] = mapped_column(Integer)
+    nombre_oferta: Mapped[str] = mapped_column(String(120))
+    prima_mensual: Mapped[Decimal] = mapped_column(Numeric(10, 4))
+    moneda: Mapped[str] = mapped_column(String(3))
+    seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
