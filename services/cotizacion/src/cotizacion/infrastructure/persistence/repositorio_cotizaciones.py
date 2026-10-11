@@ -1,5 +1,5 @@
 from datetime import UTC, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.solicitud import SolicitudCotizacion
-from cotizacion.infrastructure.persistence.models import CoberturaCotizadaModel, CotizacionModel
+from cotizacion.infrastructure.persistence.models import (
+    CoberturaCotizadaModel,
+    CotizacionModel,
+    InstantaneaDecisionModel,
+    OutboxEventoModel,
+)
 
 
 class RepositorioCotizacionesSqlAlchemy:
@@ -17,6 +22,10 @@ class RepositorioCotizacionesSqlAlchemy:
     def guardar(self, cotizacion: Cotizacion) -> None:
         with self._sesiones.begin() as sesion:
             sesion.merge(_a_modelo(cotizacion))
+            if cotizacion.instantanea and not sesion.get(
+                InstantaneaDecisionModel, cotizacion.cotizacion_id
+            ):
+                sesion.add_all(_filas_de_decision(cotizacion))
 
     def obtener(self, cotizacion_id: UUID) -> Cotizacion | None:
         with self._sesiones() as sesion:
@@ -36,6 +45,8 @@ class RepositorioCotizacionesSqlAlchemy:
         modelo.creada_en = solicitud.creada_en
         with self._sesiones.begin() as sesion:
             sesion.add(modelo)
+            if solicitud.cotizacion.instantanea:
+                sesion.add_all(_filas_de_decision(solicitud.cotizacion))
 
     def buscar_por_idempotencia(
         self, cliente_id: UUID, idempotency_key: UUID
@@ -80,6 +91,39 @@ def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
             for orden, c in enumerate(cotizacion.coberturas)
         ],
     )
+
+
+def _filas_de_decision(
+    cotizacion: Cotizacion,
+) -> list[InstantaneaDecisionModel | OutboxEventoModel]:
+    instantanea = cotizacion.instantanea
+    assert instantanea is not None
+    return [
+        InstantaneaDecisionModel(
+            cotizacion_id=instantanea.cotizacion_id,
+            regla_id=instantanea.regla_id,
+            regla_version=instantanea.regla_version,
+            perfil_id=instantanea.perfil_id,
+            perfil_modelo_version=instantanea.perfil_modelo_version,
+            hash_decision=instantanea.hash_decision,
+            hash_contenido=instantanea.hash_contenido,
+            contenido=instantanea.contenido,
+            creada_en=instantanea.creada_en,
+        ),
+        OutboxEventoModel(
+            evento_id=uuid4(),
+            tipo="InstantaneaDecisionRegistrada",
+            agregado_id=instantanea.cotizacion_id,
+            payload={
+                "decisionId": str(instantanea.cotizacion_id),
+                "reglaVersion": instantanea.regla_version,
+                "hashDecision": instantanea.hash_decision,
+                "hashContenido": instantanea.hash_contenido,
+            },
+            creado_en=instantanea.creada_en,
+            intentos=0,
+        ),
+    ]
 
 
 def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
