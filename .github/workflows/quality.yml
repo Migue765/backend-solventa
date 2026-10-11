@@ -1,0 +1,62 @@
+name: Calidad
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Calidad
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            services/*/pyproject.toml
+
+      - name: Instalar herramientas y servicios
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          for project in services/*/pyproject.toml; do
+            [[ -f "$project" ]] || continue
+            service_directory="$(dirname "$project")"
+            python -m pip install -e "${service_directory}[dev]"
+          done
+
+      - name: Comprobar formato
+        run: python -m ruff format --check .
+
+      - name: Ejecutar lint
+        run: python -m ruff check .
+
+      - name: Comprobar tipos
+        run: python -m mypy scripts tests
+
+      - name: Validar contratos OpenAPI
+        run: python scripts/validate_openapi.py
+
+      - name: Ejecutar pruebas
+        shell: bash
+        run: |
+          python -m pytest tests
+          for project in services/*/pyproject.toml; do
+            [[ -f "$project" ]] || continue
+            service_directory="$(dirname "$project")"
+            if find "$service_directory/tests" -type f -name "test_*.py" -print -quit | grep -q .; then
+              python -m pytest "$service_directory/tests"
+            fi
+          done
