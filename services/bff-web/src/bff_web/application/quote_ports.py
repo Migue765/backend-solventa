@@ -1,7 +1,13 @@
 from typing import Protocol
 from uuid import UUID
 
-from bff_web.domain.quotes import InsuranceProduct, QuoteRequestDraft, QuoteRequestRecord
+from bff_web.domain.quotes import (
+    InsuranceProduct,
+    OfferSelection,
+    OffersResult,
+    QuoteRequestDraft,
+    QuoteRequestRecord,
+)
 
 
 class QuoteGateway(Protocol):
@@ -15,3 +21,16 @@ class QuoteGateway(Protocol):
     ) -> QuoteRequestRecord: ...
 
     def get_request(self, user_id: UUID, request_id: str) -> QuoteRequestRecord: ...
+
+    def list_offers(self, user_id: UUID, request_id: str) -> OffersResult: ...
+
+    def get_selection(self, user_id: UUID, request_id: str) -> OfferSelection: ...
+
+    def select_offer(
+        self,
+        user_id: UUID,
+        request_id: str,
+        offer_id: UUID,
+        version: int,
+        idempotency_key: UUID,
+    ) -> OfferSelection: ...
