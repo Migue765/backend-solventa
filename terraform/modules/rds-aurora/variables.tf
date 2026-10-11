@@ -26,7 +26,7 @@ variable "kms_key_arn" {
 variable "engine_version" {
   description = "Version de Aurora PostgreSQL."
   type        = string
-  default     = "16.6"
+  default     = "17.9"
 }
 
 variable "database_name" {
