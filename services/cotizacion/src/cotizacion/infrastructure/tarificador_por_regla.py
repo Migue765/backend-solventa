@@ -1,19 +1,16 @@
 from decimal import Decimal
-from uuid import UUID
 
 from cotizacion.domain.cotizacion import CoberturaCotizada
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.tarifa import PerfilRiesgo, ReglaTarifa
 
 
-class TarificadorTasaFija:
-    """Tarifa provisional hasta integrar el Motor de Tarificación con el perfil de riesgo.
+class TarificadorPorRegla:
+    """prima = (suma asegurada - deducible) * tasa * (1 + score * factor de perfil)."""
 
-    prima = (suma asegurada - deducible) * tasa
-    """
-
-    def __init__(self, tasa: Decimal) -> None:
-        self._tasa = tasa
-
-    def calcular_prima(self, producto_id: UUID, cobertura: CoberturaCotizada) -> Dinero:
+    def calcular_prima(
+        self, regla: ReglaTarifa, perfil: PerfilRiesgo, cobertura: CoberturaCotizada
+    ) -> Dinero:
         base = cobertura.suma_asegurada.monto - cobertura.deducible.monto
-        return Dinero(base * self._tasa, cobertura.suma_asegurada.moneda)
+        recargo = Decimal(1) + perfil.score * regla.factor_perfil
+        return Dinero(base * regla.tasa * recargo, cobertura.suma_asegurada.moneda)
