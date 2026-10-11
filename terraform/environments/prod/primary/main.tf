@@ -9,7 +9,7 @@ locals {
 }
 
 module "network" {
-  source = "../../modules/network"
+  source = "../../../modules/network"
 
   name         = var.name_prefix
   vpc_cidr     = var.vpc_cidr
@@ -19,14 +19,14 @@ module "network" {
 }
 
 module "kms" {
-  source = "../../modules/kms"
+  source = "../../../modules/kms"
 
   name = var.name_prefix
   tags = local.tags
 }
 
 module "ecr" {
-  source = "../../modules/ecr"
+  source = "../../../modules/ecr"
 
   repository_name = "solventa/cotizacion"
   force_delete    = var.ecr_force_delete
@@ -34,7 +34,7 @@ module "ecr" {
 }
 
 module "eks" {
-  source = "../../modules/eks"
+  source = "../../../modules/eks"
 
   cluster_name         = local.cluster_name
   kubernetes_version   = var.kubernetes_version
@@ -49,8 +49,8 @@ module "eks" {
   tags                 = local.tags
 }
 
-module "rds_aurora" {
-  source = "../../modules/rds-aurora"
+module "database" {
+  source = "../../../modules/rds-postgres"
 
   name                       = var.name_prefix
   vpc_id                     = module.network.vpc_id
@@ -58,16 +58,15 @@ module "rds_aurora" {
   allowed_security_group_ids = [module.eks.node_security_group_id]
   kms_key_arn                = module.kms.key_arn
   database_name              = "cotizacion"
-  min_capacity               = var.db_min_capacity
-  max_capacity               = var.db_max_capacity
-  backup_retention_period    = 7
+  instance_class             = var.db_instance_class
+  allocated_storage          = var.db_allocated_storage
   deletion_protection        = var.db_deletion_protection
   skip_final_snapshot        = var.db_skip_final_snapshot
   tags                       = local.tags
 }
 
 module "s3_evidence" {
-  source = "../../modules/s3"
+  source = "../../../modules/s3"
 
   bucket_name                = "${var.name_prefix}-evidencias-${var.account_id}"
   kms_key_arn                = module.kms.key_arn
@@ -77,7 +76,7 @@ module "s3_evidence" {
 }
 
 module "messaging" {
-  source = "../../modules/messaging"
+  source = "../../../modules/messaging"
 
   name        = var.name_prefix
   kms_key_arn = module.kms.key_arn
@@ -85,14 +84,14 @@ module "messaging" {
 }
 
 module "iam_irsa" {
-  source = "../../modules/iam-irsa"
+  source = "../../../modules/iam-irsa"
 
   name                 = var.name_prefix
   oidc_provider_arn    = module.eks.oidc_provider_arn
   oidc_issuer_url      = module.eks.oidc_issuer_url
   service_namespace    = var.service_namespace
   service_account_name = var.service_account_name
-  db_secret_arn        = module.rds_aurora.master_user_secret_arn
+  db_secret_arn        = module.database.master_user_secret_arn
   evidence_bucket_arn  = module.s3_evidence.bucket_arn
   sns_topic_arn        = module.messaging.topic_arn
   kms_key_arn          = module.kms.key_arn
@@ -100,7 +99,7 @@ module "iam_irsa" {
 }
 
 module "api_gateway" {
-  source = "../../modules/api-gateway"
+  source = "../../../modules/api-gateway"
 
   name                     = var.name_prefix
   vpc_id                   = module.network.vpc_id

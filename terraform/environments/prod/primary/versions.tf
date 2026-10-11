@@ -20,7 +20,7 @@ terraform {
   # Los backends no admiten variables: ajustar bucket/profile si cambian.
   backend "s3" {
     bucket       = "solventa-tfstate-976083331509"
-    key          = "environments/dev/terraform.tfstate"
+    key          = "environments/prod/primary/terraform.tfstate"
     region       = "us-east-2"
     profile      = "tesis"
     encrypt      = true

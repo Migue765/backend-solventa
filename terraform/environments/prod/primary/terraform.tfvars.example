@@ -9,9 +9,9 @@ public_access_cidrs = ["203.0.113.10/32"]
 # Debe incluir al usuario/rol que ejecuta terraform (helm usa esa identidad).
 eks_admin_principal_arns = ["arn:aws:iam::976083331509:user/Migue"]
 
-# Aurora Serverless v2
-db_min_capacity = 0.5
-db_max_capacity = 2
+# RDS PostgreSQL (clase minima, capa gratuita)
+db_instance_class    = "db.t4g.micro"
+db_allocated_storage = 20
 
 # Object Lock del bucket de evidencias
 object_lock_mode           = "GOVERNANCE"

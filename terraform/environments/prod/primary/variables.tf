@@ -19,13 +19,13 @@ variable "account_id" {
 variable "environment" {
   description = "Nombre del ambiente."
   type        = string
-  default     = "dev"
+  default     = "prod"
 }
 
 variable "name_prefix" {
   description = "Prefijo de nombres de recursos."
   type        = string
-  default     = "solventa-dev"
+  default     = "solventa-prod"
 }
 
 variable "vpc_cidr" {
@@ -54,7 +54,7 @@ variable "eks_admin_principal_arns" {
 variable "node_instance_types" {
   description = "Tipos de instancia de los nodos."
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 }
 
 variable "node_min_size" {
@@ -72,35 +72,35 @@ variable "node_desired_size" {
 variable "node_max_size" {
   description = "Maximo de nodos."
   type        = number
-  default     = 4
+  default     = 3
 }
 
-variable "db_max_capacity" {
-  description = "ACU maximas de Aurora Serverless v2."
-  type        = number
-  default     = 2
+variable "db_instance_class" {
+  description = "Clase de instancia de RDS PostgreSQL (db.t4g.micro entra en la capa gratuita)."
+  type        = string
+  default     = "db.t4g.micro"
 }
 
-variable "db_min_capacity" {
-  description = "ACU minimas de Aurora Serverless v2."
+variable "db_allocated_storage" {
+  description = "Almacenamiento de la base en GB."
   type        = number
-  default     = 0.5
+  default     = 20
 }
 
 variable "db_deletion_protection" {
-  description = "Proteccion contra borrado de Aurora (false solo en dev)."
+  description = "Proteccion contra borrado de la base (activar antes del lanzamiento)."
   type        = bool
   default     = false
 }
 
 variable "db_skip_final_snapshot" {
-  description = "Omitir snapshot final de Aurora al destruir (true solo en dev)."
+  description = "Omitir snapshot final de la base al destruir (poner en false antes del lanzamiento)."
   type        = bool
   default     = true
 }
 
 variable "ecr_force_delete" {
-  description = "Permite borrar el repo ECR con imagenes (solo dev)."
+  description = "Permite borrar el repo ECR con imagenes (poner en false antes del lanzamiento)."
   type        = bool
   default     = true
 }

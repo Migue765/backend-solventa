@@ -9,13 +9,13 @@ output "cluster_name" {
 }
 
 output "db_endpoint" {
-  description = "Endpoint writer de Aurora."
-  value       = module.rds_aurora.endpoint
+  description = "Endpoint de la base PostgreSQL."
+  value       = module.database.endpoint
 }
 
 output "db_secret_arn" {
   description = "ARN del secreto con credenciales master de la base."
-  value       = module.rds_aurora.master_user_secret_arn
+  value       = module.database.master_user_secret_arn
 }
 
 output "api_endpoint" {
