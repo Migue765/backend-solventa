@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cotizacion
+  labels:
+    app.kubernetes.io/part-of: solventa
+    pod-security.kubernetes.io/enforce: baseline
