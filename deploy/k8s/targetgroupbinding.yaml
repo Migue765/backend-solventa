@@ -1,0 +1,13 @@
+# Variable: TARGET_GROUP_ARN (terraform output target_group_arn)
+# Registra los pods como targets (tipo ip) del target group del ALB interno.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: cotizacion
+  namespace: cotizacion
+spec:
+  serviceRef:
+    name: cotizacion
+    port: 8080
+  targetGroupARN: ${TARGET_GROUP_ARN}
+  targetType: ip
