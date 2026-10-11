@@ -23,6 +23,7 @@ class Config:
     max_attempts: int = 5
     attempt_window: timedelta = timedelta(minutes=5)
     cors_allowed_origins: tuple[str, ...] = ("http://localhost:4200",)
+    quote_service_url: str = "http://localhost:5000"
 
     def __post_init__(self) -> None:
         if not self.session_cookie_name.strip():
@@ -47,6 +48,7 @@ class Config:
                 for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:4200").split(",")
                 if origin.strip()
             ),
+            quote_service_url=os.getenv("QUOTE_SERVICE_URL", "http://localhost:5000").rstrip("/"),
         )
 
 

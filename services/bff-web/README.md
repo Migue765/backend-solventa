@@ -12,6 +12,9 @@ El servicio expone:
 | `GET`    | `/v1/sesiones/actual` | Consulta la sesión       |
 | `DELETE` | `/v1/sesiones/actual` | Cierra la sesión vigente |
 | `GET`    | `/ping`               | Comprueba disponibilidad |
+| `GET`    | `/v1/productos-seguro` | Lista seguros disponibles |
+| `POST`   | `/v1/solicitudes-cotizacion` | Registra una solicitud |
+| `GET`    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud |
 
 Las sesiones usan tokens opacos aleatorios. El cliente recibe el token únicamente mediante una
 cookie `HttpOnly` y el repositorio almacena solo su hash. Los puertos de credenciales y sesiones
@@ -46,6 +49,7 @@ Variables disponibles:
 | `AUTH_MAX_ATTEMPTS`              | `5`                     |
 | `AUTH_ATTEMPT_WINDOW_SECONDS`    | `300`                   |
 | `CORS_ALLOWED_ORIGINS`           | `http://localhost:4200` |
+| `QUOTE_SERVICE_URL`              | `http://localhost:5000` |
 
 Para desarrollo HTTP local se debe establecer `SESSION_COOKIE_SECURE=false`.
 
