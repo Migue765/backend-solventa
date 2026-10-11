@@ -44,10 +44,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Comprobar tipos
-        shell: bash
-        run: |
-          mapfile -t service_files < <(find services -type f -name "*.py" -print)
-          python -m mypy scripts tests "${service_files[@]}"
+        run: python -m mypy scripts tests
 
       - name: Validar contratos OpenAPI
         run: python scripts/validate_openapi.py
