@@ -1,6 +1,6 @@
 data "aws_caller_identity" "current" {}
 
-# Una sola CMK para RDS, S3, Secrets Manager, SNS y SQS (dev: 1 llave = ~1 USD/mes).
+# Una sola CMK para RDS, S3, Secrets Manager, SNS y SQS (1 llave = ~1 USD/mes).
 data "aws_iam_policy_document" "key" {
   statement {
     sid       = "EnableIAMPermissions"

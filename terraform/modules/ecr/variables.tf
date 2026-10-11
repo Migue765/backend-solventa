@@ -11,7 +11,7 @@ variable "keep_last_images" {
 }
 
 variable "force_delete" {
-  description = "Permite borrar el repositorio aunque tenga imagenes (solo dev)."
+  description = "Permite borrar el repositorio aunque tenga imagenes (solo mientras no haya trafico real)."
   type        = bool
   default     = false
 }

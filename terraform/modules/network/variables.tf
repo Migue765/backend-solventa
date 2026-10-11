@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Prefijo de nombres (ej. solventa-dev)."
+  description = "Prefijo de nombres (ej. solventa-prod)."
   type        = string
 }
 

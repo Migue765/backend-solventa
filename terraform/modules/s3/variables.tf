@@ -20,7 +20,7 @@ variable "object_lock_mode" {
 }
 
 variable "object_lock_retention_days" {
-  description = "Dias de retencion por defecto (dev: 1)."
+  description = "Dias de retencion por defecto (prueba: 1)."
   type        = number
   default     = 1
 

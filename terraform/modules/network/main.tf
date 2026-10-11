@@ -60,7 +60,7 @@ resource "aws_subnet" "private" {
   })
 }
 
-# Una sola NAT gateway (costo): no es HA entre AZ, aceptable en dev.
+# Una sola NAT gateway (costo): no es HA entre AZ, aceptable mientras no haya trafico real.
 resource "aws_eip" "nat" {
   domain = "vpc"
 
