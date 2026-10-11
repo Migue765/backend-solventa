@@ -45,6 +45,10 @@ spec:
           env:
             - name: AWS_REGION
               value: ${AWS_REGION}
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: GUNICORN_THREADS
+              value: "2"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -52,11 +56,11 @@ spec:
                   key: DATABASE_URL
           resources:
             requests:
-              cpu: 250m
-              memory: 256Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 300m
+              memory: 256Mi
           readinessProbe:
             httpGet:
               path: /ping

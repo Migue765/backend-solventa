@@ -12,16 +12,16 @@ Los manifiestos `serviceaccount`, `deployment` y `targetgroupbinding` usan varia
 
 ## Orden de aplicacion
 
-Prerrequisito: `terraform apply` de `terraform/environments/dev` (instala AWS Load Balancer Controller y metrics-server)
+Prerrequisito: `terraform apply` de `terraform/environments/prod/primary` (instala AWS Load Balancer Controller y metrics-server)
 y `kubectl` apuntando al cluster (`terraform output kubeconfig_command`).
 
 ```bash
-cd terraform/environments/dev
+cd terraform/environments/prod/primary
 export IRSA_ROLE_ARN=$(terraform output -raw service_role_arn)
 export TARGET_GROUP_ARN=$(terraform output -raw target_group_arn)
 export IMAGE="$(terraform output -raw ecr_repository_url):<tag>"
 export AWS_REGION=us-east-2
-cd ../../../deploy/k8s
+cd ../../../../deploy/k8s
 
 # 1. Namespace
 kubectl apply -f namespace.yaml
