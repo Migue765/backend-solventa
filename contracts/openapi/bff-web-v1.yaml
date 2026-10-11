@@ -1,0 +1,608 @@
+openapi: 3.1.0
+info:
+  title: Solventa BFF Web
+  version: 1.0.0
+  description: Contrato público consumido por la aplicación web de clientes de Solventa.
+servers:
+  - url: /api
+tags:
+  - name: Sesiones
+  - name: Productos
+  - name: Cotizaciones
+  - name: Ofertas
+  - name: Dashboard
+paths:
+  /v1/sesiones:
+    post:
+      tags: [Sesiones]
+      summary: Inicia una sesión de cliente
+      operationId: iniciarSesion
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credenciales"
+      responses:
+        "200":
+          description: Sesión creada
+          headers:
+            Set-Cookie:
+              description: Cookie de sesión HttpOnly, Secure y SameSite.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sesion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/CredencialesInvalidas"
+        "429":
+          $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/actual:
+    get:
+      tags: [Sesiones]
+      summary: Consulta la sesión actual
+      operationId: consultarSesion
+      responses:
+        "200":
+          description: Sesión vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sesion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+    delete:
+      tags: [Sesiones]
+      summary: Cierra la sesión actual
+      operationId: cerrarSesion
+      responses:
+        "204":
+          description: Sesión cerrada
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+  /v1/productos-seguro:
+    get:
+      tags: [Productos]
+      summary: Lista los seguros disponibles para cotizar
+      operationId: listarProductosSeguro
+      responses:
+        "200":
+          description: Catálogo de seguros
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [productos]
+                properties:
+                  productos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProductoSeguro"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion:
+    post:
+      tags: [Cotizaciones]
+      summary: Registra una solicitud de cotización
+      operationId: crearSolicitudCotizacion
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSolicitudCotizacion"
+      responses:
+        "201":
+          description: Solicitud registrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SolicitudCotizacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}:
+    get:
+      tags: [Cotizaciones]
+      summary: Consulta una solicitud de cotización
+      operationId: consultarSolicitudCotizacion
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Solicitud encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SolicitudCotizacion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+  /v1/solicitudes-cotizacion/{solicitudId}/ofertas:
+    get:
+      tags: [Ofertas]
+      summary: Lista las ofertas calculadas para una solicitud
+      operationId: listarOfertas
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Resultado del cálculo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoOfertas"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/seleccion:
+    get:
+      tags: [Ofertas]
+      summary: Consulta la oferta seleccionada
+      operationId: consultarSeleccionOferta
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Selección vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeleccionOferta"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+    put:
+      tags: [Ofertas]
+      summary: Registra o reemplaza la oferta seleccionada
+      operationId: seleccionarOferta
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSeleccionOferta"
+      responses:
+        "200":
+          description: Selección registrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeleccionOferta"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+  /v1/clientes/me/dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Consulta el resumen del cliente autenticado
+      operationId: consultarDashboard
+      responses:
+        "200":
+          description: Resumen del cliente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+components:
+  securitySchemes:
+    cookieSesion:
+      type: apiKey
+      in: cookie
+      name: solventa_session
+  parameters:
+    SolicitudId:
+      name: solicitudId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    SolicitudInvalida:
+      description: La solicitud no cumple el contrato
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    CredencialesInvalidas:
+      description: Credenciales inválidas
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoAutorizado:
+      description: La sesión no existe o expiró
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoEncontrado:
+      description: El recurso no existe o no pertenece al cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    Conflicto:
+      description: Conflicto con el estado actual del recurso
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    ReglaNegocio:
+      description: Una regla de negocio impide la operación
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    DemasiadasSolicitudes:
+      description: Se superó el límite de solicitudes permitido
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    ServicioNoDisponible:
+      description: Una dependencia no está disponible
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+  schemas:
+    Credenciales:
+      type: object
+      additionalProperties: false
+      required: [correo, contrasena]
+      properties:
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        contrasena:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+    UsuarioSesion:
+      type: object
+      additionalProperties: false
+      required: [id, nombre, correo, rol]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        correo:
+          type: string
+          format: email
+        rol:
+          type: string
+          enum: [cliente]
+    Sesion:
+      type: object
+      additionalProperties: false
+      required: [usuario, expiraEn]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/UsuarioSesion"
+        expiraEn:
+          type: string
+          format: date-time
+    ProductoSeguro:
+      type: object
+      additionalProperties: false
+      required: [id, nombre, descripcion, disponible]
+      properties:
+        id:
+          type: string
+          maxLength: 64
+        nombre:
+          type: string
+          maxLength: 120
+        descripcion:
+          type: string
+          maxLength: 500
+        disponible:
+          type: boolean
+    NuevaSolicitudCotizacion:
+      type: object
+      additionalProperties: false
+      required:
+        - productoId
+        - tipoCliente
+        - identificacion
+        - patenteVehiculo
+        - correo
+        - telefono
+      properties:
+        productoId:
+          type: string
+          maxLength: 64
+        tipoCliente:
+          type: string
+          enum: [persona_natural]
+        identificacion:
+          type: string
+          pattern: "^[A-Za-z0-9.-]{6,20}$"
+        patenteVehiculo:
+          type: string
+          pattern: "^[A-Za-z0-9-]{5,8}$"
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        telefono:
+          type: string
+          pattern: "^\\+[1-9][0-9]{7,14}$"
+    SolicitudCotizacion:
+      allOf:
+        - $ref: "#/components/schemas/NuevaSolicitudCotizacion"
+        - type: object
+          required: [id, estado, creadaEn]
+          properties:
+            id:
+              type: string
+              pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
+            estado:
+              type: string
+              enum: [recibida, procesando, calculada, sin_ofertas, fallida]
+            creadaEn:
+              type: string
+              format: date-time
+    Dinero:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda]
+      properties:
+        monto:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,4})?$"
+        moneda:
+          type: string
+          enum: [UF, CLP]
+    Oferta:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - nombre
+        - descripcion
+        - primaMensual
+        - coberturaPrincipal
+        - deducible
+        - vigencia
+        - responsabilidadCivil
+        - coberturas
+        - condiciones
+        - beneficiosAdicionales
+        - recomendada
+        - estado
+        - vigenteHasta
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        nombre:
+          type: string
+          maxLength: 120
+        descripcion:
+          type: string
+          maxLength: 500
+        primaMensual:
+          $ref: "#/components/schemas/Dinero"
+        coberturaPrincipal:
+          type: string
+          maxLength: 250
+        deducible:
+          type: string
+          maxLength: 120
+        vigencia:
+          type: string
+          maxLength: 120
+        responsabilidadCivil:
+          type: string
+          maxLength: 120
+        coberturas:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        condiciones:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        beneficiosAdicionales:
+          type: array
+          items:
+            type: string
+        recomendada:
+          type: boolean
+        estado:
+          type: string
+          enum: [disponible, vencida, retirada]
+        vigenteHasta:
+          type: string
+          format: date-time
+    ResultadoOfertas:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, calculadaEn, vigenteHasta, tasaAplicada, ofertas]
+      properties:
+        solicitudId:
+          type: string
+        calculadaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        tasaAplicada:
+          type: string
+        ofertas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Oferta"
+    NuevaSeleccionOferta:
+      type: object
+      additionalProperties: false
+      required: [ofertaId, version]
+      properties:
+        ofertaId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+    SeleccionOferta:
+      allOf:
+        - $ref: "#/components/schemas/NuevaSeleccionOferta"
+        - type: object
+          required: [solicitudId, nombreOferta, primaMensual, seleccionadaEn]
+          properties:
+            solicitudId:
+              type: string
+            nombreOferta:
+              type: string
+            primaMensual:
+              $ref: "#/components/schemas/Dinero"
+            seleccionadaEn:
+              type: string
+              format: date-time
+    PolizaResumen:
+      type: object
+      additionalProperties: false
+      required: [id, producto, estado]
+      properties:
+        id:
+          type: string
+        producto:
+          type: string
+        estado:
+          type: string
+          enum: [activa, pendiente, vencida]
+        prima:
+          $ref: "#/components/schemas/Dinero"
+    Notificacion:
+      type: object
+      additionalProperties: false
+      required: [id, titulo, creadaEn, leida]
+      properties:
+        id:
+          type: string
+        titulo:
+          type: string
+        creadaEn:
+          type: string
+          format: date-time
+        leida:
+          type: boolean
+    Dashboard:
+      type: object
+      additionalProperties: false
+      required: [polizas, notificaciones]
+      properties:
+        proximoViaje:
+          type:
+            - string
+            - "null"
+        polizas:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolizaResumen"
+        notificaciones:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notificacion"
+    ErrorCampo:
+      type: object
+      additionalProperties: false
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+        mensaje:
+          type: string
+    Problema:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        code:
+          type: string
+          pattern: "^[a-z0-9_]+$"
+        correlationId:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorCampo"
+security:
+  - cookieSesion: []
