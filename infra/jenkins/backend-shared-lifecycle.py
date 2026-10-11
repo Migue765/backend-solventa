@@ -20,7 +20,9 @@ def main() -> int:
     lifecycle = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lifecycle)
     projects = ("solventa-android", "solventa-web/pr-checks", "solventa-backend/pr-checks")
-    lifecycle.read_demand = lambda queue, node, unused: shared.read_shared_demand(queue, node, projects)
+    lifecycle.read_demand = lambda queue, node, unused: shared.read_shared_demand(
+        queue, node, projects
+    )
     return int(lifecycle.main())
 
 
