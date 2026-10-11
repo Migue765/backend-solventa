@@ -54,6 +54,9 @@ secrets.tfvars
 
 # Python
 .venv/
+.venv-jenkins/
+.pip-cache/
+reports/
 venv/
 .pytest_cache/
 .mypy_cache/
