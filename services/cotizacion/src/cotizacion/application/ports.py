@@ -3,6 +3,7 @@ from uuid import UUID
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.ofertas import SeleccionOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 
 
@@ -20,6 +21,12 @@ class SolicitudCotizacionRepository(Protocol):
     def obtener_solicitud(
         self, solicitud_id: str, cliente_id: UUID
     ) -> SolicitudCotizacion | None: ...
+
+
+class SeleccionOfertaRepository(Protocol):
+    def guardar_seleccion(self, seleccion: SeleccionOferta) -> None: ...
+
+    def obtener_seleccion(self, solicitud_id: str) -> SeleccionOferta | None: ...
 
 
 class Tarificador(Protocol):

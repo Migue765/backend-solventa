@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCo
 from cotizacion.application.registrar_solicitud import RegistrarSolicitudComando
 from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
 
@@ -62,7 +64,12 @@ class RegistrarSolicitudRequest(_Solicitud):
         )
 
 
-def _dinero(dinero: Dinero) -> dict:
+class SeleccionarOfertaRequest(_Solicitud):
+    oferta_id: UUID
+    version: int = Field(ge=1)
+
+
+def _dinero(dinero: Dinero) -> dict[str, str]:
     return {"monto": str(dinero.monto), "moneda": dinero.moneda}
 
 
@@ -107,6 +114,51 @@ def solicitud_a_json(solicitud: SolicitudCotizacion) -> dict[str, object]:
         "estado": "recibida",
         "creadaEn": solicitud.creada_en.isoformat().replace("+00:00", "Z"),
     }
+
+
+def resultado_ofertas_a_json(resultado: ResultadoOfertas) -> dict[str, object]:
+    return {
+        "solicitudId": resultado.solicitud_id,
+        "calculadaEn": _fecha(resultado.calculada_en),
+        "vigenteHasta": _fecha(resultado.vigente_hasta),
+        "tasaAplicada": resultado.tasa_aplicada,
+        "ofertas": [_oferta_a_json(oferta) for oferta in resultado.ofertas],
+    }
+
+
+def seleccion_oferta_a_json(seleccion: SeleccionOferta) -> dict[str, object]:
+    return {
+        "solicitudId": seleccion.solicitud_id,
+        "ofertaId": str(seleccion.oferta_id),
+        "version": seleccion.version,
+        "nombreOferta": seleccion.nombre_oferta,
+        "primaMensual": _dinero(seleccion.prima_mensual),
+        "seleccionadaEn": _fecha(seleccion.seleccionada_en),
+    }
+
+
+def _oferta_a_json(oferta: Oferta) -> dict[str, object]:
+    return {
+        "id": str(oferta.oferta_id),
+        "version": oferta.version,
+        "nombre": oferta.nombre,
+        "descripcion": oferta.descripcion,
+        "primaMensual": _dinero(oferta.prima_mensual),
+        "coberturaPrincipal": oferta.cobertura_principal,
+        "deducible": oferta.deducible,
+        "vigencia": oferta.vigencia,
+        "responsabilidadCivil": oferta.responsabilidad_civil,
+        "coberturas": list(oferta.coberturas),
+        "condiciones": list(oferta.condiciones),
+        "beneficiosAdicionales": list(oferta.beneficios_adicionales),
+        "recomendada": oferta.recomendada,
+        "estado": oferta.estado.value,
+        "vigenteHasta": _fecha(oferta.vigente_hasta),
+    }
+
+
+def _fecha(fecha: datetime) -> str:
+    return fecha.isoformat().replace("+00:00", "Z")
 
 
 def _producto_publico(producto_interno_id: UUID) -> str:

@@ -99,3 +99,143 @@ def test_un_cliente_no_puede_consultar_la_solicitud_de_otro(client) -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_lista_ofertas_estables_con_datos_para_comparar(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}/ofertas"
+
+    primera = client.get(url, query_string={"clienteId": payload["clienteId"]})
+    segunda = client.get(url, query_string={"clienteId": payload["clienteId"]})
+
+    assert primera.status_code == 200
+    resultado = primera.get_json()
+    assert resultado == segunda.get_json()
+    assert len(resultado["ofertas"]) == 3
+    assert [oferta["estado"] for oferta in resultado["ofertas"]] == [
+        "disponible",
+        "disponible",
+        "vencida",
+    ]
+    assert resultado["ofertas"][0]["recomendada"] is True
+    assert resultado["ofertas"][0]["coberturas"]
+    assert resultado["ofertas"][0]["condiciones"]
+
+
+def test_registra_y_reemplaza_la_seleccion(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    ofertas = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"]
+
+    primera = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": ofertas[0]["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    segunda = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[1]["id"], "version": ofertas[1]["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    consultada = client.get(f"{url}/seleccion", query_string=query)
+
+    assert primera.status_code == 200
+    assert segunda.status_code == 200
+    assert consultada.get_json() == segunda.get_json()
+    assert consultada.get_json()["ofertaId"] == ofertas[1]["id"]
+
+
+def test_rechaza_una_oferta_vencida_o_con_otra_version(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    ofertas = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"]
+
+    vencida = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[2]["id"], "version": ofertas[2]["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    version_invalida = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 99},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    assert vencida.status_code == 422
+    assert version_invalida.status_code == 422
+
+
+def test_protege_ofertas_y_seleccion_por_cliente(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    otro_cliente = {"clienteId": str(uuid4())}
+    base_url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+
+    assert client.get(f"{base_url}/ofertas", query_string=otro_cliente).status_code == 404
+    assert (
+        client.get(
+            f"{base_url}/seleccion",
+            query_string={"clienteId": payload["clienteId"]},
+        ).status_code
+        == 404
+    )
+
+
+def test_seleccion_es_idempotente_y_detecta_conflictos(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    ofertas = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"]
+    headers = {"Idempotency-Key": str(uuid4())}
+
+    primera = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 1},
+        headers=headers,
+    )
+    reintento = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 1},
+        headers=headers,
+    )
+    conflicto = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[1]["id"], "version": 1},
+        headers=headers,
+    )
+
+    assert reintento.get_json() == primera.get_json()
+    assert conflicto.status_code == 409

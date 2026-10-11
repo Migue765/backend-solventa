@@ -6,8 +6,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.ofertas import SeleccionOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
-from cotizacion.infrastructure.persistence.models import CoberturaCotizadaModel, CotizacionModel
+from cotizacion.infrastructure.persistence.models import (
+    CoberturaCotizadaModel,
+    CotizacionModel,
+    SeleccionOfertaModel,
+)
 
 
 class RepositorioCotizacionesSqlAlchemy:
@@ -58,6 +63,47 @@ class RepositorioCotizacionesSqlAlchemy:
                 )
             )
             return _solicitud_a_dominio(modelo) if modelo else None
+
+    def guardar_seleccion(self, seleccion: SeleccionOferta) -> None:
+        with self._sesiones.begin() as sesion:
+            sesion.merge(
+                SeleccionOfertaModel(
+                    cotizacion_id=seleccion.cotizacion_id,
+                    solicitud_id=seleccion.solicitud_id,
+                    oferta_id=seleccion.oferta_id,
+                    version=seleccion.version,
+                    nombre_oferta=seleccion.nombre_oferta,
+                    prima_mensual=seleccion.prima_mensual.monto,
+                    moneda=seleccion.prima_mensual.moneda,
+                    seleccionada_en=seleccion.seleccionada_en,
+                    idempotency_key=seleccion.idempotency_key,
+                    request_fingerprint=seleccion.request_fingerprint,
+                )
+            )
+
+    def obtener_seleccion(self, solicitud_id: str) -> SeleccionOferta | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(SeleccionOfertaModel).where(
+                    SeleccionOfertaModel.solicitud_id == solicitud_id
+                )
+            )
+            if modelo is None:
+                return None
+            seleccionada_en = modelo.seleccionada_en
+            if seleccionada_en.tzinfo is None:
+                seleccionada_en = seleccionada_en.replace(tzinfo=UTC)
+            return SeleccionOferta(
+                solicitud_id=modelo.solicitud_id,
+                cotizacion_id=modelo.cotizacion_id,
+                oferta_id=modelo.oferta_id,
+                version=modelo.version,
+                nombre_oferta=modelo.nombre_oferta,
+                prima_mensual=Dinero(modelo.prima_mensual, modelo.moneda),
+                seleccionada_en=seleccionada_en,
+                idempotency_key=modelo.idempotency_key,
+                request_fingerprint=modelo.request_fingerprint,
+            )
 
 
 def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
