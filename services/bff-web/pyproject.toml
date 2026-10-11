@@ -1,0 +1,26 @@
+[project]
+name = "bff-web"
+version = "0.1.0"
+description = "Backend for Frontend de la aplicación web de Solventa"
+requires-python = ">=3.12"
+dependencies = [
+    "email-validator>=2.2,<3",
+    "flask>=3.1,<4",
+    "flask-cors>=6,<7",
+    "pydantic>=2.9,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
