@@ -2,10 +2,11 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from cotizacion.application.ports import SolicitudCotizacionRepository, Tarificador
+from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
+from cotizacion.application.ports import SolicitudCotizacionRepository
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ConflictoIdempotenciaError, ReglaDeNegocioError
@@ -29,13 +30,11 @@ class RegistrarSolicitud:
     def __init__(
         self,
         repositorio: SolicitudCotizacionRepository,
-        tarificador: Tarificador,
-        vigencia: timedelta,
+        calculadora: CalculadoraCotizacion,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._repositorio = repositorio
-        self._tarificador = tarificador
-        self._vigencia = vigencia
+        self._calculadora = calculadora
         self._reloj = reloj
 
     def ejecutar(self, comando: RegistrarSolicitudComando) -> SolicitudCotizacion:
@@ -63,15 +62,8 @@ class RegistrarSolicitud:
             producto_id=producto.producto_interno_id,
             coberturas=[cobertura],
         )
-        cotizacion.calcular(
-            {
-                cobertura.cobertura_id: self._tarificador.calcular_prima(
-                    cotizacion.producto_id, cobertura
-                )
-            },
-            ahora,
-            self._vigencia,
-        )
+        # El perfil de la solicitud es el perfil de riesgo vigente del propio cliente.
+        self._calculadora.calcular(cotizacion, str(comando.cliente_id), ahora)
         solicitud = SolicitudCotizacion(
             solicitud_id=_generar_id(ahora),
             cotizacion=cotizacion,

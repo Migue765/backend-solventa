@@ -1,4 +1,3 @@
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -25,5 +24,5 @@ def database_url(alembic_config):
 
 @pytest.fixture
 def client(database_url):
-    app = create_app(Config(database_url=database_url, tasa_base=Decimal("0.01"), vigencia_dias=15))
+    app = create_app(Config(database_url=database_url, vigencia_dias=15))
     return app.test_client()

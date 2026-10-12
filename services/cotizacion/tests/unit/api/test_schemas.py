@@ -13,6 +13,7 @@ def cuerpo(**cambios):
     datos = {
         "clienteId": str(uuid4()),
         "productoId": str(uuid4()),
+        "perfilId": "perfil-1",
         "moneda": "COP",
         "coberturas": [{"coberturaId": str(uuid4()), "sumaAsegurada": "1000"}],
     }
@@ -26,6 +27,7 @@ def test_convierte_solicitud_en_comando():
     comando = CrearCotizacionRequest.model_validate(datos).a_comando()
 
     assert str(comando.cliente_id) == datos["clienteId"]
+    assert comando.perfil_id == "perfil-1"
     assert comando.moneda == "COP"
     assert comando.coberturas[0].suma_asegurada == Decimal("1000")
     assert comando.coberturas[0].deducible == Decimal("0")
@@ -36,6 +38,7 @@ def test_convierte_solicitud_en_comando():
     [
         {"clienteId": "no-es-uuid"},
         {"moneda": "pesos"},
+        {"perfilId": ""},
         {"coberturas": []},
         {"coberturas": [{"coberturaId": str(uuid4()), "sumaAsegurada": "0"}]},
         {"coberturas": [{"coberturaId": str(uuid4()), "sumaAsegurada": "10", "deducible": "-1"}]},

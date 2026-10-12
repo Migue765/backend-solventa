@@ -1,9 +1,11 @@
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.solicitud import SolicitudCotizacion
+from cotizacion.domain.tarifa import PerfilRiesgo, ReglaTarifa
 
 
 class CotizacionRepository(Protocol):
@@ -22,5 +24,15 @@ class SolicitudCotizacionRepository(Protocol):
     ) -> SolicitudCotizacion | None: ...
 
 
+class RepositorioReglas(Protocol):
+    def obtener_vigente(self, producto_id: UUID, ahora: datetime) -> ReglaTarifa | None: ...
+
+
+class ProveedorPerfil(Protocol):
+    def obtener(self, perfil_id: str, cliente_id: UUID) -> PerfilRiesgo | None: ...
+
+
 class Tarificador(Protocol):
-    def calcular_prima(self, producto_id: UUID, cobertura: CoberturaCotizada) -> Dinero: ...
+    def calcular_prima(
+        self, regla: ReglaTarifa, perfil: PerfilRiesgo, cobertura: CoberturaCotizada
+    ) -> Dinero: ...

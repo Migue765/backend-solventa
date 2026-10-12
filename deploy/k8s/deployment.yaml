@@ -1,0 +1,83 @@
+# Variables: IMAGE (ej. <ecr_repository_url>:<tag>), AWS_REGION
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cotizacion
+  namespace: cotizacion
+  labels:
+    app.kubernetes.io/name: cotizacion
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cotizacion
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cotizacion
+    spec:
+      serviceAccountName: cotizacion
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cotizacion
+      containers:
+        - name: cotizacion
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: ${AWS_REGION}
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: GUNICORN_THREADS
+              value: "2"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cotizacion-db # secreto externo, ver README
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
