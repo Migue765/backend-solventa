@@ -1,10 +1,11 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from cotizacion.application.ports import CotizacionRepository, Tarificador
+from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
+from cotizacion.application.ports import CotizacionRepository
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 
@@ -20,6 +21,7 @@ class CoberturaSolicitada:
 class CrearCotizacionComando:
     cliente_id: UUID
     producto_id: UUID
+    perfil_id: str
     moneda: str
     coberturas: tuple[CoberturaSolicitada, ...]
 
@@ -32,13 +34,11 @@ class CrearCotizacion:
     def __init__(
         self,
         repositorio: CotizacionRepository,
-        tarificador: Tarificador,
-        vigencia: timedelta,
+        calculadora: CalculadoraCotizacion,
         reloj: Callable[[], datetime] = _ahora_utc,
     ) -> None:
         self._repositorio = repositorio
-        self._tarificador = tarificador
-        self._vigencia = vigencia
+        self._calculadora = calculadora
         self._reloj = reloj
 
     def ejecutar(self, comando: CrearCotizacionComando) -> Cotizacion:
@@ -54,10 +54,6 @@ class CrearCotizacion:
                 for c in comando.coberturas
             ],
         )
-        primas = {
-            c.cobertura_id: self._tarificador.calcular_prima(cotizacion.producto_id, c)
-            for c in cotizacion.coberturas
-        }
-        cotizacion.calcular(primas, self._reloj(), self._vigencia)
+        self._calculadora.calcular(cotizacion, comando.perfil_id, self._reloj())
         self._repositorio.guardar(cotizacion)
         return cotizacion

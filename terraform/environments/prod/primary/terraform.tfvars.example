@@ -1,0 +1,26 @@
+# Copiar a terraform.tfvars (ignorado por el control de versiones) y ajustar.
+
+aws_region  = "us-east-2"
+aws_profile = "tesis"
+
+# OBLIGATORIO: tu IP publica /32 (curl -s https://checkip.amazonaws.com)
+public_access_cidrs = ["203.0.113.10/32"]
+
+# Debe incluir al usuario/rol que ejecuta terraform (helm usa esa identidad).
+eks_admin_principal_arns = ["arn:aws:iam::976083331509:user/Migue"]
+
+# RDS PostgreSQL (clase minima, capa gratuita)
+db_instance_class    = "db.t4g.micro"
+db_allocated_storage = 20
+
+# Object Lock del bucket de evidencias
+object_lock_mode           = "GOVERNANCE"
+object_lock_retention_days = 1
+
+# API: HTTP por defecto; para HTTPS definir certificado ACM
+api_listener_protocol = "HTTP"
+# api_certificate_arn = "arn:aws:acm:us-east-2:976083331509:certificate/xxxx"
+# api_tls_server_name = "cotizacion.internal.example.com"
+
+api_throttling_rate_limit  = 50
+api_throttling_burst_limit = 100

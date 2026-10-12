@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cotizacion
+  namespace: cotizacion
+  labels:
+    app.kubernetes.io/name: cotizacion
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cotizacion
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

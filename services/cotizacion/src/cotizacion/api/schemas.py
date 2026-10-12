@@ -25,6 +25,7 @@ class CoberturaRequest(_Solicitud):
 class CrearCotizacionRequest(_Solicitud):
     cliente_id: UUID
     producto_id: UUID
+    perfil_id: str = Field(min_length=1, max_length=64)
     moneda: str = Field(pattern=r"^[A-Z]{3}$")
     coberturas: list[CoberturaRequest] = Field(min_length=1)
 
@@ -32,6 +33,7 @@ class CrearCotizacionRequest(_Solicitud):
         return CrearCotizacionComando(
             cliente_id=self.cliente_id,
             producto_id=self.producto_id,
+            perfil_id=self.perfil_id,
             moneda=self.moneda,
             coberturas=tuple(
                 CoberturaSolicitada(c.cobertura_id, c.suma_asegurada, c.deducible)
@@ -67,6 +69,7 @@ def _dinero(dinero: Dinero) -> dict:
 
 
 def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
+    decision = cotizacion.instantanea
     return {
         "cotizacionId": str(cotizacion.cotizacion_id),
         "clienteId": str(cotizacion.cliente_id),
@@ -74,6 +77,12 @@ def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
         "estado": cotizacion.estado.value,
         "primaEstimada": _dinero(cotizacion.prima_estimada),
         "validaHasta": cotizacion.valida_hasta.isoformat(),
+        "decision": decision
+        and {
+            "reglaVersion": decision.regla_version,
+            "perfilId": decision.perfil_id,
+            "hashDecision": decision.hash_decision,
+        },
         "coberturas": [
             {
                 "coberturaId": str(c.cobertura_id),
