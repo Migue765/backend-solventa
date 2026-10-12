@@ -52,3 +52,13 @@ output "kubeconfig_command" {
   description = "Comando para configurar kubectl."
   value       = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region} --profile ${var.aws_profile}"
 }
+
+output "pipeline_name" {
+  description = "Pipeline de despliegue continuo."
+  value       = module.cicd.pipeline_name
+}
+
+output "github_connection_arn" {
+  description = "Conexion con GitHub: autorizarla una vez en la consola (estado PENDING hasta entonces)."
+  value       = module.cicd.connection_arn
+}

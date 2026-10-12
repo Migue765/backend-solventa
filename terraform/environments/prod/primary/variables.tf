@@ -170,3 +170,21 @@ variable "metrics_server_chart_version" {
   type        = string
   default     = "3.14.0"
 }
+
+variable "github_repository" {
+  description = "Repositorio de GitHub (owner/repo) que dispara el pipeline de despliegue."
+  type        = string
+  default     = "Migue765/backend-solventa"
+}
+
+variable "release_branch" {
+  description = "Rama de la que se toma el codigo de cada version."
+  type        = string
+  default     = "main"
+}
+
+variable "require_manual_approval" {
+  description = "Exige aprobacion manual entre el build y el despliegue."
+  type        = bool
+  default     = false
+}

@@ -113,6 +113,23 @@ module "api_gateway" {
   tags                     = local.tags
 }
 
+module "cicd" {
+  source = "../../../modules/cicd"
+
+  name                      = var.name_prefix
+  github_repository         = var.github_repository
+  branch_name               = var.release_branch
+  require_manual_approval   = var.require_manual_approval
+  vpc_id                    = module.network.vpc_id
+  private_subnet_ids        = module.network.private_subnet_ids
+  cluster_name              = module.eks.cluster_name
+  cluster_security_group_id = module.eks.node_security_group_id
+  service_namespace         = var.service_namespace
+  ecr_repository_arn        = module.ecr.repository_arn
+  ecr_repository_url        = module.ecr.repository_url
+  tags                      = local.tags
+}
+
 # ---------------------------------------------------------------------------
 # Controladores en el cluster (Helm)
 # ---------------------------------------------------------------------------
