@@ -1,5 +1,5 @@
 locals {
-  identifier = "${var.name}-${var.database_name}"
+  identifier = coalesce(var.identifier, "${var.name}-${var.database_name}")
 }
 
 resource "aws_db_subnet_group" "this" {

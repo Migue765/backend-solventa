@@ -64,7 +64,7 @@ SECRET=$(aws secretsmanager get-secret-value --secret-id "$(terraform output -ra
 DB_USER=$(echo "$SECRET" | jq -r .username)
 DB_PASS=$(echo "$SECRET" | jq -r .password | jq -sRr @uri)
 kubectl -n cotizacion create secret generic cotizacion-db \
-  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/cotizacion"
+  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/solventa_prod"
 ```
 
 Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.

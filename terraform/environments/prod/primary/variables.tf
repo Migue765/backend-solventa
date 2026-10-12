@@ -48,7 +48,7 @@ variable "public_access_cidrs" {
 variable "eks_admin_principal_arns" {
   description = "Principals IAM con admin de cluster (access entries). Debe incluir a quien ejecuta terraform/helm."
   type        = list(string)
-  default     = ["arn:aws:iam::976083331509:user/Migue"]
+  default     = ["arn:aws:iam::976083331509:user/Migue", "arn:aws:iam::976083331509:root"]
 }
 
 variable "node_instance_types" {
@@ -73,6 +73,12 @@ variable "node_max_size" {
   description = "Maximo de nodos."
   type        = number
   default     = 3
+}
+
+variable "db_name" {
+  description = "Base de datos logica compartida por todos los servicios (letras, numeros y guion bajo)."
+  type        = string
+  default     = "solventa_prod"
 }
 
 variable "db_instance_class" {

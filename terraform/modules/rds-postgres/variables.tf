@@ -41,6 +41,12 @@ variable "allocated_storage" {
   default     = 20
 }
 
+variable "identifier" {
+  description = "Identificador de la instancia RDS (admite guiones). Por defecto <name>-<database_name>."
+  type        = string
+  default     = null
+}
+
 variable "database_name" {
   description = "Nombre de la base de datos."
   type        = string
@@ -49,7 +55,7 @@ variable "database_name" {
 variable "master_username" {
   description = "Usuario master."
   type        = string
-  default     = "cotizacion_admin"
+  default     = "solventa_admin"
 }
 
 variable "multi_az" {

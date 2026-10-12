@@ -57,7 +57,8 @@ module "database" {
   subnet_ids                 = module.network.private_subnet_ids
   allowed_security_group_ids = [module.eks.node_security_group_id]
   kms_key_arn                = module.kms.key_arn
-  database_name              = "cotizacion"
+  identifier                 = var.name_prefix
+  database_name              = var.db_name
   instance_class             = var.db_instance_class
   allocated_storage          = var.db_allocated_storage
   deletion_protection        = var.db_deletion_protection
