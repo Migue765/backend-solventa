@@ -31,6 +31,11 @@ kubectl apply -f namespace.yaml
 # 3. ServiceAccount (anotacion IRSA)
 envsubst < serviceaccount.yaml | kubectl apply -f -
 
+# 3b. Migraciones de base de datos (un Job por version; MIGRATION_ID sin puntos, ej. 0-1-0)
+export MIGRATION_ID=0-1-0
+envsubst < migrate-job.yaml | kubectl apply -f -
+kubectl -n cotizacion wait --for=condition=complete job/cotizacion-migrate-$MIGRATION_ID --timeout=240s
+
 # 4. Servicio y deployment
 kubectl apply -f service.yaml
 envsubst < deployment.yaml | kubectl apply -f -
@@ -63,3 +68,14 @@ kubectl -n cotizacion create secret generic cotizacion-db \
 ```
 
 Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.
+
+## Notas de operacion
+
+- Las imagenes se publican con tag inmutable (la version, ej. `0.1.0`); no existe `latest`.
+- La imagen es `linux/amd64` (nodos x86): en un Mac con Apple Silicon construir con
+  `docker buildx build --platform linux/amd64`.
+- `GET /ping` a traves de API Gateway lo responde el propio gateway (`Healthy Connection`) y no llega a
+  los pods; probar con un endpoint real (`POST /v1/cotizaciones`). El health check del ALB si usa `/ping`
+  del pod.
+- Las credenciales de la base se copiaron al Secret `cotizacion-db`. RDS rota el secreto gestionado, asi
+  que ese Secret quedara desactualizado: pendiente leerlo en runtime con el rol IRSA o usar External Secrets.
