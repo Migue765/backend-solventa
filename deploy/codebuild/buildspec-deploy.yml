@@ -1,0 +1,13 @@
+# CodeBuild (despliegue, dentro de la VPC): migraciones y rollout con rollback.
+# Variables: CLUSTER_NAME, NAMESPACE, ECR_REPOSITORY_URL (proyecto), IMAGE_TAG (pipeline).
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable-1.35.txt)/bin/linux/amd64/kubectl"
+      - chmod +x /usr/local/bin/kubectl
+      - command -v envsubst >/dev/null || (apt-get update -qq && apt-get install -y -qq gettext-base)
+  build:
+    commands:
+      - bash deploy/codebuild/deploy.sh
