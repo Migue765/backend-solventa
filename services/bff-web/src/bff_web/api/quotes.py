@@ -8,7 +8,9 @@ from pydantic.alias_generators import to_camel
 
 from bff_web.api.security import authenticate, invalid_session_response
 from bff_web.application.quote_ports import QuoteGateway
+from bff_web.domain.auth import User
 from bff_web.domain.errors import InvalidAccessTokenError
+from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
     OfferUnavailableError,
@@ -226,8 +228,13 @@ def select_offer(request_id: str) -> Response:
 
 
 def _authenticated_user_id() -> UUID | None:
+    user = _authenticated_user()
+    return user.user_id if user else None
+
+
+def _authenticated_user() -> User | None:
     try:
-        return authenticate().user.user_id
+        return authenticate().user
     except InvalidAccessTokenError:
         return None
 

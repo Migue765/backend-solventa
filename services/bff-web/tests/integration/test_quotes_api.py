@@ -7,11 +7,7 @@ from werkzeug.test import TestResponse
 
 REQUEST = {
     "productoId": "automotive",
-    "tipoCliente": "persona_natural",
-    "identificacion": "12345678",
-    "patenteVehiculo": "abc123",
-    "correo": "cliente@solventa.co",
-    "telefono": "+573001234567",
+    "datosProducto": {"vehiclePlate": "ABC123"},
 }
 
 
@@ -19,57 +15,6 @@ def body(response: TestResponse) -> dict[str, Any]:
     data = response.get_json()
     assert isinstance(data, dict)
     return data
-
-    def list_offers(self, user_id: UUID, request_id: str) -> OffersResult:
-        return OffersResult(
-            request_id=request_id,
-            calculated_at=datetime(2026, 10, 11, 18, 0, tzinfo=UTC),
-            valid_until=datetime(2026, 10, 26, 18, 0, tzinfo=UTC),
-            applied_rate="Estándar (Risk A)",
-            offers=(self._offer(request_id),),
-        )
-
-    def get_selection(self, user_id: UUID, request_id: str) -> OfferSelection:
-        assert self.selection is not None
-        return self.selection
-
-    def select_offer(
-        self,
-        user_id: UUID,
-        request_id: str,
-        offer_id: UUID,
-        version: int,
-        idempotency_key: UUID,
-    ) -> OfferSelection:
-        self.selection = OfferSelection(
-            request_id=request_id,
-            offer_id=offer_id,
-            version=version,
-            offer_name="Seguro Automotriz Pro",
-            monthly_premium=Money(Decimal("189900"), "COP"),
-            selected_at=datetime(2026, 10, 11, 18, 5, tzinfo=UTC),
-        )
-        return self.selection
-
-    @staticmethod
-    def _offer(request_id: str) -> Offer:
-        return Offer(
-            offer_id=uuid4(),
-            version=1,
-            name="Seguro Automotriz Pro",
-            description="Cobertura extendida",
-            monthly_premium=Money(Decimal("189900"), "COP"),
-            main_coverage="Daños propios y terceros",
-            deductible="$500.000 COP (Bajo)",
-            duration="Anual",
-            civil_liability="Hasta $1.000.000.000 COP",
-            coverages=("Daños materiales",),
-            conditions=("Sujeto a inspección",),
-            additional_benefits=("Auto de reemplazo",),
-            recommended=True,
-            status="disponible",
-            valid_until=datetime(2026, 10, 26, 18, 0, tzinfo=UTC),
-        )
 
 
 def test_every_quote_endpoint_requires_a_bearer_token(app: Flask) -> None:
@@ -114,8 +59,8 @@ def test_request_is_created_and_read_with_the_subject_of_the_token(
     read = client.get("/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234", headers=bearer(token))
 
     assert created.status_code == 201
-    assert body(created)["identificacion"] == "12345678"
-    assert body(created)["patenteVehiculo"] == "ABC123"
+    assert body(created)["identificacion"] == USER.identification
+    assert body(created)["datosProducto"] == {"vehiclePlate": "ABC123"}
     assert read.status_code == 200
     assert quotes.user_ids == [USER.user_id, USER.user_id]
 
@@ -125,7 +70,7 @@ def test_invalid_request_is_not_sent_to_cotizacion(
 ) -> None:
     response = app.test_client().post(
         "/v1/solicitudes-cotizacion",
-        json={**REQUEST, "telefono": "3001234567"},
+        json={**REQUEST, "datosProducto": {"vehiclePlate": "abc"}},
         headers={**bearer(token), "Idempotency-Key": str(uuid4())},
     )
 
