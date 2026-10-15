@@ -6,9 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml alembic.ini ./
 COPY src ./src
-RUN pip install ".[server]"
+COPY migrations ./migrations
+RUN pip install ".[postgres,server]"
 
 RUN useradd --system --uid 10001 --no-create-home identidad
 USER 10001
