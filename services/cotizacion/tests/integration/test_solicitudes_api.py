@@ -328,7 +328,7 @@ def test_genera_ofertas_especificas_para_cada_producto(
         assert all(oferta["responsabilidadCivil"] == "No aplica" for oferta in resultado["ofertas"])
 
 
-def test_registra_y_reemplaza_la_seleccion(client) -> None:
+def test_registra_una_unica_aceptacion_y_actualiza_el_estado(client) -> None:
     payload = nueva_solicitud()
     solicitud = client.post(
         "/v1/solicitudes-cotizacion",
@@ -354,9 +354,16 @@ def test_registra_y_reemplaza_la_seleccion(client) -> None:
     consultada = client.get(f"{url}/seleccion", query_string=query)
 
     assert primera.status_code == 200
-    assert segunda.status_code == 200
-    assert consultada.get_json() == segunda.get_json()
-    assert consultada.get_json()["ofertaId"] == ofertas[1]["id"]
+    actualizadas = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"]
+
+    assert segunda.status_code == 422
+    assert consultada.get_json() == primera.get_json()
+    assert consultada.get_json()["ofertaId"] == ofertas[0]["id"]
+    assert actualizadas[0]["estado"] == "aceptada"
+    assert [oferta["estado"] for oferta in actualizadas[1:]] == [
+        "disponible",
+        "disponible",
+    ]
 
 
 def test_rechaza_una_oferta_vencida_o_con_otra_version(client) -> None:
@@ -440,6 +447,13 @@ def test_seleccion_es_idempotente_y_detecta_conflictos(client) -> None:
         json={"ofertaId": ofertas[1]["id"], "version": 1},
         headers=headers,
     )
+    reintento_con_otra_clave = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 1},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
 
     assert reintento.get_json() == primera.get_json()
+    assert reintento_con_otra_clave.get_json() == primera.get_json()
     assert conflicto.status_code == 409
