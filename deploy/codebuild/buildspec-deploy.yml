@@ -1,6 +1,12 @@
 # CodeBuild (despliegue, dentro de la VPC): migraciones y rollout con rollback.
-# Variables: CLUSTER_NAME, NAMESPACE, ECR_REPOSITORY_URL (proyecto), IMAGE_TAG (pipeline).
+# Variables: CLUSTER_NAME, NAMESPACE, ECR_REPOSITORY_URL, SERVICE_NAME (proyecto), IMAGE_TAG (pipeline).
+# SERVICE_NAME tiene por defecto cotizacion; el proyecto de CodeBuild lo sobrescribe.
+# MIGRATE=false (opcional, definido por el proyecto) omite las migraciones.
 version: 0.2
+
+env:
+  variables:
+    SERVICE_NAME: cotizacion
 
 phases:
   install:

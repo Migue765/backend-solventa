@@ -1,0 +1,13 @@
+# Variable: TARGET_GROUP_ARN (terraform output bff_web_target_group_arn)
+# Registra los pods como targets (tipo ip) del target group de bff-web en el ALB interno.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: bff-web
+  namespace: bff-web
+spec:
+  serviceRef:
+    name: bff-web
+    port: 8080
+  targetGroupARN: ${TARGET_GROUP_ARN}
+  targetType: ip

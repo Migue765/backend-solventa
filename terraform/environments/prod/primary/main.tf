@@ -99,6 +99,65 @@ module "iam_irsa" {
   tags                 = local.tags
 }
 
+module "ecr_bff_web" {
+  source = "../../../modules/ecr"
+
+  repository_name = "solventa/bff-web"
+  force_delete    = var.ecr_force_delete
+  tags            = local.tags
+}
+
+module "redis" {
+  source = "../../../modules/elasticache-redis"
+
+  name                       = var.name_prefix
+  vpc_id                     = module.network.vpc_id
+  subnet_ids                 = module.network.private_subnet_ids
+  allowed_security_group_ids = [module.eks.node_security_group_id]
+  kms_key_arn                = module.kms.key_arn
+  node_type                  = var.redis_node_type
+  tags                       = local.tags
+}
+
+module "ecr_bff_movil" {
+  source = "../../../modules/ecr"
+
+  repository_name = "solventa/bff-movil"
+  force_delete    = var.ecr_force_delete
+  tags            = local.tags
+}
+
+module "ecr_identidad" {
+  source = "../../../modules/ecr"
+
+  repository_name = "solventa/identidad"
+  force_delete    = var.ecr_force_delete
+  tags            = local.tags
+}
+
+# Clave con la que identidad firma los JWT (RS256). Ver la nota de rotacion en el modulo.
+module "jwt_key" {
+  source = "../../../modules/jwt-signing-key"
+
+  secret_name = "${var.name_prefix}-identidad-jwt"
+  kms_key_arn = module.kms.key_arn
+  tags        = local.tags
+}
+
+# identidad es el unico servicio nuevo con acceso a la base de usuarios, a Redis y a la clave JWT.
+module "iam_irsa_identidad" {
+  source = "../../../modules/irsa-service"
+
+  name                 = "${var.name_prefix}-identidad"
+  oidc_provider_arn    = module.eks.oidc_provider_arn
+  oidc_issuer_url      = module.eks.oidc_issuer_url
+  service_namespace    = var.identidad_namespace
+  service_account_name = var.identidad_service_account_name
+  secret_arns          = [module.database.master_user_secret_arn, module.redis.secret_arn, module.jwt_key.secret_arn]
+  kms_key_arn          = module.kms.key_arn
+  tags                 = local.tags
+}
+
 module "api_gateway" {
   source = "../../../modules/api-gateway"
 
@@ -111,6 +170,8 @@ module "api_gateway" {
   tls_server_name          = var.api_tls_server_name
   throttling_rate_limit    = var.api_throttling_rate_limit
   throttling_burst_limit   = var.api_throttling_burst_limit
+  jwt_audience             = var.jwt_audience
+  cors_allowed_origins     = var.cors_allowed_origins
   tags                     = local.tags
 }
 
@@ -128,6 +189,76 @@ module "cicd" {
   service_namespace         = var.service_namespace
   ecr_repository_arn        = module.ecr.repository_arn
   ecr_repository_url        = module.ecr.repository_url
+  tags                      = local.tags
+}
+
+# Segundo pipeline (bff-web): reutiliza la conexion con GitHub de cotizacion, pero con
+# bucket, roles y SG propios (resource_prefix) y un patron de tag disjunto del de cotizacion.
+# No migra: los BFF no tienen base de datos (los usuarios los migra identidad).
+module "cicd_bff_web" {
+  source = "../../../modules/cicd"
+
+  name                      = var.name_prefix
+  service_name              = "bff-web"
+  resource_prefix           = "${var.name_prefix}-bff-web"
+  github_connection_arn     = module.cicd.connection_arn
+  run_migrations            = false
+  github_repository         = var.github_repository
+  branch_name               = var.release_branch
+  release_tag_patterns      = var.bff_web_release_tag_patterns
+  require_manual_approval   = var.require_manual_approval
+  vpc_id                    = module.network.vpc_id
+  private_subnet_ids        = module.network.private_subnet_ids
+  cluster_name              = module.eks.cluster_name
+  cluster_security_group_id = module.eks.node_security_group_id
+  service_namespace         = var.bff_web_namespace
+  ecr_repository_arn        = module.ecr_bff_web.repository_arn
+  ecr_repository_url        = module.ecr_bff_web.repository_url
+  tags                      = local.tags
+}
+
+# Tercer pipeline (bff-movil): misma conexion con GitHub, tag bff-movil-v* y sin migraciones.
+module "cicd_bff_movil" {
+  source = "../../../modules/cicd"
+
+  name                      = var.name_prefix
+  service_name              = "bff-movil"
+  resource_prefix           = "${var.name_prefix}-bff-movil"
+  github_connection_arn     = module.cicd.connection_arn
+  run_migrations            = false
+  github_repository         = var.github_repository
+  branch_name               = var.release_branch
+  release_tag_patterns      = var.bff_movil_release_tag_patterns
+  require_manual_approval   = var.require_manual_approval
+  vpc_id                    = module.network.vpc_id
+  private_subnet_ids        = module.network.private_subnet_ids
+  cluster_name              = module.eks.cluster_name
+  cluster_security_group_id = module.eks.node_security_group_id
+  service_namespace         = var.bff_movil_namespace
+  ecr_repository_arn        = module.ecr_bff_movil.repository_arn
+  ecr_repository_url        = module.ecr_bff_movil.repository_url
+  tags                      = local.tags
+}
+
+# Cuarto pipeline (identidad): tag identidad-v*, con migraciones (dueno de la tabla usuarios).
+module "cicd_identidad" {
+  source = "../../../modules/cicd"
+
+  name                      = var.name_prefix
+  service_name              = "identidad"
+  resource_prefix           = "${var.name_prefix}-identidad"
+  github_connection_arn     = module.cicd.connection_arn
+  github_repository         = var.github_repository
+  branch_name               = var.release_branch
+  release_tag_patterns      = var.identidad_release_tag_patterns
+  require_manual_approval   = var.require_manual_approval
+  vpc_id                    = module.network.vpc_id
+  private_subnet_ids        = module.network.private_subnet_ids
+  cluster_name              = module.eks.cluster_name
+  cluster_security_group_id = module.eks.node_security_group_id
+  service_namespace         = var.identidad_namespace
+  ecr_repository_arn        = module.ecr_identidad.repository_arn
+  ecr_repository_url        = module.ecr_identidad.repository_url
   tags                      = local.tags
 }
 

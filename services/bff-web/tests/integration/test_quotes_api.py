@@ -1,127 +1,120 @@
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from typing import Any
+from uuid import uuid4
 
-import pytest
-from bff_web.app import create_app
-from bff_web.application.quote_ports import QuoteGateway
-from bff_web.config import Config
-from bff_web.domain.auth import User
-from bff_web.domain.quotes import (
-    InsuranceProduct,
-    QuoteRequestDraft,
-    QuoteRequestRecord,
-)
-from bff_web.infrastructure.development_credentials import DevelopmentCredential
-from bff_web.infrastructure.passwords import hash_password
 from flask import Flask
-from flask.testing import FlaskClient
+from support import USER, FakeJwks, KeyPair, StubQuoteGateway, bearer, sign_token
+from werkzeug.test import TestResponse
 
-PASSWORD = "Solventa123!"
-
-
-class StubQuoteGateway(QuoteGateway):
-    def __init__(self) -> None:
-        self.record: QuoteRequestRecord | None = None
-
-    def list_products(self) -> tuple[InsuranceProduct, ...]:
-        return (
-            InsuranceProduct(
-                "automotive",
-                "Seguro Automotriz Total",
-                "Protección para el vehículo",
-                True,
-            ),
-        )
-
-    def create_request(
-        self,
-        user_id: UUID,
-        draft: QuoteRequestDraft,
-        idempotency_key: UUID,
-    ) -> QuoteRequestRecord:
-        self.record = QuoteRequestRecord(
-            "AQT-2026-ABCDEF1234",
-            draft,
-            "recibida",
-            datetime(2026, 10, 11, 18, 0, tzinfo=UTC),
-        )
-        return self.record
-
-    def get_request(self, user_id: UUID, request_id: str) -> QuoteRequestRecord:
-        assert self.record is not None
-        return self.record
+REQUEST = {
+    "productoId": "automotive",
+    "tipoCliente": "persona_natural",
+    "identificacion": "12345678",
+    "patenteVehiculo": "abc123",
+    "correo": "cliente@solventa.co",
+    "telefono": "+573001234567",
+}
 
 
-@pytest.fixture
-def app() -> Flask:
-    user = User(uuid4(), "Cliente Solventa", "cliente@solventa.co", "cliente")
-    return create_app(
-        Config(
-            credentials=(
-                DevelopmentCredential(
-                    user,
-                    hash_password(PASSWORD, salt=b"0123456789abcdef"),
-                ),
-            ),
-            session_cookie_secure=False,
-            session_duration=timedelta(minutes=30),
-        ),
-        quote_gateway=StubQuoteGateway(),
-    )
+def body(response: TestResponse) -> dict[str, Any]:
+    data = response.get_json()
+    assert isinstance(data, dict)
+    return data
 
 
-def login(client: FlaskClient) -> None:
-    response = client.post(
-        "/v1/sesiones",
-        json={"correo": "cliente@solventa.co", "contrasena": PASSWORD},
-    )
-    assert response.status_code == 200
-
-
-def request_payload() -> dict[str, str]:
-    return {
-        "productoId": "automotive",
-        "tipoCliente": "persona_natural",
-        "identificacion": "12.345.678-9",
-        "patenteVehiculo": "abc123",
-        "correo": "CLIENTE@SOLVENTA.CO",
-        "telefono": "+56912345678",
-    }
-
-
-def test_catalog_requires_authentication(app: Flask) -> None:
-    assert app.test_client().get("/v1/productos-seguro").status_code == 401
-
-
-def test_creates_and_reads_an_authenticated_quote_request(app: Flask) -> None:
+def test_every_quote_endpoint_requires_a_bearer_token(app: Flask) -> None:
     client = app.test_client()
-    login(client)
+    headers = {"Idempotency-Key": str(uuid4())}
 
+    responses = [
+        client.get("/v1/productos-seguro"),
+        client.post("/v1/solicitudes-cotizacion", json=REQUEST, headers=headers),
+        client.get("/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234"),
+    ]
+
+    for response in responses:
+        assert response.status_code == 401
+        assert response.headers["WWW-Authenticate"] == "Bearer"
+        assert body(response)["code"] == "sesion_invalida"
+
+
+def test_cookies_no_longer_authenticate(app: Flask, token: str) -> None:
+    client = app.test_client()
+    client.set_cookie("solventa_session", token)
+
+    assert client.get("/v1/productos-seguro").status_code == 401
+
+
+def test_authenticated_client_lists_products(app: Flask, token: str) -> None:
+    response = app.test_client().get("/v1/productos-seguro", headers=bearer(token))
+
+    assert response.status_code == 200
+    assert body(response)["productos"][0]["id"] == "automotive"
+
+
+def test_request_is_created_and_read_with_the_subject_of_the_token(
+    app: Flask, token: str, quotes: StubQuoteGateway
+) -> None:
+    client = app.test_client()
     created = client.post(
         "/v1/solicitudes-cotizacion",
-        json=request_payload(),
-        headers={"Idempotency-Key": str(uuid4())},
+        json=REQUEST,
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
     )
+    read = client.get("/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234", headers=bearer(token))
 
     assert created.status_code == 201
-    record = created.get_json()
-    assert record["id"] == "AQT-2026-ABCDEF1234"
-    assert record["patenteVehiculo"] == "ABC123"
-    assert record["correo"] == "cliente@solventa.co"
-
-    found = client.get(f"/v1/solicitudes-cotizacion/{record['id']}")
-    assert found.status_code == 200
-    assert found.get_json() == record
+    assert body(created)["identificacion"] == "12345678"
+    assert body(created)["patenteVehiculo"] == "ABC123"
+    assert read.status_code == 200
+    assert quotes.user_ids == [USER.user_id, USER.user_id]
 
 
-def test_invalid_request_is_not_sent(app: Flask) -> None:
-    client = app.test_client()
-    login(client)
-
-    response = client.post(
+def test_invalid_request_is_not_sent_to_cotizacion(
+    app: Flask, token: str, quotes: StubQuoteGateway
+) -> None:
+    response = app.test_client().post(
         "/v1/solicitudes-cotizacion",
-        json={**request_payload(), "correo": "invalid"},
-        headers={"Idempotency-Key": str(uuid4())},
+        json={**REQUEST, "telefono": "3001234567"},
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
     )
 
     assert response.status_code == 400
+    assert quotes.record is None
+
+
+def test_missing_idempotency_key_is_rejected(app: Flask, token: str) -> None:
+    response = app.test_client().post(
+        "/v1/solicitudes-cotizacion", json=REQUEST, headers=bearer(token)
+    )
+
+    assert response.status_code == 400
+    assert body(response)["code"] == "solicitud_invalida"
+
+
+def test_each_token_is_scoped_by_its_own_subject(
+    app: Flask, token: str, keypair: KeyPair, quotes: StubQuoteGateway
+) -> None:
+    from bff_web.domain.auth import User
+
+    other = User(uuid4(), "Otra Persona", "otra@solventa.co", "cliente")
+    client = app.test_client()
+    client.post(
+        "/v1/solicitudes-cotizacion",
+        json=REQUEST,
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+
+    client.get(
+        "/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234",
+        headers=bearer(sign_token(keypair, user=other)),
+    )
+
+    assert quotes.user_ids == [USER.user_id, other.user_id]
+
+
+def test_jwks_outage_on_quotes_is_a_503(app: Flask, jwks: FakeJwks, token: str) -> None:
+    jwks.failing = True
+
+    response = app.test_client().get("/v1/productos-seguro", headers=bearer(token))
+
+    assert response.status_code == 503
