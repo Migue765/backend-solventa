@@ -554,7 +554,7 @@ components:
           type: boolean
         estado:
           type: string
-          enum: [disponible, vencida, retirada]
+          enum: [disponible, aceptada, vencida, retirada]
         vigenteHasta:
           type: string
           format: date-time

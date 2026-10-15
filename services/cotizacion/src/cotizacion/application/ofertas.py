@@ -46,6 +46,7 @@ class GestionarOfertas:
         perfil_riesgo = self._perfiles_riesgo.consultar(
             solicitud.tipo_documento, solicitud.identificacion
         )
+        seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         return _generar_ofertas(
             solicitud_id,
             _producto_publico(solicitud.cotizacion.producto_id),
@@ -54,6 +55,7 @@ class GestionarOfertas:
             self._reloj(),
             perfil_riesgo.factor_prima,
             perfil_riesgo.tarifa_aplicada,
+            seleccion.oferta_id if seleccion else None,
         )
 
     def seleccionar(
@@ -71,6 +73,10 @@ class GestionarOfertas:
             if existente.request_fingerprint != fingerprint:
                 raise ConflictoIdempotenciaError()
             return existente
+        if existente:
+            if existente.oferta_id == oferta_id and existente.version == version:
+                return existente
+            raise OfertaNoDisponibleError()
 
         oferta = next(
             (
@@ -121,6 +127,7 @@ def _generar_ofertas(
     ahora: datetime,
     factor_prima: Decimal,
     tarifa_aplicada: str,
+    oferta_aceptada_id: UUID | None,
 ) -> ResultadoOfertas:
     if vigente_hasta is None:
         raise OfertaNoDisponibleError()
@@ -133,7 +140,12 @@ def _generar_ofertas(
             f"{producto_id}-{indice}",
             plantilla,
             indice == 0,
-            estado_vigente,
+            (
+                EstadoOferta.ACEPTADA
+                if uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{producto_id}-{indice}")
+                == oferta_aceptada_id
+                else estado_vigente
+            ),
             vigente_hasta,
             factor_prima,
         )
