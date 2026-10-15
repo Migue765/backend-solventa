@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import EmailStr, TypeAdapter
 
 from bff_web.domain.auth import User
+from bff_web.domain.document_types import validate_identification
 from bff_web.infrastructure.development_credentials import DevelopmentCredential
 
 EMAIL_ADAPTER: TypeAdapter[EmailStr] = TypeAdapter(EmailStr)
@@ -80,6 +81,12 @@ def _parse_credential(item: Any) -> DevelopmentCredential:
             name=_required_text(item["nombre"], "nombre"),
             email=str(EMAIL_ADAPTER.validate_python(item["correo"])).casefold(),
             role=role,
+            document_type=_required_text(item["tipoDocumento"], "tipoDocumento"),
+            identification=validate_identification(
+                _required_text(item["tipoDocumento"], "tipoDocumento"),
+                _required_text(item["identificacion"], "identificacion").upper(),
+            ),
+            phone=_validated_phone(item["telefono"]),
         ),
         password_hash=_required_text(item["passwordHash"], "passwordHash"),
     )
@@ -90,6 +97,13 @@ def _positive_int(name: str, default: int) -> int:
     if value < 1:
         raise ValueError(f"{name} debe ser mayor que cero.")
     return value
+
+
+def _validated_phone(value: Any) -> str:
+    phone = _required_text(value, "telefono")
+    if len(phone) != 13 or not phone.startswith("+57") or not phone[3:].isdigit():
+        raise ValueError("telefono debe usar el formato +57 seguido de 10 dígitos")
+    return phone
 
 
 def _boolean(name: str, default: bool) -> bool:

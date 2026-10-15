@@ -32,6 +32,9 @@ como hashes PBKDF2, nunca en texto plano.
     "nombre": "Cliente Solventa",
     "correo": "cliente@solventa.co",
     "rol": "cliente",
+    "tipoDocumento": "cc",
+    "identificacion": "1023456789",
+    "telefono": "+573001234567",
     "passwordHash": "pbkdf2_sha256$600000$...$..."
   }
 ]

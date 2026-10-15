@@ -42,8 +42,9 @@ class CotizacionModel(Base):
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     solicitud_id: Mapped[str | None] = mapped_column(String(32), unique=True)
     tipo_cliente: Mapped[str | None] = mapped_column(String(30))
+    tipo_documento: Mapped[str | None] = mapped_column(String(20))
     identificacion: Mapped[str | None] = mapped_column(String(20))
-    patente_vehiculo: Mapped[str | None] = mapped_column(String(8))
+    datos_producto: Mapped[dict[str, str] | None] = mapped_column(JSON)
     correo: Mapped[str | None] = mapped_column(String(254))
     telefono: Mapped[str | None] = mapped_column(String(16))
     idempotency_key: Mapped[UUID | None]
@@ -70,6 +71,24 @@ class CoberturaCotizadaModel(Base):
     orden: Mapped[int] = mapped_column(Integer)
 
     cotizacion: Mapped[CotizacionModel] = relationship(back_populates="coberturas")
+
+
+class SeleccionOfertaModel(Base):
+    __tablename__ = "selecciones_oferta"
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    oferta_id: Mapped[UUID]
+    version: Mapped[int] = mapped_column(Integer)
+    nombre_oferta: Mapped[str] = mapped_column(String(120))
+    prima_mensual: Mapped[Decimal] = mapped_column(Numeric(10, 4))
+    moneda: Mapped[str] = mapped_column(String(3))
+    seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
 
 
 class ReglaTarifaModel(Base):

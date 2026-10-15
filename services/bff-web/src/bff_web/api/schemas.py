@@ -19,6 +19,9 @@ def session_to_json(session: UserSession) -> dict[str, object]:
             "nombre": session.user.name,
             "correo": session.user.email,
             "rol": session.user.role,
+            "tipoDocumento": session.user.document_type,
+            "identificacion": session.user.identification,
+            "telefono": session.user.phone,
         },
         "expiraEn": _isoformat(session.expires_at),
     }

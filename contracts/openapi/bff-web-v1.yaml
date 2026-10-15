@@ -89,6 +89,28 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/destinos-viaje:
+    get:
+      tags: [Productos]
+      summary: Lista los países disponibles para el seguro de viaje
+      operationId: listarDestinosViaje
+      responses:
+        "200":
+          description: Catálogo de destinos asegurables
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [destinos]
+                properties:
+                  destinos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DestinoViaje"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/solicitudes-cotizacion:
     post:
       tags: [Cotizaciones]
@@ -314,7 +336,7 @@ components:
     UsuarioSesion:
       type: object
       additionalProperties: false
-      required: [id, nombre, correo, rol]
+      required: [id, nombre, correo, rol, tipoDocumento, identificacion, telefono]
       properties:
         id:
           type: string
@@ -329,6 +351,16 @@ components:
         rol:
           type: string
           enum: [cliente]
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        identificacion:
+          type: string
+          minLength: 5
+          maxLength: 16
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
     Sesion:
       type: object
       additionalProperties: false
@@ -355,51 +387,97 @@ components:
           maxLength: 500
         disponible:
           type: boolean
+    DestinoViaje:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre]
+      properties:
+        codigo:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
     NuevaSolicitudCotizacion:
       type: object
       additionalProperties: false
       required:
         - productoId
-        - tipoCliente
-        - identificacion
-        - patenteVehiculo
-        - correo
-        - telefono
+        - datosProducto
       properties:
         productoId:
           type: string
-          maxLength: 64
+          enum:
+            - automotive
+            - travel
+            - life
+            - device-protection
+            - parametric
+            - payment-protection
+            - mortgage-life
+        datosProducto:
+          $ref: "#/components/schemas/DatosProducto"
+    DatosProducto:
+      type: object
+      description: |
+        Pares string/string específicos del producto. No se aceptan claves adicionales:
+        automotive: vehiclePlate (`^[A-Z]{3}[0-9]{3}$`);
+        travel: destinationCountryCode (ISO 3166-1 alfa-2), departureDate y returnDate;
+        life: birthDate;
+        device-protection: deviceType, brandModel y purchaseValue;
+        parametric: airline, flightNumber y flightDate;
+        payment-protection: creditType y monthlyPayment;
+        mortgage-life: birthDate y mortgageBalance.
+        Las fechas usan YYYY-MM-DD; los montos, saldos, cuotas y cantidad de viajeros
+        son enteros positivos representados como string.
+      minProperties: 1
+      additionalProperties:
+        type: string
+    SolicitudCotizacion:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - productoId
+        - tipoCliente
+        - tipoDocumento
+        - identificacion
+        - datosProducto
+        - correo
+        - telefono
+        - estado
+        - creadaEn
+      properties:
+        id:
+          type: string
+          pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
+        productoId:
+          type: string
         tipoCliente:
           type: string
           enum: [persona_natural]
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
         identificacion:
           type: string
-          pattern: "^[A-Za-z0-9.-]{6,20}$"
-        patenteVehiculo:
-          type: string
-          pattern: "^[A-Za-z0-9-]{5,8}$"
+          minLength: 5
+          maxLength: 16
+        datosProducto:
+          $ref: "#/components/schemas/DatosProducto"
         correo:
           type: string
           format: email
-          maxLength: 254
         telefono:
           type: string
-          pattern: "^\\+[1-9][0-9]{7,14}$"
-    SolicitudCotizacion:
-      allOf:
-        - $ref: "#/components/schemas/NuevaSolicitudCotizacion"
-        - type: object
-          required: [id, estado, creadaEn]
-          properties:
-            id:
-              type: string
-              pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
-            estado:
-              type: string
-              enum: [recibida, procesando, calculada, sin_ofertas, fallida]
-            creadaEn:
-              type: string
-              format: date-time
+          pattern: "^\\+57[0-9]{10}$"
+        estado:
+          type: string
+          enum: [recibida, procesando, calculada, sin_ofertas, fallida]
+        creadaEn:
+          type: string
+          format: date-time
     Dinero:
       type: object
       additionalProperties: false
@@ -410,7 +488,8 @@ components:
           pattern: "^[0-9]+(\\.[0-9]{1,4})?$"
         moneda:
           type: string
-          enum: [UF, CLP]
+          pattern: "^[A-Z]{3}$"
+          example: COP
     Oferta:
       type: object
       additionalProperties: false

@@ -10,8 +10,9 @@ class SolicitudCotizacion:
     solicitud_id: str
     cotizacion: Cotizacion
     tipo_cliente: str
+    tipo_documento: str
     identificacion: str
-    patente_vehiculo: str
+    datos_producto: dict[str, str]
     correo: str
     telefono: str
     idempotency_key: UUID
