@@ -15,7 +15,14 @@ import jwt
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import TokenSet, User
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
-from bff_web.domain.quotes import InsuranceProduct, QuoteRequestDraft, QuoteRequestRecord
+from bff_web.domain.quotes import (
+    InsuranceProduct,
+    OfferSelection,
+    OffersResult,
+    QuoteRequestDraft,
+    QuoteRequestRecord,
+    TravelDestination,
+)
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
@@ -227,6 +234,25 @@ class StubQuoteGateway(QuoteGateway):
         self.user_ids.append(user_id)
         assert self.record is not None
         return self.record
+
+    def list_travel_destinations(self) -> tuple[TravelDestination, ...]:
+        return (TravelDestination("CO", "Colombia"),)
+
+    def list_offers(self, user_id: UUID, request_id: str) -> OffersResult:
+        raise NotImplementedError
+
+    def get_selection(self, user_id: UUID, request_id: str) -> OfferSelection:
+        raise NotImplementedError
+
+    def select_offer(
+        self,
+        user_id: UUID,
+        request_id: str,
+        offer_id: UUID,
+        version: int,
+        idempotency_key: UUID,
+    ) -> OfferSelection:
+        raise NotImplementedError
 
 
 def bearer(value: str) -> dict[str, str]:
