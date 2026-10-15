@@ -20,6 +20,57 @@ def body(response: TestResponse) -> dict[str, Any]:
     assert isinstance(data, dict)
     return data
 
+    def list_offers(self, user_id: UUID, request_id: str) -> OffersResult:
+        return OffersResult(
+            request_id=request_id,
+            calculated_at=datetime(2026, 10, 11, 18, 0, tzinfo=UTC),
+            valid_until=datetime(2026, 10, 26, 18, 0, tzinfo=UTC),
+            applied_rate="Estándar (Risk A)",
+            offers=(self._offer(request_id),),
+        )
+
+    def get_selection(self, user_id: UUID, request_id: str) -> OfferSelection:
+        assert self.selection is not None
+        return self.selection
+
+    def select_offer(
+        self,
+        user_id: UUID,
+        request_id: str,
+        offer_id: UUID,
+        version: int,
+        idempotency_key: UUID,
+    ) -> OfferSelection:
+        self.selection = OfferSelection(
+            request_id=request_id,
+            offer_id=offer_id,
+            version=version,
+            offer_name="Seguro Automotriz Pro",
+            monthly_premium=Money(Decimal("189900"), "COP"),
+            selected_at=datetime(2026, 10, 11, 18, 5, tzinfo=UTC),
+        )
+        return self.selection
+
+    @staticmethod
+    def _offer(request_id: str) -> Offer:
+        return Offer(
+            offer_id=uuid4(),
+            version=1,
+            name="Seguro Automotriz Pro",
+            description="Cobertura extendida",
+            monthly_premium=Money(Decimal("189900"), "COP"),
+            main_coverage="Daños propios y terceros",
+            deductible="$500.000 COP (Bajo)",
+            duration="Anual",
+            civil_liability="Hasta $1.000.000.000 COP",
+            coverages=("Daños materiales",),
+            conditions=("Sujeto a inspección",),
+            additional_benefits=("Auto de reemplazo",),
+            recommended=True,
+            status="disponible",
+            valid_until=datetime(2026, 10, 26, 18, 0, tzinfo=UTC),
+        )
+
 
 def test_every_quote_endpoint_requires_a_bearer_token(app: Flask) -> None:
     client = app.test_client()

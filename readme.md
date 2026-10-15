@@ -20,10 +20,10 @@ Contiene la estructura prevista para microservicios Python, contratos compartido
 Instala las herramientas requeridas por el servicio en el que vas a trabajar:
 
 - Git.
-- Python 
-- PostgreSQL local 
+- Python
+- PostgreSQL local
 - Docker, .
-- Terraform 
+- Terraform
 
 Comprueba las herramientas instaladas:
 

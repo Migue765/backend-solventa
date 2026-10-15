@@ -11,6 +11,9 @@ class User:
     name: str
     email: str
     role: str
+    document_type: str = "cc"
+    identification: str = "1234567890"
+    phone: str = "+573001234567"
 
 
 @dataclass(frozen=True)

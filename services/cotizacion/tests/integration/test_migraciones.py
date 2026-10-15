@@ -20,10 +20,11 @@ def test_downgrade_elimina_las_tablas(alembic_config, database_url):
     assert "coberturas_cotizadas" not in tablas
 
 
-def test_siembra_la_regla_inicial_del_seguro_automotriz(database_url):
+def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
     with create_engine(database_url).connect() as conexion:
         filas = conexion.execute(
             text("select version, tasa from reglas_tarifa where vigente_hasta is null")
         ).all()
 
-    assert [(fila.version, float(fila.tasa)) for fila in filas] == [("tarifa-2026.1", 0.015)]
+    assert len(filas) == 7
+    assert {(fila.version, float(fila.tasa)) for fila in filas} == {("tarifa-2026.1", 0.015)}

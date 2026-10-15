@@ -13,6 +13,7 @@ src/cotizacion/
 ├── domain/                 # Agregado Cotización, Cobertura Cotizada y Dinero
 └── infrastructure/
     ├── persistence/        # Modelos SQLAlchemy, sesión y repositorio
+    ├── perfil_riesgo_simulado.py
     └── tarificador_tasa_fija.py
 migrations/                 # Migraciones Alembic
 tests/
@@ -68,6 +69,10 @@ produce `409`.
 - En `/v1/solicitudes-cotizacion` el perfil es el del propio cliente (`perfilId = clienteId`).
 - Las reglas se leen con una caché local de `COTIZACION_REGLAS_CACHE_SEGUNDOS` que nunca usa una
   regla que ya no esté vigente.
+
+La comparación de planes usa adicionalmente un adaptador simulado y determinista para representar
+escenarios A, B y C. Ninguno de los adaptadores consulta un buró ni representa información
+financiera real; ambos pueden sustituirse por integraciones externas a través de sus puertos.
 
 ## Base de datos
 
