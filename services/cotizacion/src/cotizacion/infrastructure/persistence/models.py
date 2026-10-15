@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 MONTO = Numeric(18, 2)
@@ -32,8 +32,9 @@ class CotizacionModel(Base):
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     solicitud_id: Mapped[str | None] = mapped_column(String(32), unique=True)
     tipo_cliente: Mapped[str | None] = mapped_column(String(30))
+    tipo_documento: Mapped[str | None] = mapped_column(String(20))
     identificacion: Mapped[str | None] = mapped_column(String(20))
-    patente_vehiculo: Mapped[str | None] = mapped_column(String(8))
+    datos_producto: Mapped[dict[str, str] | None] = mapped_column(JSON)
     correo: Mapped[str | None] = mapped_column(String(254))
     telefono: Mapped[str | None] = mapped_column(String(16))
     idempotency_key: Mapped[UUID | None]

@@ -18,8 +18,9 @@ class RegistrarSolicitudComando:
     cliente_id: UUID
     producto_id: str
     tipo_cliente: str
+    tipo_documento: str
     identificacion: str
-    patente_vehiculo: str
+    datos_producto: dict[str, str]
     correo: str
     telefono: str
     idempotency_key: UUID
@@ -55,8 +56,8 @@ class RegistrarSolicitud:
         ahora = self._reloj()
         cobertura = CoberturaCotizada(
             cobertura_id=producto.cobertura_id,
-            suma_asegurada=Dinero(producto.suma_asegurada, "CLP"),
-            deducible=Dinero(producto.deducible, "CLP"),
+            suma_asegurada=Dinero(producto.suma_asegurada, "COP"),
+            deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
             cliente_id=comando.cliente_id,
@@ -76,8 +77,9 @@ class RegistrarSolicitud:
             solicitud_id=_generar_id(ahora),
             cotizacion=cotizacion,
             tipo_cliente=comando.tipo_cliente,
+            tipo_documento=comando.tipo_documento,
             identificacion=comando.identificacion,
-            patente_vehiculo=comando.patente_vehiculo,
+            datos_producto=comando.datos_producto,
             correo=comando.correo,
             telefono=comando.telefono,
             idempotency_key=comando.idempotency_key,
@@ -92,8 +94,9 @@ def _fingerprint(comando: RegistrarSolicitudComando) -> str:
     payload = {
         "productoId": comando.producto_id,
         "tipoCliente": comando.tipo_cliente,
+        "tipoDocumento": comando.tipo_documento,
         "identificacion": comando.identificacion,
-        "patenteVehiculo": comando.patente_vehiculo,
+        "datosProducto": comando.datos_producto,
         "correo": comando.correo,
         "telefono": comando.telefono,
     }

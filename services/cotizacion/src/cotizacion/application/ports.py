@@ -4,6 +4,7 @@ from uuid import UUID
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
+from cotizacion.domain.perfil_riesgo import PerfilRiesgo
 from cotizacion.domain.solicitud import SolicitudCotizacion
 
 
@@ -31,3 +32,7 @@ class SeleccionOfertaRepository(Protocol):
 
 class Tarificador(Protocol):
     def calcular_prima(self, producto_id: UUID, cobertura: CoberturaCotizada) -> Dinero: ...
+
+
+class PerfilRiesgoGateway(Protocol):
+    def consultar(self, tipo_documento: str, identificacion: str) -> PerfilRiesgo: ...

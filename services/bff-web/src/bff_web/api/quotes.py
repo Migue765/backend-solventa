@@ -3,13 +3,15 @@ from typing import cast
 from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
 from bff_web.application.auth_service import AuthService
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.config import Config
+from bff_web.domain.auth import User
 from bff_web.domain.errors import UnauthorizedError
+from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
     OfferUnavailableError,
@@ -25,6 +27,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    TravelDestination,
 )
 from bff_web.problems import problem_response
 
@@ -35,20 +38,22 @@ class QuoteRequestPayload(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     product_id: str = Field(alias="productoId", max_length=64)
-    customer_type: str = Field(alias="tipoCliente", pattern=r"^persona_natural$")
-    identification: str = Field(alias="identificacion", pattern=r"^[A-Za-z0-9.-]{6,20}$")
-    vehicle_plate: str = Field(alias="patenteVehiculo", pattern=r"^[A-Za-z0-9-]{5,8}$")
-    email: EmailStr = Field(alias="correo")
-    phone: str = Field(alias="telefono", pattern=r"^\+[1-9][0-9]{7,14}$")
+    product_data: dict[str, str] = Field(alias="datosProducto")
 
-    def to_draft(self) -> QuoteRequestDraft:
+    @model_validator(mode="after")
+    def validate_product_fields(self) -> "QuoteRequestPayload":
+        self.product_data = validate_product_data(self.product_id, self.product_data)
+        return self
+
+    def to_draft(self, user: User) -> QuoteRequestDraft:
         return QuoteRequestDraft(
             product_id=self.product_id,
-            customer_type=self.customer_type,
-            identification=self.identification.upper(),
-            vehicle_plate=self.vehicle_plate.upper(),
-            email=str(self.email).casefold(),
-            phone=self.phone,
+            customer_type="persona_natural",
+            document_type=user.document_type,
+            identification=user.identification,
+            product_data=self.product_data,
+            email=user.email,
+            phone=user.phone,
         )
 
 
@@ -71,10 +76,21 @@ def list_products() -> Response:
     return jsonify(productos=[_product_json(product) for product in products])
 
 
+@bp.get("/destinos-viaje")
+def list_travel_destinations() -> Response:
+    if _authenticated_user_id() is None:
+        return _unauthorized()
+    try:
+        destinations = _gateway().list_travel_destinations()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(destinos=[_travel_destination_json(destination) for destination in destinations])
+
+
 @bp.post("/solicitudes-cotizacion")
 def create_request() -> tuple[Response, int] | Response:
-    user_id = _authenticated_user_id()
-    if user_id is None:
+    user = _authenticated_user()
+    if user is None:
         return _unauthorized()
     try:
         payload = QuoteRequestPayload.model_validate(request.get_json(silent=False))
@@ -86,8 +102,22 @@ def create_request() -> tuple[Response, int] | Response:
             "Solicitud inválida",
             "Revisa los datos y la clave de idempotencia.",
         )
+    if payload.product_id == "travel":
+        try:
+            supported_codes = {
+                destination.code for destination in _gateway().list_travel_destinations()
+            }
+        except QuoteServiceUnavailableError:
+            return _unavailable()
+        if payload.product_data["destinationCountryCode"] not in supported_codes:
+            return problem_response(
+                400,
+                "solicitud_invalida",
+                "Solicitud inválida",
+                "Selecciona un país de destino disponible.",
+            )
     try:
-        record = _gateway().create_request(user_id, payload.to_draft(), idempotency_key)
+        record = _gateway().create_request(user.user_id, payload.to_draft(user), idempotency_key)
     except InsuranceProductUnavailableError:
         return problem_response(
             422,
@@ -199,13 +229,18 @@ def select_offer(request_id: str) -> Response:
 
 
 def _authenticated_user_id() -> UUID | None:
+    user = _authenticated_user()
+    return user.user_id if user else None
+
+
+def _authenticated_user() -> User | None:
     config = cast(Config, current_app.extensions["bff_config"])
     auth_service = cast(AuthService, current_app.extensions["auth_service"])
     try:
         session = auth_service.current_session(request.cookies.get(config.session_cookie_name))
     except UnauthorizedError:
         return None
-    return session.user.user_id
+    return session.user
 
 
 def _gateway() -> QuoteGateway:
@@ -221,13 +256,18 @@ def _product_json(product: InsuranceProduct) -> dict[str, object]:
     }
 
 
+def _travel_destination_json(destination: TravelDestination) -> dict[str, str]:
+    return {"codigo": destination.code, "nombre": destination.name}
+
+
 def _record_json(record: QuoteRequestRecord) -> dict[str, object]:
     return {
         "id": record.request_id,
         "productoId": record.draft.product_id,
         "tipoCliente": record.draft.customer_type,
+        "tipoDocumento": record.draft.document_type,
         "identificacion": record.draft.identification,
-        "patenteVehiculo": record.draft.vehicle_plate,
+        "datosProducto": record.draft.product_data,
         "correo": record.draft.email,
         "telefono": record.draft.phone,
         "estado": record.status,

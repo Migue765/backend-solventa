@@ -60,10 +60,11 @@ class Cotizacion:
     def calcular(self, primas: dict[UUID, Dinero], ahora: datetime, vigencia: timedelta) -> None:
         if self.estado is not EstadoCotizacion.PENDIENTE:
             raise ReglaDeNegocioError("Solo se puede calcular una cotización pendiente.")
+        primas_calculadas = []
         for cobertura in self.coberturas:
-            cobertura.prima = primas[cobertura.cobertura_id]
-        self.prima_estimada = sum(
-            (c.prima for c in self.coberturas), start=Dinero.cero(self.moneda)
-        )
+            prima = primas[cobertura.cobertura_id]
+            cobertura.prima = prima
+            primas_calculadas.append(prima)
+        self.prima_estimada = sum(primas_calculadas, start=Dinero.cero(self.moneda))
         self.valida_hasta = ahora + vigencia
         self.estado = EstadoCotizacion.CALCULADA

@@ -2,13 +2,15 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
 from cotizacion.application.registrar_solicitud import RegistrarSolicitudComando
 from cotizacion.domain.cotizacion import Cotizacion
+from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.documentos import validar_identificacion
 from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
@@ -46,18 +48,26 @@ class RegistrarSolicitudRequest(_Solicitud):
     cliente_id: UUID
     producto_id: str = Field(max_length=64)
     tipo_cliente: str = Field(pattern=r"^persona_natural$")
-    identificacion: str = Field(pattern=r"^[A-Za-z0-9.-]{6,20}$")
-    patente_vehiculo: str = Field(pattern=r"^[A-Za-z0-9-]{5,8}$")
+    tipo_documento: str = Field(pattern=r"^(cc|ce|passport|ppt)$")
+    identificacion: str
+    datos_producto: dict[str, str]
     correo: EmailStr
-    telefono: str = Field(pattern=r"^\+[1-9][0-9]{7,14}$")
+    telefono: str = Field(pattern=r"^\+57[0-9]{10}$")
+
+    @model_validator(mode="after")
+    def validar_campos_dependientes(self) -> "RegistrarSolicitudRequest":
+        self.identificacion = validar_identificacion(self.tipo_documento, self.identificacion)
+        self.datos_producto = validar_datos_producto(self.producto_id, self.datos_producto)
+        return self
 
     def a_comando(self, idempotency_key: UUID) -> RegistrarSolicitudComando:
         return RegistrarSolicitudComando(
             cliente_id=self.cliente_id,
             producto_id=self.producto_id,
             tipo_cliente=self.tipo_cliente,
-            identificacion=self.identificacion.upper(),
-            patente_vehiculo=self.patente_vehiculo.upper(),
+            tipo_documento=self.tipo_documento,
+            identificacion=self.identificacion,
+            datos_producto=self.datos_producto,
             correo=str(self.correo).casefold(),
             telefono=self.telefono,
             idempotency_key=idempotency_key,
@@ -74,6 +84,8 @@ def _dinero(dinero: Dinero) -> dict[str, str]:
 
 
 def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
+    if cotizacion.prima_estimada is None or cotizacion.valida_hasta is None:
+        raise ValueError("La cotización todavía no ha sido calculada.")
     return {
         "cotizacionId": str(cotizacion.cotizacion_id),
         "clienteId": str(cotizacion.cliente_id),
@@ -86,11 +98,17 @@ def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
                 "coberturaId": str(c.cobertura_id),
                 "sumaAsegurada": _dinero(c.suma_asegurada),
                 "deducible": _dinero(c.deducible),
-                "prima": _dinero(c.prima),
+                "prima": _prima_cobertura(c.prima),
             }
             for c in cotizacion.coberturas
         ],
     }
+
+
+def _prima_cobertura(prima: Dinero | None) -> dict[str, str]:
+    if prima is None:
+        raise ValueError("La cobertura todavía no ha sido calculada.")
+    return _dinero(prima)
 
 
 def producto_a_json(producto: ProductoSeguro) -> dict[str, object]:
@@ -107,8 +125,9 @@ def solicitud_a_json(solicitud: SolicitudCotizacion) -> dict[str, object]:
         "id": solicitud.solicitud_id,
         "productoId": _producto_publico(solicitud.cotizacion.producto_id),
         "tipoCliente": solicitud.tipo_cliente,
+        "tipoDocumento": solicitud.tipo_documento,
         "identificacion": solicitud.identificacion,
-        "patenteVehiculo": solicitud.patente_vehiculo,
+        "datosProducto": solicitud.datos_producto,
         "correo": solicitud.correo,
         "telefono": solicitud.telefono,
         "estado": "recibida",

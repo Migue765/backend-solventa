@@ -13,6 +13,7 @@ src/cotizacion/
 ├── domain/                 # Agregado Cotización, Cobertura Cotizada y Dinero
 └── infrastructure/
     ├── persistence/        # Modelos SQLAlchemy, sesión y repositorio
+    ├── perfil_riesgo_simulado.py
     └── tarificador_tasa_fija.py
 migrations/                 # Migraciones Alembic
 tests/
@@ -49,7 +50,11 @@ La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID
 clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
 produce `409`.
 
-La prima se calcula por ahora con una tasa fija: `(sumaAsegurada - deducible) * COTIZACION_TASA_BASE`, hasta integrar el Motor de Tarificación con el perfil de riesgo.
+La cotización base usa una tasa fija:
+`(sumaAsegurada - deducible) * COTIZACION_TASA_BASE`. Al generar las ofertas se consulta un
+adaptador simulado y determinista que asigna escenarios de riesgo A, B o C y ajusta las primas.
+Este adaptador no consulta un buró ni representa información financiera real; puede sustituirse
+por una integración externa a través del puerto `PerfilRiesgoGateway`.
 
 ## Base de datos
 

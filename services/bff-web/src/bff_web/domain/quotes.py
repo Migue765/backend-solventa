@@ -13,11 +13,18 @@ class InsuranceProduct:
 
 
 @dataclass(frozen=True)
+class TravelDestination:
+    code: str
+    name: str
+
+
+@dataclass(frozen=True)
 class QuoteRequestDraft:
     product_id: str
     customer_type: str
+    document_type: str
     identification: str
-    vehicle_plate: str
+    product_data: dict[str, str]
     email: str
     phone: str
 

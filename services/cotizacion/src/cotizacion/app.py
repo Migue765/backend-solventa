@@ -14,6 +14,7 @@ from cotizacion.domain.errors import (
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
 )
+from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -27,6 +28,7 @@ def create_app(config: Config | None = None) -> Flask:
 
     repositorio = RepositorioCotizacionesSqlAlchemy(crear_sesiones(config.database_url))
     tarificador = TarificadorTasaFija(config.tasa_base)
+    perfiles_riesgo = PerfilRiesgoSimulado()
     app.extensions["repositorio_cotizaciones"] = repositorio
     app.extensions["crear_cotizacion"] = CrearCotizacion(
         repositorio=repositorio,
@@ -38,7 +40,9 @@ def create_app(config: Config | None = None) -> Flask:
         tarificador=tarificador,
         vigencia=timedelta(days=config.vigencia_dias),
     )
-    app.extensions["gestionar_ofertas"] = GestionarOfertas(repositorio, repositorio)
+    app.extensions["gestionar_ofertas"] = GestionarOfertas(
+        repositorio, repositorio, perfiles_riesgo
+    )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(cotizaciones.bp)

@@ -16,6 +16,9 @@ def test_configuration_loads_development_users(monkeypatch: pytest.MonkeyPatch) 
                     "nombre": "Cliente Solventa",
                     "correo": "CLIENTE@SOLVENTA.CO",
                     "rol": "cliente",
+                    "tipoDocumento": "cc",
+                    "identificacion": "1023456789",
+                    "telefono": "+573001234567",
                     "passwordHash": hash_password(
                         "Solventa123!",
                         salt=b"0123456789abcdef",
@@ -28,6 +31,7 @@ def test_configuration_loads_development_users(monkeypatch: pytest.MonkeyPatch) 
     config = Config.from_environment()
 
     assert config.credentials[0].user.email == "cliente@solventa.co"
+    assert config.credentials[0].user.identification == "1023456789"
 
 
 def test_insecure_cross_site_cookie_is_rejected() -> None:

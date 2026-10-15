@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from bff_web.application.quote_ports import QuoteGateway
+from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
     OfferUnavailableError,
@@ -24,6 +25,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    TravelDestination,
 )
 
 
@@ -47,6 +49,16 @@ class HttpQuoteGateway(QuoteGateway):
         except (KeyError, TypeError) as error:
             raise QuoteServiceUnavailableError() from error
 
+    def list_travel_destinations(self) -> tuple[TravelDestination, ...]:
+        payload = self._request_json("/v1/destinos-viaje")
+        try:
+            return tuple(
+                TravelDestination(code=item["codigo"], name=item["nombre"])
+                for item in payload["destinos"]
+            )
+        except (KeyError, TypeError) as error:
+            raise QuoteServiceUnavailableError() from error
+
     def create_request(
         self,
         user_id: UUID,
@@ -61,8 +73,9 @@ class HttpQuoteGateway(QuoteGateway):
                 "clienteId": str(user_id),
                 "productoId": draft.product_id,
                 "tipoCliente": draft.customer_type,
+                "tipoDocumento": draft.document_type,
                 "identificacion": draft.identification,
-                "patenteVehiculo": draft.vehicle_plate,
+                "datosProducto": draft.product_data,
                 "correo": draft.email,
                 "telefono": draft.phone,
             },
@@ -155,11 +168,13 @@ class HttpQuoteGateway(QuoteGateway):
 
 
 def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:
+    product_id = payload["productoId"]
     draft = QuoteRequestDraft(
-        product_id=payload["productoId"],
+        product_id=product_id,
         customer_type=payload["tipoCliente"],
+        document_type=payload["tipoDocumento"],
         identification=payload["identificacion"],
-        vehicle_plate=payload["patenteVehiculo"],
+        product_data=validate_product_data(product_id, payload["datosProducto"]),
         email=payload["correo"],
         phone=payload["telefono"],
     )

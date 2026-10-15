@@ -14,6 +14,7 @@ from cotizacion.api.schemas import (
 )
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
+from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -26,6 +27,16 @@ UUID_ADAPTER: TypeAdapter[UUID] = TypeAdapter(UUID)
 @bp.get("/productos-seguro")
 def listar_productos() -> Response:
     return jsonify(productos=[producto_a_json(producto) for producto in PRODUCTOS])
+
+
+@bp.get("/destinos-viaje")
+def listar_destinos_viaje() -> Response:
+    return jsonify(
+        destinos=[
+            {"codigo": destino.codigo, "nombre": destino.nombre}
+            for destino in sorted(DESTINOS_VIAJE, key=lambda item: item.nombre)
+        ]
+    )
 
 
 @bp.post("/solicitudes-cotizacion")

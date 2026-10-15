@@ -7,11 +7,14 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    TravelDestination,
 )
 
 
 class QuoteGateway(Protocol):
     def list_products(self) -> tuple[InsuranceProduct, ...]: ...
+
+    def list_travel_destinations(self) -> tuple[TravelDestination, ...]: ...
 
     def create_request(
         self,
