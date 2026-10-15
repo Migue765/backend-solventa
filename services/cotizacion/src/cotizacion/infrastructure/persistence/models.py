@@ -1,8 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 MONTO = Numeric(18, 2)
@@ -79,3 +89,50 @@ class SeleccionOfertaModel(Base):
     seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[UUID]
     request_fingerprint: Mapped[str] = mapped_column(String(64))
+
+
+class ReglaTarifaModel(Base):
+    __tablename__ = "reglas_tarifa"
+    __table_args__ = (
+        UniqueConstraint("producto_id", "version", name="uq_reglas_producto_version"),
+    )
+
+    regla_id: Mapped[UUID] = mapped_column(primary_key=True)
+    version: Mapped[str] = mapped_column(String(40))
+    producto_id: Mapped[UUID] = mapped_column(index=True)
+    tasa: Mapped[Decimal] = mapped_column(Numeric(10, 6))
+    factor_perfil: Mapped[Decimal] = mapped_column(Numeric(10, 6))
+    vigente_desde: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    vigente_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InstantaneaDecisionModel(Base):
+    """Registro append-only: se inserta junto con la cotización y nunca se actualiza."""
+
+    __tablename__ = "instantaneas_decision"
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="CASCADE"), primary_key=True
+    )
+    regla_id: Mapped[UUID]
+    regla_version: Mapped[str] = mapped_column(String(40))
+    perfil_id: Mapped[str] = mapped_column(String(64))
+    perfil_modelo_version: Mapped[str] = mapped_column(String(40))
+    hash_decision: Mapped[str] = mapped_column(String(64), index=True)
+    hash_contenido: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[dict[str, Any]] = mapped_column(JSON)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OutboxEventoModel(Base):
+    """Outbox transaccional: el evento se confirma en la misma transacción que la decisión."""
+
+    __tablename__ = "outbox_eventos"
+
+    evento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    tipo: Mapped[str] = mapped_column(String(80))
+    agregado_id: Mapped[UUID] = mapped_column(index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    publicado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    intentos: Mapped[int] = mapped_column(Integer, default=0)

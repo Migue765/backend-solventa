@@ -36,7 +36,8 @@ Ejemplo:
 ```bash
 curl -X POST localhost:5000/v1/cotizaciones -H 'Content-Type: application/json' -d '{
   "clienteId": "8f1c2a4e-1111-4c1e-9b1a-000000000001",
-  "productoId": "8f1c2a4e-2222-4c1e-9b1a-000000000002",
+  "productoId": "11111111-1111-4111-8111-111111111111",
+  "perfilId": "perfil-1",
   "moneda": "COP",
   "coberturas": [
     {"coberturaId": "8f1c2a4e-3333-4c1e-9b1a-000000000003", "sumaAsegurada": "2000000", "deducible": "200000"}
@@ -44,22 +45,41 @@ curl -X POST localhost:5000/v1/cotizaciones -H 'Content-Type: application/json' 
 }'
 ```
 
-Respuestas: `201` cotización creada, `400` solicitud inválida, `422` regla de negocio violada.
+Respuestas: `201` cotización creada, `400` solicitud inválida, `422` regla de negocio violada
+(incluye producto sin regla de tarifa vigente o perfil inexistente) y `500` error controlado.
+Toda respuesta lleva `X-Correlation-Id` (se reutiliza el recibido o se genera uno); los errores
+también lo incluyen en el cuerpo como `correlationId`. Si el cálculo falla no se persiste nada.
+
+La respuesta incluye `decision` con la `reglaVersion`, el `perfilId` y el `hashDecision` usados.
+Mismas entradas y misma versión de reglas producen la misma prima y el mismo `hashDecision`.
 
 La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID. La misma
 clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
 produce `409`.
 
-La cotización base usa una tasa fija:
-`(sumaAsegurada - deducible) * COTIZACION_TASA_BASE`. Al generar las ofertas se consulta un
-adaptador simulado y determinista que asigna escenarios de riesgo A, B o C y ajusta las primas.
-Este adaptador no consulta un buró ni representa información financiera real; puede sustituirse
-por una integración externa a través del puerto `PerfilRiesgoGateway`.
+## Tarificación
+
+`prima = (sumaAsegurada - deducible) * tasa * (1 + score * factorPerfil)`, por cobertura.
+
+- La **regla de tarifa** (`tasa`, `factorPerfil`) es versionada y tiene vigencia (`reglas_tarifa`).
+  Se aplica la regla vigente del producto al momento del cálculo; sin regla vigente se rechaza.
+  La migración `0003` siembra `tarifa-2026.1` para el seguro automotriz.
+- El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil`. Mientras no exista el contexto de
+  Perfilamiento se usa `ProveedorPerfilSimulado` (score fijo `COTIZACION_PERFIL_SCORE_SIMULADO`).
+- En `/v1/solicitudes-cotizacion` el perfil es el del propio cliente (`perfilId = clienteId`).
+- Las reglas se leen con una caché local de `COTIZACION_REGLAS_CACHE_SEGUNDOS` que nunca usa una
+  regla que ya no esté vigente.
+
+La comparación de planes usa adicionalmente un adaptador simulado y determinista para representar
+escenarios A, B y C. Ninguno de los adaptadores consulta un buró ni representa información
+financiera real; ambos pueden sustituirse por integraciones externas a través de sus puertos.
 
 ## Base de datos
 
 Las solicitudes, cotizaciones calculadas y coberturas se almacenan en `cotizaciones` y
-`coberturas_cotizadas`, definidas en `infrastructure/persistence/models.py` y versionadas con
+`coberturas_cotizadas`. Cada cálculo exitoso guarda, en la misma transacción, una instantánea
+inmutable en `instantaneas_decision` (entradas, perfil, regla y resultado con sus hashes) y un evento
+`InstantaneaDecisionRegistrada` en `outbox_eventos` pendiente de publicar. Las tablas están definidas en `infrastructure/persistence/models.py` y versionadas con
 Alembic.
 
 ```bash
@@ -70,11 +90,14 @@ alembic downgrade -1                              # revertir la última
 
 ## Configuración
 
-| Variable                   | Default                   |
-|----------------------------|---------------------------|
-| `DATABASE_URL`             | `sqlite:///cotizacion.db` |
-| `COTIZACION_TASA_BASE`     | `0.015`                   |
-| `COTIZACION_VIGENCIA_DIAS` | `30`                      |
+| Variable                              | Default                   |
+|---------------------------------------|---------------------------|
+| `DATABASE_URL`                        | `sqlite:///cotizacion.db` |
+| `COTIZACION_VIGENCIA_DIAS`            | `30`                      |
+| `DB_POOL_SIZE`                        | `10`                      |
+| `DB_MAX_OVERFLOW`                     | `10`                      |
+| `COTIZACION_REGLAS_CACHE_SEGUNDOS`    | `30`                      |
+| `COTIZACION_PERFIL_SCORE_SIMULADO`    | `0.50`                    |
 
 En Aurora PostgreSQL: `DATABASE_URL=postgresql+psycopg://usuario:clave@host:5432/cotizacion` (instalar con el extra `postgres`).
 
@@ -86,4 +109,24 @@ pip install -e ".[dev]"
 alembic upgrade head
 flask --app cotizacion.app run
 pytest
+```
+
+## Contenedor
+
+```bash
+docker build -t cotizacion services/cotizacion
+docker run --rm -p 8080:8080 -e DATABASE_URL=... cotizacion
+```
+
+La imagen sirve la API con gunicorn en el puerto `8080` (`/ping` para health checks) y corre como
+usuario sin privilegios. Las migraciones **no** se ejecutan al arrancar: se aplican con
+`alembic upgrade head` como paso previo al despliegue.
+
+## Prueba de carga
+
+`loadtest/cotizacion.js` es un guion de [k6](https://k6.io) para el escenario ASR-ESC-01
+(500 → 50.000 cotizaciones por minuto, p95 ≤ 250 ms):
+
+```bash
+k6 run -e BASE_URL=https://<api> services/cotizacion/loadtest/cotizacion.js
 ```

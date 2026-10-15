@@ -1,0 +1,45 @@
+# Variables: IMAGE, MIGRATION_ID (ej. 0.1.0). Aplica las migraciones de Alembic antes del despliegue.
+# Se crea un Job por version porque los Jobs no se pueden actualizar.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cotizacion-migrate-${MIGRATION_ID}
+  namespace: cotizacion
+  labels:
+    app.kubernetes.io/name: cotizacion-migrate
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cotizacion-migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: cotizacion
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ${IMAGE}
+          workingDir: /app
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cotizacion-db
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

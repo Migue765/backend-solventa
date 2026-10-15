@@ -1,0 +1,33 @@
+# CodeBuild (build): pruebas, imagen amd64 y publicacion en ECR.
+# Variables: ECR_REPOSITORY_URL (proyecto), COMMIT_ID (pipeline). Exporta IMAGE_TAG al despliegue.
+version: 0.2
+
+env:
+  exported-variables:
+    - IMAGE_TAG
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet -r requirements-dev.txt -e "services/cotizacion[dev]"
+  pre_build:
+    commands:
+      - ruff check services/cotizacion
+      - python -m pytest -q services/cotizacion/tests
+      - VERSION=$(python -c "import tomllib; print(tomllib.load(open('services/cotizacion/pyproject.toml','rb'))['project']['version'])")
+      - export IMAGE_TAG="${VERSION}-$(printf '%s' "$COMMIT_ID" | cut -c1-7)"
+      - echo "Imagen $ECR_REPOSITORY_URL:$IMAGE_TAG"
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%%/*}"
+  build:
+    commands:
+      - docker build --tag "$ECR_REPOSITORY_URL:$IMAGE_TAG" services/cotizacion
+  post_build:
+    commands:
+      # Los tags de ECR son inmutables: repetir una version+commit falla a proposito.
+      - docker push "$ECR_REPOSITORY_URL:$IMAGE_TAG"
+
+artifacts:
+  files:
+    - deploy/**/*
