@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 import pytest
 from cotizacion.app import create_app
 from cotizacion.config import Config
+from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
@@ -21,8 +22,13 @@ PRODUCTO_AUTOMOTRIZ = "11111111-1111-4111-8111-111111111111"
 
 @pytest.fixture
 def client(database_url):
-    app = create_app(Config(database_url=database_url, vigencia_dias=15))
-    return app.test_client()
+    app = create_app(
+        Config(database_url=database_url, vigencia_dias=15, internal_api_token="test-internal"),
+        perfiles=ProveedorPerfilSimulado(Decimal("0.5")),
+    )
+    client = app.test_client()
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-internal"
+    return client
 
 
 def solicitud(**cambios):
@@ -49,6 +55,20 @@ def test_ping(client):
 
     assert respuesta.status_code == 200
     assert respuesta.get_json() == {"status": "ok"}
+
+
+def test_el_flujo_anterior_no_cambia_hasta_habilitar_hu11(database_url):
+    client = create_app(Config(database_url=database_url)).test_client()
+    respuesta = client.post("/v1/cotizaciones", json=solicitud())
+    assert respuesta.status_code == 201
+    assert respuesta.get_json()["decision"]["perfilId"] == "perfil-1"
+    assert (
+        client.get(
+            "/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234/perfilamiento",
+            query_string={"clienteId": str(uuid4())},
+        ).status_code
+        == 503
+    )
 
 
 def test_crear_cotizacion_la_persiste(client, database_url):
@@ -128,7 +148,11 @@ def test_regla_vencida_se_rechaza(database_url):
         sesion.execute(
             update(ReglaTarifaModel).values(vigente_hasta=ReglaTarifaModel.vigente_desde)
         )
-    client = create_app(Config(database_url=database_url)).test_client()
+    client = create_app(
+        Config(database_url=database_url, internal_api_token="test-internal"),
+        perfiles=ProveedorPerfilSimulado(Decimal("0.5")),
+    ).test_client()
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-internal"
 
     respuesta = client.post("/v1/cotizaciones", json=solicitud())
 
@@ -175,14 +199,18 @@ def test_propaga_el_correlation_id(client):
 
 
 def test_error_inesperado_devuelve_error_controlado(database_url):
-    app = create_app(Config(database_url=database_url))
+    app = create_app(Config(database_url=database_url, internal_api_token="test-internal"))
 
     def fallar(*_args, **_kwargs):
         raise RuntimeError("falla simulada")
 
     app.extensions["crear_cotizacion"].ejecutar = fallar
 
-    respuesta = app.test_client().post("/v1/cotizaciones", json=solicitud())
+    respuesta = app.test_client().post(
+        "/v1/cotizaciones",
+        json=solicitud(),
+        headers={"Authorization": "Bearer test-internal"},
+    )
 
     assert respuesta.status_code == 500
     cuerpo = respuesta.get_json()

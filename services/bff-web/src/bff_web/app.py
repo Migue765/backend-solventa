@@ -5,11 +5,14 @@ from flask import Flask, Response, g, request
 from flask_cors import CORS
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_web.api import health, quotes, sessions
+from bff_web.api import health, profiling, quotes, sessions
 from bff_web.application.auth_service import AuthService
+from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.config import Config
+from bff_web.domain.profiling import ProfilingError
 from bff_web.infrastructure.development_credentials import DevelopmentCredentialProvider
+from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 from bff_web.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
 from bff_web.infrastructure.memory_sessions import InMemorySessionRepository
@@ -19,6 +22,7 @@ from bff_web.problems import problem_response
 def create_app(
     config: Config | None = None,
     quote_gateway: QuoteGateway | None = None,
+    profiling_gateway: ProfilingGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -40,12 +44,19 @@ def create_app(
         session_duration=active_config.session_duration,
     )
     app.extensions["quote_gateway"] = quote_gateway or HttpQuoteGateway(
-        active_config.quote_service_url
+        active_config.quote_service_url, token=active_config.internal_api_token
+    )
+    app.extensions["profiling_gateway"] = profiling_gateway or HttpProfilingGateway(
+        active_config.identity_service_url,
+        active_config.quote_service_url,
+        active_config.internal_api_token,
     )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(sessions.bp)
     app.register_blueprint(quotes.bp)
+    app.register_blueprint(profiling.bp)
+    app.register_error_handler(ProfilingError, profiling.profiling_error)
 
     @app.before_request
     def assign_correlation_id() -> None:

@@ -44,6 +44,10 @@ class ProveedorPerfil(Protocol):
     def obtener(self, perfil_id: str, cliente_id: UUID) -> PerfilRiesgo | None: ...
 
 
+class GeneradorPerfil(Protocol):
+    def generar(self, cliente_id: UUID, referencia_id: UUID) -> PerfilRiesgo: ...
+
+
 class Tarificador(Protocol):
     def calcular_prima(
         self, regla: ReglaTarifa, perfil: PerfilRiesgo, cobertura: CoberturaCotizada

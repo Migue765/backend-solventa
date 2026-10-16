@@ -25,6 +25,8 @@ class Config:
     attempt_window: timedelta = timedelta(minutes=5)
     cors_allowed_origins: tuple[str, ...] = ("http://localhost:4200",)
     quote_service_url: str = "http://localhost:5000"
+    identity_service_url: str = "http://localhost:5002"
+    internal_api_token: str = ""
 
     def __post_init__(self) -> None:
         if not self.session_cookie_name.strip():
@@ -50,6 +52,10 @@ class Config:
                 if origin.strip()
             ),
             quote_service_url=os.getenv("QUOTE_SERVICE_URL", "http://localhost:5000").rstrip("/"),
+            identity_service_url=os.getenv("IDENTIDAD_SERVICE_URL", "http://localhost:5002").rstrip(
+                "/"
+            ),
+            internal_api_token=os.getenv("INTERNAL_API_TOKEN", ""),
         )
 
 

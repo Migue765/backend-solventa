@@ -1,0 +1,11 @@
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: hu11-bff-web
+  namespace: hu11-perfilamiento
+spec:
+  targetGroupARN: ${HU11_TARGET_GROUP_ARN}
+  targetType: ip
+  serviceRef:
+    name: bff-web
+    port: 8080

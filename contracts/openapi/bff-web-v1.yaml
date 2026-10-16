@@ -10,6 +10,7 @@ tags:
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
+  - name: Perfilamiento
   - name: Dashboard
 paths:
   /v1/sesiones:
@@ -67,6 +68,84 @@ paths:
           description: Sesión cerrada
         "401":
           $ref: "#/components/responses/NoAutorizado"
+  /v1/consentimientos/perfilamiento:
+    get:
+      tags: [Perfilamiento]
+      operationId: consultarConsentimientoPerfilamiento
+      summary: Consulta el consentimiento del cliente autenticado
+      responses:
+        "200":
+          description: Consentimiento actual, incluso revocado o vencido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    put:
+      tags: [Perfilamiento]
+      operationId: actualizarConsentimientoPerfilamiento
+      summary: Autoriza o revoca el uso de datos para cotizar durante treinta dias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [autorizado, version]
+              properties:
+                autorizado:
+                  type: boolean
+                version:
+                  type: integer
+                  minimum: 0
+                  description: Version actual; cero si no hay consentimiento
+      responses:
+        "200":
+          description: Nueva version persistida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/perfilamiento:
+    get:
+      tags: [Perfilamiento]
+      operationId: consultarPerfilamientoSolicitud
+      summary: Consulta el perfil exacto utilizado por una solicitud propia
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Perfil vigente y autorizado; nunca se entrega un perfil parcial
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfilamientoSolicitud"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/ConsentimientoNoVigente"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/productos-seguro:
     get:
       tags: [Productos]
@@ -116,6 +195,7 @@ paths:
       tags: [Cotizaciones]
       summary: Registra una solicitud de cotización
       operationId: crearSolicitudCotizacion
+      description: Requiere consentimiento vigente para consultar las fuentes mock de perfilamiento.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -137,6 +217,8 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "409":
           $ref: "#/components/responses/Conflicto"
+        "403":
+          $ref: "#/components/responses/ConsentimientoNoVigente"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
         "503":
@@ -175,6 +257,10 @@ paths:
                 $ref: "#/components/schemas/ResultadoOfertas"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/ConsentimientoNoVigente"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
         "404":
           $ref: "#/components/responses/NoEncontrado"
         "503":
@@ -219,6 +305,10 @@ paths:
                 $ref: "#/components/schemas/SeleccionOferta"
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
+        "403":
+          $ref: "#/components/responses/ConsentimientoNoVigente"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "404":
@@ -283,6 +373,12 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problema"
+    ConsentimientoNoVigente:
+      description: Consentimiento ausente, revocado, vencido o distinto del usado en el perfil
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     NoEncontrado:
       description: El recurso no existe o no pertenece al cliente
       content:
@@ -319,6 +415,99 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    ConsentimientoPerfilamiento:
+      type: object
+      additionalProperties: false
+      required: [consentimientoId, clienteId, version, estado, finalidad, alcances, efectivaEn, vigenteHasta]
+      properties:
+        consentimientoId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [autorizado, revocado]
+        finalidad:
+          type: string
+          const: cotizacion
+        alcances:
+          type: array
+          items:
+            type: string
+            enum: [open_finance, open_data]
+        efectivaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+    FuentePerfilamiento:
+      type: object
+      additionalProperties: false
+      required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+      properties:
+        nombre:
+          type: string
+          enum: [open_finance, open_data]
+        version:
+          type: string
+        consultadaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        simulada:
+          type: boolean
+        indicadorRiesgo:
+          type: string
+          pattern: "^(0(\\.[0-9]+)?|1(\\.0+)?)$"
+    PerfilamientoSolicitud:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId, consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      properties:
+        solicitudId:
+          type: string
+        perfilId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        modeloVersion:
+          type: string
+        score:
+          type: string
+          pattern: "^(0(\\.[0-9]+)?|1(\\.0+)?)$"
+        nivel:
+          type: string
+          enum: [A, B, C]
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+        calculadoEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        fuentes:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/FuentePerfilamiento"
+        fallbackUsed:
+          type: boolean
     Credenciales:
       type: object
       additionalProperties: false

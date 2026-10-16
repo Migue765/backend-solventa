@@ -13,8 +13,10 @@ from cotizacion.api.schemas import (
     solicitud_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.ports import ProveedorPerfil
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
+from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -70,6 +72,35 @@ def listar_ofertas(solicitud_id: str) -> tuple[Response, int] | Response:
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
     return jsonify(resultado_ofertas_a_json(_ofertas().listar(solicitud_id, cliente_id)))
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/perfilamiento")
+def consultar_perfilamiento(solicitud_id: str) -> tuple[Response, int] | Response:
+    if not current_app.extensions["perfilamiento_habilitado"]:
+        raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    solicitud = _repositorio().obtener_solicitud(solicitud_id, cliente_id)
+    if solicitud is None:
+        raise SolicitudNoEncontradaError()
+    instantanea = solicitud.cotizacion.instantanea
+    if instantanea is None:
+        raise ErrorConsultaPerfil("perfil_no_encontrado", 404)
+    proveedor = cast(ProveedorPerfil, current_app.extensions["proveedor_perfil"])
+    perfil = proveedor.obtener(instantanea.perfil_id, cliente_id)
+    if perfil is None or perfil.evidencia is None:
+        raise ErrorConsultaPerfil("perfil_no_encontrado", 404)
+    if perfil.evidencia["referenciaId"] != str(
+        solicitud.cotizacion.cotizacion_id
+    ) or perfil.evidencia != instantanea.contenido["perfil"].get("evidencia"):
+        raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+    datos = {
+        key: value
+        for key, value in perfil.evidencia.items()
+        if key not in {"clienteId", "referenciaId"}
+    }
+    return jsonify(solicitudId=solicitud_id, **datos)
 
 
 @bp.get("/solicitudes-cotizacion/<solicitud_id>/seleccion")

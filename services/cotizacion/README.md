@@ -30,14 +30,24 @@ tests/
 | GET    | `/v1/productos-seguro` | Lista el catálogo de seguros |
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
+| GET | `/v1/solicitudes-cotizacion/{id}/perfilamiento` | Consulta el perfil exacto del calculo |
+
+Al habilitar HU11, todas las rutas excepto `/ping` requieren
+`Authorization: Bearer <INTERNAL_API_TOKEN>`. Son endpoints internos: el navegador debe usar
+el BFF, que toma al cliente de su sesion.
+
+`COTIZACION_PERFILAMIENTO_HABILITADO=true` activa HU11. El default false preserva el flujo
+anterior mientras se despliegan los servicios nuevos; se registra una advertencia al arrancar.
+No es un fallback ante errores: una vez habilitado, fallas de Perfilamiento o consentimiento
+siempre bloquean la operacion, sin recurrir a los simuladores anteriores.
 
 Ejemplo:
 
 ```bash
-curl -X POST localhost:5000/v1/cotizaciones -H 'Content-Type: application/json' -d '{
+curl -X POST localhost:5000/v1/cotizaciones -H "Authorization: Bearer $INTERNAL_API_TOKEN" -H 'Content-Type: application/json' -d '{
   "clienteId": "8f1c2a4e-1111-4c1e-9b1a-000000000001",
   "productoId": "11111111-1111-4111-8111-111111111111",
-  "perfilId": "perfil-1",
+  "perfilId": "<UUID de un perfil vigente generado por Perfilamiento>",
   "moneda": "COP",
   "coberturas": [
     {"coberturaId": "8f1c2a4e-3333-4c1e-9b1a-000000000003", "sumaAsegurada": "2000000", "deducible": "200000"}
@@ -64,15 +74,22 @@ produce `409`.
 - La **regla de tarifa** (`tasa`, `factorPerfil`) es versionada y tiene vigencia (`reglas_tarifa`).
   Se aplica la regla vigente del producto al momento del cálculo; sin regla vigente se rechaza.
   La migración `0003` siembra `tarifa-2026.1` para el seguro automotriz.
-- El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil`. Mientras no exista el contexto de
-  Perfilamiento se usa `ProveedorPerfilSimulado` (score fijo `COTIZACION_PERFIL_SCORE_SIMULADO`).
-- En `/v1/solicitudes-cotizacion` el perfil es el del propio cliente (`perfilId = clienteId`).
+- El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil` mediante HTTP a Perfilamiento.
+  La creacion de solicitudes genera un perfil para el cliente y el UUID de la cotizacion.
+  El endpoint de bajo nivel `/v1/cotizaciones` consume un perfil existente y autorizado.
 - Las reglas se leen con una caché local de `COTIZACION_REGLAS_CACHE_SEGUNDOS` que nunca usa una
   regla que ya no esté vigente.
 
-La comparación de planes usa adicionalmente un adaptador simulado y determinista para representar
-escenarios A, B y C. Ninguno de los adaptadores consulta un buró ni representa información
-financiera real; ambos pueden sustituirse por integraciones externas a través de sus puertos.
+La comparacion de planes usa el mismo perfil persistido, no un segundo perfil por documento.
+Antes de listar o seleccionar ofertas se revalida su consentimiento y vigencia. Las fixtures
+de Open Finance/Open Data estan en Perfilamiento; no representan informacion financiera real.
+Los adaptadores simulados anteriores solo se inyectan en pruebas de regresion.
+
+La instantanea de decision incluye la evidencia del perfil, fuentes, fechas, version de modelo
+y consentimiento. No se recalculan ofertas con un perfil nuevo silenciosamente: ante revocacion,
+cambio de autorizacion o vencimiento, se exige una nueva solicitud. La consulta historica de la
+solicitud no divulga datos de perfilamiento. Un reintento idempotente devuelve la solicitud anterior,
+pero no habilita nuevas consultas ni usos de su perfil.
 
 ## Base de datos
 
@@ -98,6 +115,12 @@ alembic downgrade -1                              # revertir la última
 | `DB_MAX_OVERFLOW`                     | `10`                      |
 | `COTIZACION_REGLAS_CACHE_SEGUNDOS`    | `30`                      |
 | `COTIZACION_PERFIL_SCORE_SIMULADO`    | `0.50`                    |
+| `PERFILAMIENTO_SERVICE_URL`          | `http://localhost:5003` |
+| `INTERNAL_API_TOKEN`                 | sin default utilizable |
+| `COTIZACION_PERFILAMIENTO_HABILITADO` | `false` |
+
+`COTIZACION_PERFIL_SCORE_SIMULADO` solo aplica al flujo anterior. Con HU11 habilitada no
+reemplaza el perfil remoto ni permite omitir el consentimiento.
 
 En Aurora PostgreSQL: `DATABASE_URL=postgresql+psycopg://usuario:clave@host:5432/cotizacion` (instalar con el extra `postgres`).
 

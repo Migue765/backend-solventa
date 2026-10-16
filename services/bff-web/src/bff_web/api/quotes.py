@@ -6,11 +6,9 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
-from bff_web.application.auth_service import AuthService
+from bff_web.api.authentication import authenticated_user as _authenticated_user
 from bff_web.application.quote_ports import QuoteGateway
-from bff_web.config import Config
 from bff_web.domain.auth import User
-from bff_web.domain.errors import UnauthorizedError
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
@@ -231,16 +229,6 @@ def select_offer(request_id: str) -> Response:
 def _authenticated_user_id() -> UUID | None:
     user = _authenticated_user()
     return user.user_id if user else None
-
-
-def _authenticated_user() -> User | None:
-    config = cast(Config, current_app.extensions["bff_config"])
-    auth_service = cast(AuthService, current_app.extensions["auth_service"])
-    try:
-        session = auth_service.current_session(request.cookies.get(config.session_cookie_name))
-    except UnauthorizedError:
-        return None
-    return session.user
 
 
 def _gateway() -> QuoteGateway:

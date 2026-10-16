@@ -78,6 +78,10 @@ git clone https://github.com/Migue765/backend-solventa.git
 
 ## Microservicios previstos
 
+HU11 implementa consentimiento persistido en `identidad`, perfilamiento autorizado en
+`perfilamiento` y su consumo desde `cotizacion` y `bff-web`. Open Finance y Open Data son
+adaptadores mock. Ver los README de cada servicio y `deploy/hu11/README.md` para la prueba aislada.
+
 | Carpeta | Microservicio | Contexto |
 |---|---|---|
 | `bff-web` | BFF Web | Experiencias y API |

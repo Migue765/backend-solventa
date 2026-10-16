@@ -39,7 +39,7 @@ class InstantaneaDecision:
 def construir_instantanea(
     cotizacion: Cotizacion, regla: ReglaTarifa, perfil: PerfilRiesgo, calculada_en: datetime
 ) -> InstantaneaDecision:
-    decision = {
+    decision: dict[str, Any] = {
         "entradas": {
             "moneda": cotizacion.moneda,
             "coberturas": [
@@ -70,6 +70,8 @@ def construir_instantanea(
             ],
         },
     }
+    if perfil.evidencia is not None:
+        decision["perfil"]["evidencia"] = perfil.evidencia
     contenido = {
         "esquema": ESQUEMA_INSTANTANEA,
         "cotizacionId": str(cotizacion.cotizacion_id),

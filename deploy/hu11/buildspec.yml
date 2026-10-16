@@ -1,0 +1,12 @@
+# Imagen de prueba para los cuatro servicios de HU11.
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%%/*}"
+  build:
+    commands:
+      - docker build --tag "$ECR_REPOSITORY_URL:$HU11_IMAGE_TAG" --file deploy/hu11/Dockerfile .
+  post_build:
+    commands:
+      - docker push "$ECR_REPOSITORY_URL:$HU11_IMAGE_TAG"

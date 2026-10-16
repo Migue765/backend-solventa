@@ -8,8 +8,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+from flask import g, has_request_context
+
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.product_data import validate_product_data
+from bff_web.domain.profiling import PROFILING_ERRORS, ProfilingError
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
     OfferUnavailableError,
@@ -30,9 +33,10 @@ from bff_web.domain.quotes import (
 
 
 class HttpQuoteGateway(QuoteGateway):
-    def __init__(self, base_url: str, timeout_seconds: float = 5) -> None:
+    def __init__(self, base_url: str, timeout_seconds: float = 5, token: str = "") -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._token = token
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
         payload = self._request_json("/v1/productos-seguro")
@@ -132,6 +136,10 @@ class HttpQuoteGateway(QuoteGateway):
         body: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         request_headers = {"Accept": "application/json", **(headers or {})}
+        if self._token:
+            request_headers["Authorization"] = f"Bearer {self._token}"
+        if has_request_context():
+            request_headers["X-Correlation-ID"] = str(g.correlation_id)
         encoded_body = None
         if body is not None:
             request_headers["Content-Type"] = "application/json"
@@ -146,16 +154,19 @@ class HttpQuoteGateway(QuoteGateway):
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload: Any = json.load(response)
         except HTTPError as error:
+            try:
+                problem = json.load(error)
+            except (ValueError, OSError):
+                raise QuoteServiceUnavailableError() from error
+            code = problem.get("error") if isinstance(problem, dict) else None
+            if isinstance(code, str) and PROFILING_ERRORS.get(code) == error.code:
+                raise ProfilingError(code, error.code) from error
             if error.code == HTTPStatus.NOT_FOUND:
                 raise QuoteRequestNotFoundError() from error
             if error.code == HTTPStatus.CONFLICT:
                 raise QuoteRequestConflictError() from error
             if error.code == HTTPStatus.UNPROCESSABLE_ENTITY:
-                try:
-                    payload = json.load(error)
-                except json.JSONDecodeError:
-                    raise QuoteServiceUnavailableError() from error
-                if payload.get("error") == "oferta_no_disponible":
+                if code == "oferta_no_disponible":
                     raise OfferUnavailableError() from error
                 raise InsuranceProductUnavailableError() from error
             raise QuoteServiceUnavailableError() from error

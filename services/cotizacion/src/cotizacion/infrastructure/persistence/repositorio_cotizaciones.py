@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
+from cotizacion.domain.decision import InstantaneaDecision
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
@@ -33,7 +34,11 @@ class RepositorioCotizacionesSqlAlchemy:
     def obtener(self, cotizacion_id: UUID) -> Cotizacion | None:
         with self._sesiones() as sesion:
             modelo = sesion.get(CotizacionModel, cotizacion_id)
-            return _a_dominio(modelo) if modelo else None
+            return (
+                _a_dominio(modelo, sesion.get(InstantaneaDecisionModel, modelo.cotizacion_id))
+                if modelo
+                else None
+            )
 
     def guardar_solicitud(self, solicitud: SolicitudCotizacion) -> None:
         modelo = _a_modelo(solicitud.cotizacion)
@@ -62,7 +67,13 @@ class RepositorioCotizacionesSqlAlchemy:
                     CotizacionModel.idempotency_key == idempotency_key,
                 )
             )
-            return _solicitud_a_dominio(modelo) if modelo else None
+            return (
+                _solicitud_a_dominio(
+                    modelo, sesion.get(InstantaneaDecisionModel, modelo.cotizacion_id)
+                )
+                if modelo
+                else None
+            )
 
     def obtener_solicitud(self, solicitud_id: str, cliente_id: UUID) -> SolicitudCotizacion | None:
         with self._sesiones() as sesion:
@@ -72,7 +83,13 @@ class RepositorioCotizacionesSqlAlchemy:
                     CotizacionModel.cliente_id == cliente_id,
                 )
             )
-            return _solicitud_a_dominio(modelo) if modelo else None
+            return (
+                _solicitud_a_dominio(
+                    modelo, sesion.get(InstantaneaDecisionModel, modelo.cotizacion_id)
+                )
+                if modelo
+                else None
+            )
 
     def guardar_seleccion(self, seleccion: SeleccionOferta) -> None:
         with self._sesiones.begin() as sesion:
@@ -181,7 +198,9 @@ def _filas_de_decision(
     ]
 
 
-def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
+def _a_dominio(
+    modelo: CotizacionModel, instantanea: InstantaneaDecisionModel | None = None
+) -> Cotizacion:
     moneda = modelo.moneda
     valida_hasta = modelo.valida_hasta
     if valida_hasta.tzinfo is None:
@@ -203,10 +222,25 @@ def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
             )
             for c in modelo.coberturas
         ],
+        instantanea=InstantaneaDecision(
+            cotizacion_id=instantanea.cotizacion_id,
+            regla_id=instantanea.regla_id,
+            regla_version=instantanea.regla_version,
+            perfil_id=instantanea.perfil_id,
+            perfil_modelo_version=instantanea.perfil_modelo_version,
+            hash_decision=instantanea.hash_decision,
+            hash_contenido=instantanea.hash_contenido,
+            contenido=instantanea.contenido,
+            creada_en=instantanea.creada_en,
+        )
+        if instantanea
+        else None,
     )
 
 
-def _solicitud_a_dominio(modelo: CotizacionModel) -> SolicitudCotizacion:
+def _solicitud_a_dominio(
+    modelo: CotizacionModel, instantanea: InstantaneaDecisionModel | None = None
+) -> SolicitudCotizacion:
     solicitud_id = modelo.solicitud_id
     tipo_cliente = modelo.tipo_cliente
     tipo_documento = modelo.tipo_documento
@@ -233,7 +267,7 @@ def _solicitud_a_dominio(modelo: CotizacionModel) -> SolicitudCotizacion:
         creada_en = creada_en.replace(tzinfo=UTC)
     return SolicitudCotizacion(
         solicitud_id=solicitud_id,
-        cotizacion=_a_dominio(modelo),
+        cotizacion=_a_dominio(modelo, instantanea),
         tipo_cliente=tipo_cliente,
         tipo_documento=tipo_documento,
         identificacion=identificacion,

@@ -7,12 +7,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from cotizacion.application.ports import (
     PerfilRiesgoGateway,
+    ProveedorPerfil,
     SeleccionOfertaRepository,
     SolicitudCotizacionRepository,
 )
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
+    ErrorConsultaPerfil,
     OfertaNoDisponibleError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
@@ -23,6 +25,7 @@ from cotizacion.domain.ofertas import (
     ResultadoOfertas,
     SeleccionOferta,
 )
+from cotizacion.domain.perfil_riesgo import NivelRiesgo, PerfilRiesgo
 from cotizacion.domain.productos import PRODUCTOS
 
 
@@ -33,19 +36,40 @@ class GestionarOfertas:
         selecciones: SeleccionOfertaRepository,
         perfiles_riesgo: PerfilRiesgoGateway,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
+        perfiles: ProveedorPerfil | None = None,
     ) -> None:
         self._solicitudes = solicitudes
         self._selecciones = selecciones
         self._perfiles_riesgo = perfiles_riesgo
         self._reloj = reloj
+        self._perfiles = perfiles
 
     def listar(self, solicitud_id: str, cliente_id: UUID) -> ResultadoOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
-        perfil_riesgo = self._perfiles_riesgo.consultar(
-            solicitud.tipo_documento, solicitud.identificacion
-        )
+        if self._perfiles is None:
+            perfil_riesgo = self._perfiles_riesgo.consultar(
+                solicitud.tipo_documento, solicitud.identificacion
+            )
+        else:
+            instantanea = solicitud.cotizacion.instantanea
+            if instantanea is None:
+                raise ErrorConsultaPerfil("perfil_no_encontrado", 404)
+            perfil = self._perfiles.obtener(instantanea.perfil_id, cliente_id)
+            if perfil is None:
+                raise ErrorConsultaPerfil("perfil_no_encontrado", 404)
+            nivel = (
+                NivelRiesgo.A
+                if perfil.score <= Decimal("0.5")
+                else (NivelRiesgo.B if perfil.score <= Decimal("0.75") else NivelRiesgo.C)
+            )
+            factor = {
+                NivelRiesgo.A: Decimal("1.00"),
+                NivelRiesgo.B: Decimal("1.10"),
+                NivelRiesgo.C: Decimal("1.25"),
+            }[nivel]
+            perfil_riesgo = PerfilRiesgo(nivel, factor)
         return _generar_ofertas(
             solicitud_id,
             _producto_publico(solicitud.cotizacion.producto_id),

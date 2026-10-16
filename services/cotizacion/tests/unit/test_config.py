@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pytest
 from cotizacion.config import Config
 
 VARIABLES = (
@@ -9,6 +10,9 @@ VARIABLES = (
     "DB_MAX_OVERFLOW",
     "COTIZACION_REGLAS_CACHE_SEGUNDOS",
     "COTIZACION_PERFIL_SCORE_SIMULADO",
+    "COTIZACION_PERFILAMIENTO_HABILITADO",
+    "PERFILAMIENTO_SERVICE_URL",
+    "INTERNAL_API_TOKEN",
 )
 
 
@@ -35,3 +39,15 @@ def test_lee_variables_de_entorno(monkeypatch):
     assert config.db_max_overflow == 5
     assert config.reglas_cache_segundos == 2.5
     assert config.perfil_score_simulado == Decimal("0.8")
+
+
+def test_hu11_exige_token_y_activacion_explicita(monkeypatch):
+    monkeypatch.setenv("COTIZACION_PERFILAMIENTO_HABILITADO", "true")
+    monkeypatch.delenv("INTERNAL_API_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="INTERNAL_API_TOKEN"):
+        Config.desde_entorno()
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "token-solo-pruebas")
+    assert Config.desde_entorno().perfilamiento_habilitado is True
+    monkeypatch.setenv("COTIZACION_PERFILAMIENTO_HABILITADO", "talvez")
+    with pytest.raises(ValueError, match="true o false"):
+        Config.desde_entorno()

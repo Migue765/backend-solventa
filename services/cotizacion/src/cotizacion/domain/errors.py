@@ -16,3 +16,10 @@ class OfertaNoDisponibleError(Exception):
 
 class SeleccionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una oferta seleccionada."""
+
+
+class ErrorConsultaPerfil(Exception):
+    def __init__(self, codigo: str, status: int) -> None:
+        super().__init__(codigo)
+        self.codigo = codigo
+        self.status = status
