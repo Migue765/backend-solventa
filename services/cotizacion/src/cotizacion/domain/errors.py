@@ -20,3 +20,7 @@ class SeleccionNoEncontradaError(Exception):
 
 class SuscripcionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una suscripción."""
+
+
+class PagoEmisionNoEncontradoError(Exception):
+    """La solicitud todavía no tiene un pago confirmado ni una póliza emitida."""

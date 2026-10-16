@@ -6,7 +6,9 @@ import pytest
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.models import (
     DecisionSuscripcionModel,
+    OrdenPagoModel,
     OutboxEventoModel,
+    PolizaModel,
     SagaEmisionModel,
     SuscripcionModel,
 )
@@ -648,3 +650,99 @@ def test_decision_de_suscripcion_cumple_objetivos_de_latencia(client) -> None:
     ordenados = sorted(tiempos)
     assert ordenados[94] <= 1.5
     assert ordenados[98] <= 3
+
+
+def test_pago_idempotente_emite_una_unica_poliza_y_completa_la_saga(
+    client, database_url
+) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    oferta = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
+    client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": oferta["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    suscripcion = client.post(
+        f"{url}/suscripcion",
+        query_string=query,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    headers = {"Idempotency-Key": str(uuid4())}
+
+    creado = client.post(
+        f"{url}/pago",
+        query_string=query,
+        json={"metodoPago": "tarjeta"},
+        headers=headers,
+    )
+    reintento = client.post(
+        f"{url}/pago",
+        query_string=query,
+        json={"metodoPago": "tarjeta"},
+        headers=headers,
+    )
+    consultado = client.get(f"{url}/poliza", query_string=query)
+
+    assert creado.status_code == 201
+    assert reintento.get_json() == creado.get_json()
+    assert consultado.get_json() == creado.get_json()
+    assert creado.get_json()["pago"]["estado"] == "confirmado"
+    assert creado.get_json()["poliza"]["estado"] == "vigente"
+    assert creado.get_json()["poliza"]["numero"].startswith("SOL-")
+    assert creado.get_json()["saga"]["estado"] == "emitida"
+    assert creado.get_json()["saga"]["version"] == 3
+
+    suscripcion_id = UUID(suscripcion["id"])
+    with Session(create_engine(database_url)) as session:
+        pagos = session.scalars(
+            select(OrdenPagoModel).where(
+                OrdenPagoModel.suscripcion_id == suscripcion_id
+            )
+        ).all()
+        polizas = session.scalars(
+            select(PolizaModel).where(PolizaModel.suscripcion_id == suscripcion_id)
+        ).all()
+        eventos = session.scalars(
+            select(OutboxEventoModel).where(
+                OutboxEventoModel.tipo.in_(["PagoConfirmado", "PolizaEmitida"])
+            )
+        ).all()
+        saga = session.get(SagaEmisionModel, suscripcion_id)
+
+        assert len(pagos) == 1
+        assert len(polizas) == 1
+        assert {evento.tipo for evento in eventos} == {"PagoConfirmado", "PolizaEmitida"}
+        assert saga is not None and saga.estado == "emitida" and saga.version == 3
+
+
+def test_pago_requiere_suscripcion_y_protege_la_poliza_por_cliente(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    pago = client.post(
+        f"{url}/pago",
+        query_string={"clienteId": payload["clienteId"]},
+        json={"metodoPago": "tarjeta"},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    assert pago.status_code == 404
+    assert (
+        client.get(
+            f"{url}/poliza",
+            query_string={"clienteId": str(uuid4())},
+        ).status_code
+        == 404
+    )

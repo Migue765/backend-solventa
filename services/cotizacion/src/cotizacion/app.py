@@ -9,12 +9,14 @@ from cotizacion.api import cotizaciones, health, solicitudes
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
 from cotizacion.application.crear_cotizacion import CrearCotizacion
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.pagos_emision import ProcesarPagoYEmision
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
     OfertaNoDisponibleError,
+    PagoEmisionNoEncontradoError,
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
@@ -58,6 +60,12 @@ def create_app(config: Config | None = None) -> Flask:
         repositorio,
         repositorio,
     )
+    app.extensions["procesar_pago_emision"] = ProcesarPagoYEmision(
+        repositorio,
+        repositorio,
+        repositorio,
+        repositorio,
+    )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(cotizaciones.bp)
@@ -96,8 +104,12 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(SolicitudNoEncontradaError)
     @app.errorhandler(SeleccionNoEncontradaError)
     @app.errorhandler(SuscripcionNoEncontradaError)
+    @app.errorhandler(PagoEmisionNoEncontradoError)
     def no_encontrado(
-        _: SolicitudNoEncontradaError | SeleccionNoEncontradaError | SuscripcionNoEncontradaError,
+        _: SolicitudNoEncontradaError
+        | SeleccionNoEncontradaError
+        | SuscripcionNoEncontradaError
+        | PagoEmisionNoEncontradoError,
     ):
         return jsonify(error="no_encontrado"), 404
 

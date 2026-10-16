@@ -190,3 +190,62 @@ class SagaEmisionModel(Base):
     version: Mapped[int] = mapped_column(Integer)
     actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ultimo_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class OrdenPagoModel(Base):
+    __tablename__ = "ordenes_pago"
+    __table_args__ = (
+        UniqueConstraint(
+            "cliente_id",
+            "idempotency_key",
+            name="uq_ordenes_pago_cliente_idempotencia",
+        ),
+    )
+
+    orden_pago_id: Mapped[UUID] = mapped_column(primary_key=True)
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    monto: Mapped[Decimal] = mapped_column(MONTO)
+    moneda: Mapped[str] = mapped_column(String(3))
+    metodo_pago: Mapped[str] = mapped_column(String(20))
+    estado: Mapped[str] = mapped_column(String(20))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class TransaccionPagoModel(Base):
+    __tablename__ = "transacciones_pago"
+
+    transaccion_id: Mapped[UUID] = mapped_column(primary_key=True)
+    orden_pago_id: Mapped[UUID] = mapped_column(
+        ForeignKey("ordenes_pago.orden_pago_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    estado: Mapped[str] = mapped_column(String(20))
+    referencia: Mapped[str] = mapped_column(String(40), unique=True)
+    procesada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PolizaModel(Base):
+    __tablename__ = "polizas"
+
+    poliza_id: Mapped[UUID] = mapped_column(primary_key=True)
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    producto_id: Mapped[UUID]
+    numero: Mapped[str] = mapped_column(String(40), unique=True)
+    estado: Mapped[str] = mapped_column(String(20))
+    prima_mensual: Mapped[Decimal] = mapped_column(MONTO)
+    moneda: Mapped[str] = mapped_column(String(3))
+    vigente_desde: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    vigente_hasta: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    emitida_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))

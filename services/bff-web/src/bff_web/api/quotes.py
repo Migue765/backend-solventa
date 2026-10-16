@@ -24,6 +24,7 @@ from bff_web.domain.quotes import (
     Offer,
     OfferSelection,
     OffersResult,
+    PaymentAndPolicy,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -62,6 +63,12 @@ class OfferSelectionPayload(BaseModel):
 
     offer_id: UUID = Field(alias="ofertaId")
     version: int = Field(ge=1)
+
+
+class PaymentPayload(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    payment_method: str = Field(alias="metodoPago", pattern=r"^tarjeta$")
 
 
 @bp.get("/productos-seguro")
@@ -272,6 +279,53 @@ def get_subscription(request_id: str) -> Response:
     return jsonify(_subscription_json(subscription))
 
 
+@bp.post("/solicitudes-cotizacion/<request_id>/pago")
+def process_payment(request_id: str) -> tuple[Response, int] | Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        payload = PaymentPayload.model_validate(request.get_json(silent=False))
+        idempotency_key = UUID(request.headers["Idempotency-Key"])
+    except (KeyError, TypeError, ValueError, ValidationError):
+        return problem_response(
+            400,
+            "solicitud_invalida",
+            "Solicitud inválida",
+            "Incluye el método de pago y una clave de idempotencia válidos.",
+        )
+    try:
+        result = _gateway().process_payment(
+            user_id, request_id, payload.payment_method, idempotency_key
+        )
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de pago",
+            "La clave de idempotencia ya fue utilizada para otra operación.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_payment_policy_json(result)), 201
+
+
+@bp.get("/solicitudes-cotizacion/<request_id>/poliza")
+def get_policy(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        result = _gateway().get_policy(user_id, request_id)
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_payment_policy_json(result))
+
+
 def _authenticated_user_id() -> UUID | None:
     user = _authenticated_user()
     return user.user_id if user else None
@@ -377,6 +431,41 @@ def _subscription_json(subscription: Subscription) -> dict[str, object]:
             "estado": subscription.saga.status,
             "version": subscription.saga.version,
             "actualizadaEn": _date_json(subscription.saga.updated_at),
+        },
+    }
+
+
+def _payment_policy_json(result: PaymentAndPolicy) -> dict[str, object]:
+    return {
+        "pago": {
+            "id": str(result.payment.payment_id),
+            "estado": result.payment.status,
+            "monto": str(result.payment.amount.amount),
+            "moneda": result.payment.amount.currency,
+            "metodoPago": result.payment.method,
+            "confirmadaEn": _date_json(result.payment.confirmed_at),
+            "transaccion": {
+                "id": str(result.payment.transaction.transaction_id),
+                "estado": result.payment.transaction.status,
+                "referencia": result.payment.transaction.reference,
+                "procesadaEn": _date_json(result.payment.transaction.processed_at),
+            },
+        },
+        "poliza": {
+            "id": str(result.policy.policy_id),
+            "numero": result.policy.number,
+            "estado": result.policy.status,
+            "productoId": str(result.policy.product_id),
+            "primaMensual": str(result.policy.monthly_premium.amount),
+            "moneda": result.policy.monthly_premium.currency,
+            "vigenteDesde": _date_json(result.policy.valid_from),
+            "vigenteHasta": _date_json(result.policy.valid_until),
+            "emitidaEn": _date_json(result.policy.issued_at),
+        },
+        "saga": {
+            "estado": result.saga.status,
+            "version": result.saga.version,
+            "actualizadaEn": _date_json(result.saga.updated_at),
         },
     }
 

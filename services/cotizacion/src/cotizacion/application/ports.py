@@ -5,6 +5,7 @@ from uuid import UUID
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
+from cotizacion.domain.pago_emision import PagoYEmision
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -41,6 +42,16 @@ class SuscripcionRepository(Protocol):
     def buscar_suscripcion_por_idempotencia(
         self, cliente_id: UUID, idempotency_key: UUID
     ) -> Suscripcion | None: ...
+
+
+class PagoEmisionRepository(Protocol):
+    def guardar_pago_emision(self, resultado: PagoYEmision) -> None: ...
+
+    def obtener_pago_emision(self, solicitud_id: str) -> PagoYEmision | None: ...
+
+    def buscar_pago_por_idempotencia(
+        self, cliente_id: UUID, idempotency_key: UUID
+    ) -> PagoYEmision | None: ...
 
 
 class PerfilRiesgoGateway(Protocol):

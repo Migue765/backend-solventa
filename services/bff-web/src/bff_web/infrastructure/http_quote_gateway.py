@@ -24,6 +24,10 @@ from bff_web.domain.quotes import (
     Offer,
     OfferSelection,
     OffersResult,
+    Payment,
+    PaymentAndPolicy,
+    PaymentTransaction,
+    Policy,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -141,6 +145,25 @@ class HttpQuoteGateway(QuoteGateway):
         query = urlencode({"clienteId": str(user_id)})
         payload = self._request_json(f"/v1/solicitudes-cotizacion/{request_id}/suscripcion?{query}")
         return _safe_subscription_from_json(payload)
+
+    def process_payment(
+        self, user_id: UUID, request_id: str, payment_method: str, idempotency_key: UUID
+    ) -> PaymentAndPolicy:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/pago?{query}",
+            method="POST",
+            headers={"Idempotency-Key": str(idempotency_key)},
+            body={"metodoPago": payment_method},
+        )
+        return _safe_payment_policy_from_json(payload)
+
+    def get_policy(self, user_id: UUID, request_id: str) -> PaymentAndPolicy:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/poliza?{query}"
+        )
+        return _safe_payment_policy_from_json(payload)
 
     def _request_json(
         self,
@@ -268,6 +291,48 @@ def _safe_subscription_from_json(payload: dict[str, Any]) -> Subscription:
                 rule_version=decision["reglaVersion"],
                 decision_hash=decision["hashDecision"],
                 decided_at=_datetime(decision["decididaEn"]),
+            ),
+            saga=IssuanceSaga(
+                status=saga["estado"],
+                version=saga["version"],
+                updated_at=_datetime(saga["actualizadaEn"]),
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise QuoteServiceUnavailableError() from error
+
+
+def _safe_payment_policy_from_json(payload: dict[str, Any]) -> PaymentAndPolicy:
+    try:
+        payment = payload["pago"]
+        transaction = payment["transaccion"]
+        policy = payload["poliza"]
+        saga = payload["saga"]
+        return PaymentAndPolicy(
+            payment=Payment(
+                payment_id=UUID(payment["id"]),
+                status=payment["estado"],
+                amount=Money(Decimal(payment["monto"]), payment["moneda"]),
+                method=payment["metodoPago"],
+                confirmed_at=_datetime(payment["confirmadaEn"]),
+                transaction=PaymentTransaction(
+                    transaction_id=UUID(transaction["id"]),
+                    status=transaction["estado"],
+                    reference=transaction["referencia"],
+                    processed_at=_datetime(transaction["procesadaEn"]),
+                ),
+            ),
+            policy=Policy(
+                policy_id=UUID(policy["id"]),
+                number=policy["numero"],
+                status=policy["estado"],
+                product_id=UUID(policy["productoId"]),
+                monthly_premium=Money(
+                    Decimal(policy["primaMensual"]), policy["moneda"]
+                ),
+                valid_from=_datetime(policy["vigenteDesde"]),
+                valid_until=_datetime(policy["vigenteHasta"]),
+                issued_at=_datetime(policy["emitidaEn"]),
             ),
             saga=IssuanceSaga(
                 status=saga["estado"],

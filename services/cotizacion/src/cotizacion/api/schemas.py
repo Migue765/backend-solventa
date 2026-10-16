@@ -12,6 +12,7 @@ from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.documentos import validar_identificacion
 from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
+from cotizacion.domain.pago_emision import MetodoPago, PagoYEmision
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -80,6 +81,10 @@ class RegistrarSolicitudRequest(_Solicitud):
 class SeleccionarOfertaRequest(_Solicitud):
     oferta_id: UUID
     version: int = Field(ge=1)
+
+
+class ProcesarPagoRequest(_Solicitud):
+    metodo_pago: MetodoPago
 
 
 def _dinero(dinero: Dinero) -> dict[str, str]:
@@ -186,6 +191,43 @@ def suscripcion_a_json(suscripcion: Suscripcion) -> dict[str, object]:
             "estado": suscripcion.saga.estado.value,
             "version": suscripcion.saga.version,
             "actualizadaEn": _fecha(suscripcion.saga.actualizada_en),
+        },
+    }
+
+
+def pago_emision_a_json(resultado: PagoYEmision) -> dict[str, object]:
+    pago = resultado.pago
+    poliza = resultado.poliza
+    return {
+        "pago": {
+            "id": str(pago.orden_pago_id),
+            "estado": pago.estado.value,
+            "monto": str(pago.monto),
+            "moneda": pago.moneda,
+            "metodoPago": pago.metodo_pago.value,
+            "confirmadaEn": _fecha(pago.confirmada_en),
+            "transaccion": {
+                "id": str(pago.transaccion.transaccion_id),
+                "estado": pago.transaccion.estado.value,
+                "referencia": pago.transaccion.referencia,
+                "procesadaEn": _fecha(pago.transaccion.procesada_en),
+            },
+        },
+        "poliza": {
+            "id": str(poliza.poliza_id),
+            "numero": poliza.numero,
+            "estado": poliza.estado.value,
+            "productoId": str(poliza.producto_id),
+            "primaMensual": str(poliza.prima_mensual),
+            "moneda": poliza.moneda,
+            "vigenteDesde": _fecha(poliza.vigente_desde),
+            "vigenteHasta": _fecha(poliza.vigente_hasta),
+            "emitidaEn": _fecha(poliza.emitida_en),
+        },
+        "saga": {
+            "estado": resultado.saga.estado.value,
+            "version": resultado.saga.version,
+            "actualizadaEn": _fecha(resultado.saga.actualizada_en),
         },
     }
 
