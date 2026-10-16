@@ -26,6 +26,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    Subscription,
     TravelDestination,
 )
 from bff_web.problems import problem_response
@@ -227,6 +228,50 @@ def select_offer(request_id: str) -> Response:
     return jsonify(_selection_json(selection))
 
 
+@bp.post("/solicitudes-cotizacion/<request_id>/suscripcion")
+def start_subscription(request_id: str) -> tuple[Response, int] | Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        idempotency_key = UUID(request.headers["Idempotency-Key"])
+    except (KeyError, ValueError):
+        return problem_response(
+            400,
+            "solicitud_invalida",
+            "Solicitud inválida",
+            "Incluye una clave de idempotencia válida.",
+        )
+    try:
+        subscription = _gateway().start_subscription(user_id, request_id, idempotency_key)
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de solicitud",
+            "La clave de idempotencia ya fue utilizada para otra operación.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_subscription_json(subscription)), 201
+
+
+@bp.get("/solicitudes-cotizacion/<request_id>/suscripcion")
+def get_subscription(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        subscription = _gateway().get_subscription(user_id, request_id)
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_subscription_json(subscription))
+
+
 def _authenticated_user_id() -> UUID | None:
     user = _authenticated_user()
     return user.user_id if user else None
@@ -309,6 +354,30 @@ def _selection_json(selection: OfferSelection) -> dict[str, object]:
         "nombreOferta": selection.offer_name,
         "primaMensual": _money_json(selection.monthly_premium),
         "seleccionadaEn": _date_json(selection.selected_at),
+    }
+
+
+def _subscription_json(subscription: Subscription) -> dict[str, object]:
+    return {
+        "id": str(subscription.subscription_id),
+        "solicitudId": subscription.request_id,
+        "ofertaId": str(subscription.offer_id),
+        "ofertaVersion": subscription.offer_version,
+        "estado": subscription.status,
+        "reglaVersion": subscription.rule_version,
+        "creadaEn": _date_json(subscription.created_at),
+        "actualizadaEn": _date_json(subscription.updated_at),
+        "decision": {
+            "resultado": subscription.decision.result,
+            "reglaVersion": subscription.decision.rule_version,
+            "hashDecision": subscription.decision.decision_hash,
+            "decididaEn": _date_json(subscription.decision.decided_at),
+        },
+        "saga": {
+            "estado": subscription.saga.status,
+            "version": subscription.saga.version,
+            "actualizadaEn": _date_json(subscription.saga.updated_at),
+        },
     }
 
 

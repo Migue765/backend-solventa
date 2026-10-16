@@ -14,6 +14,7 @@ from cotizacion.domain.documentos import validar_identificacion
 from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
+from cotizacion.domain.suscripcion import Suscripcion
 
 
 class _Solicitud(BaseModel):
@@ -162,6 +163,30 @@ def seleccion_oferta_a_json(seleccion: SeleccionOferta) -> dict[str, object]:
         "nombreOferta": seleccion.nombre_oferta,
         "primaMensual": _dinero(seleccion.prima_mensual),
         "seleccionadaEn": _fecha(seleccion.seleccionada_en),
+    }
+
+
+def suscripcion_a_json(suscripcion: Suscripcion) -> dict[str, object]:
+    return {
+        "id": str(suscripcion.suscripcion_id),
+        "solicitudId": suscripcion.solicitud_id,
+        "ofertaId": str(suscripcion.oferta_id),
+        "ofertaVersion": suscripcion.oferta_version,
+        "estado": suscripcion.estado.value,
+        "reglaVersion": suscripcion.regla_version,
+        "creadaEn": _fecha(suscripcion.creada_en),
+        "actualizadaEn": _fecha(suscripcion.actualizada_en),
+        "decision": {
+            "resultado": suscripcion.decision.resultado.value,
+            "reglaVersion": suscripcion.decision.regla_version,
+            "hashDecision": suscripcion.decision.hash_decision,
+            "decididaEn": _fecha(suscripcion.decision.decidida_en),
+        },
+        "saga": {
+            "estado": suscripcion.saga.estado.value,
+            "version": suscripcion.saga.version,
+            "actualizadaEn": _fecha(suscripcion.saga.actualizada_en),
+        },
     }
 
 

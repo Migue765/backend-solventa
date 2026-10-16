@@ -11,6 +11,7 @@ tags:
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
+  - name: Suscripciones
   - name: Dashboard
 paths:
   /v1/usuarios:
@@ -297,6 +298,50 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
+  /v1/solicitudes-cotizacion/{solicitudId}/suscripcion:
+    get:
+      tags: [Suscripciones]
+      summary: Consulta la suscripción asociada a una oferta aceptada
+      operationId: consultarSuscripcion
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Suscripción encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Suscripcion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    post:
+      tags: [Suscripciones]
+      summary: Procesa la suscripción de una oferta aceptada
+      operationId: iniciarSuscripcion
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Suscripción procesada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Suscripcion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes/me/dashboard:
     get:
       tags: [Dashboard]
@@ -750,6 +795,77 @@ components:
             seleccionadaEn:
               type: string
               format: date-time
+    Suscripcion:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - solicitudId
+        - ofertaId
+        - ofertaVersion
+        - estado
+        - reglaVersion
+        - creadaEn
+        - actualizadaEn
+        - decision
+        - saga
+      properties:
+        id:
+          type: string
+          format: uuid
+        solicitudId:
+          type: string
+        ofertaId:
+          type: string
+          format: uuid
+        ofertaVersion:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [aprobada, revision, rechazada]
+        reglaVersion:
+          type: string
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        decision:
+          $ref: "#/components/schemas/DecisionSuscripcion"
+        saga:
+          $ref: "#/components/schemas/SagaEmision"
+    DecisionSuscripcion:
+      type: object
+      additionalProperties: false
+      required: [resultado, reglaVersion, hashDecision, decididaEn]
+      properties:
+        resultado:
+          type: string
+          enum: [aprobada, revision, rechazada]
+        reglaVersion:
+          type: string
+        hashDecision:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        decididaEn:
+          type: string
+          format: date-time
+    SagaEmision:
+      type: object
+      additionalProperties: false
+      required: [estado, version, actualizadaEn]
+      properties:
+        estado:
+          type: string
+          enum: [pago_pendiente, pago_confirmado, emitida, fallida]
+        version:
+          type: integer
+          minimum: 1
+        actualizadaEn:
+          type: string
+          format: date-time
     PolizaResumen:
       type: object
       additionalProperties: false
