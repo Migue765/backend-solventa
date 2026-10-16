@@ -652,9 +652,7 @@ def test_decision_de_suscripcion_cumple_objetivos_de_latencia(client) -> None:
     assert ordenados[98] <= 3
 
 
-def test_pago_idempotente_emite_una_unica_poliza_y_completa_la_saga(
-    client, database_url
-) -> None:
+def test_pago_idempotente_emite_una_unica_poliza_y_completa_la_saga(client, database_url) -> None:
     payload = nueva_solicitud()
     solicitud = client.post(
         "/v1/solicitudes-cotizacion",
@@ -703,9 +701,7 @@ def test_pago_idempotente_emite_una_unica_poliza_y_completa_la_saga(
     suscripcion_id = UUID(suscripcion["id"])
     with Session(create_engine(database_url)) as session:
         pagos = session.scalars(
-            select(OrdenPagoModel).where(
-                OrdenPagoModel.suscripcion_id == suscripcion_id
-            )
+            select(OrdenPagoModel).where(OrdenPagoModel.suscripcion_id == suscripcion_id)
         ).all()
         polizas = session.scalars(
             select(PolizaModel).where(PolizaModel.suscripcion_id == suscripcion_id)

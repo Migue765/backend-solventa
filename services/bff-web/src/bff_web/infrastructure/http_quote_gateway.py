@@ -160,9 +160,7 @@ class HttpQuoteGateway(QuoteGateway):
 
     def get_policy(self, user_id: UUID, request_id: str) -> PaymentAndPolicy:
         query = urlencode({"clienteId": str(user_id)})
-        payload = self._request_json(
-            f"/v1/solicitudes-cotizacion/{request_id}/poliza?{query}"
-        )
+        payload = self._request_json(f"/v1/solicitudes-cotizacion/{request_id}/poliza?{query}")
         return _safe_payment_policy_from_json(payload)
 
     def _request_json(
@@ -327,9 +325,7 @@ def _safe_payment_policy_from_json(payload: dict[str, Any]) -> PaymentAndPolicy:
                 number=policy["numero"],
                 status=policy["estado"],
                 product_id=UUID(policy["productoId"]),
-                monthly_premium=Money(
-                    Decimal(policy["primaMensual"]), policy["moneda"]
-                ),
+                monthly_premium=Money(Decimal(policy["primaMensual"]), policy["moneda"]),
                 valid_from=_datetime(policy["vigenteDesde"]),
                 valid_until=_datetime(policy["vigenteHasta"]),
                 issued_at=_datetime(policy["emitidaEn"]),

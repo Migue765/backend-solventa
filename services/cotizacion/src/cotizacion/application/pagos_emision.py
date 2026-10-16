@@ -63,9 +63,7 @@ class ProcesarPagoYEmision:
         fingerprint = hashlib.sha256(
             f"{solicitud_id}:{suscripcion.suscripcion_id}:{metodo_pago.value}".encode()
         ).hexdigest()
-        por_clave = self._pagos_emision.buscar_pago_por_idempotencia(
-            cliente_id, idempotency_key
-        )
+        por_clave = self._pagos_emision.buscar_pago_por_idempotencia(cliente_id, idempotency_key)
         if por_clave is not None:
             if por_clave.pago.request_fingerprint != fingerprint:
                 raise ConflictoIdempotenciaError()
