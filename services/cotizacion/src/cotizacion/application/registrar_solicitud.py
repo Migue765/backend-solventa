@@ -3,10 +3,11 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
-from cotizacion.application.ports import SolicitudCotizacionRepository
+from cotizacion.application.ports import PerfilRiesgoGateway, SolicitudCotizacionRepository
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ConflictoIdempotenciaError, ReglaDeNegocioError
@@ -32,10 +33,12 @@ class RegistrarSolicitud:
         self,
         repositorio: SolicitudCotizacionRepository,
         calculadora: CalculadoraCotizacion,
+        perfiles_riesgo: PerfilRiesgoGateway,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._repositorio = repositorio
         self._calculadora = calculadora
+        self._perfiles_riesgo = perfiles_riesgo
         self._reloj = reloj
 
     def ejecutar(self, comando: RegistrarSolicitudComando) -> SolicitudCotizacion:
@@ -53,9 +56,14 @@ class RegistrarSolicitud:
             raise ReglaDeNegocioError("El seguro seleccionado no está disponible.")
 
         ahora = self._reloj()
+        suma_asegurada = (
+            Decimal(comando.datos_producto["insuredAmount"])
+            if producto.producto_id == "parametric-weather"
+            else producto.suma_asegurada
+        )
         cobertura = CoberturaCotizada(
             cobertura_id=producto.cobertura_id,
-            suma_asegurada=Dinero(producto.suma_asegurada, "COP"),
+            suma_asegurada=Dinero(suma_asegurada, "COP"),
             deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
@@ -65,7 +73,16 @@ class RegistrarSolicitud:
         )
         # El perfil de la solicitud es el perfil de riesgo vigente del propio cliente.
         self._calculadora.calcular(
-            cotizacion, str(comando.cliente_id), ahora, producto, comando.datos_producto
+            cotizacion,
+            str(comando.cliente_id),
+            ahora,
+            producto,
+            comando.datos_producto,
+            perfil_ofertas=(
+                self._perfiles_riesgo.consultar(comando.tipo_documento, comando.identificacion)
+                if producto.producto_id == "parametric-weather"
+                else None
+            ),
         )
         solicitud = SolicitudCotizacion(
             solicitud_id=_generar_id(ahora),

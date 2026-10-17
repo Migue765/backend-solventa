@@ -49,9 +49,12 @@ def create_app(config: Config | None = None) -> Flask:
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
-    app.extensions["registrar_solicitud"] = RegistrarSolicitud(repositorio, calculadora)
+    perfiles_riesgo = PerfilRiesgoSimulado()
+    app.extensions["registrar_solicitud"] = RegistrarSolicitud(
+        repositorio, calculadora, perfiles_riesgo
+    )
     app.extensions["gestionar_ofertas"] = GestionarOfertas(
-        repositorio, repositorio, PerfilRiesgoSimulado()
+        repositorio, repositorio, perfiles_riesgo
     )
     app.extensions["procesar_suscripcion"] = ProcesarSuscripcion(
         repositorio,

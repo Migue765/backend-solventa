@@ -16,4 +16,4 @@ class PerfilRiesgo:
 
     @property
     def tarifa_aplicada(self) -> str:
-        return f"Simulada (Riesgo {self.nivel.value})"
+        return f"Riesgo {self.nivel.value}"

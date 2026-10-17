@@ -4,6 +4,7 @@ from typing import Any
 
 from cotizacion.application.ports import ProveedorPerfil, RepositorioReglas, Tarificador
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
+from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.decision import construir_instantanea
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError
@@ -13,6 +14,12 @@ from cotizacion.domain.modelo_academico import (
     entradas_academicas,
     prima_academica,
 )
+from cotizacion.domain.modelo_climatico import (
+    VERSION_CLIMATICA,
+    duracion_climatica,
+    planes_climaticos,
+)
+from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.productos import ProductoSeguro
 
 
@@ -38,6 +45,8 @@ class CalculadoraCotizacion:
         ahora: datetime,
         producto: ProductoSeguro | None = None,
         datos_producto: dict[str, str] | None = None,
+        *,
+        perfil_ofertas: PerfilRiesgoOferta | None = None,
     ) -> None:
         regla = self._reglas.obtener_vigente(cotizacion.producto_id, ahora)
         if regla is None:
@@ -47,7 +56,34 @@ class CalculadoraCotizacion:
             raise ReglaDeNegocioError("No existe el perfil de riesgo indicado.")
 
         detalle: dict[str, Any] | None = None
-        if producto is not None:
+        if producto is not None and producto.producto_id == "parametric-weather":
+            if regla.version != "tarifa-2026.1" or datos_producto is None or perfil_ofertas is None:
+                raise ReglaDeNegocioError("No hay un modelo climático vigente para la solicitud.")
+            try:
+                datos_clima = validar_datos_producto(producto.producto_id, datos_producto)
+            except ValueError as error:
+                raise ReglaDeNegocioError(str(error)) from error
+            detalle = {
+                "modelo": VERSION_CLIMATICA,
+                "productoId": producto.producto_id,
+                "datosProducto": datos_clima,
+                "baseAsegurada": datos_clima["insuredAmount"],
+                "duracion": duracion_climatica(datos_clima),
+                "periodicidad": "por_periodo",
+                "redondeo": "COP centavos; ROUND_HALF_UP",
+                "deducibleDescuentaBase": True,
+                "factorRiesgoOfertas": str(perfil_ofertas.factor_prima),
+                "tasaAplicada": perfil_ofertas.tarifa_aplicada,
+                "planes": [
+                    {**plan, "prima": str(Dinero(Decimal(plan["prima"]), "COP").monto)}
+                    for plan in planes_climaticos(datos_clima, perfil_ofertas.factor_prima)
+                ],
+            }
+            primas = {
+                c.cobertura_id: self._tarificador.calcular_prima(regla, perfil, c)
+                for c in cotizacion.coberturas
+            }
+        elif producto is not None:
             if regla.version != VERSION_ACADEMICA or datos_producto is None:
                 raise ReglaDeNegocioError("No hay un modelo académico vigente para la solicitud.")
             if cotizacion.moneda != "COP" or len(cotizacion.coberturas) != 1:

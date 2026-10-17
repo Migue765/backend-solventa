@@ -9,7 +9,7 @@ from flask import Flask
 from support import bearer
 
 
-@pytest.mark.parametrize("period", ["mensual", "por_viaje", "por_vuelo", None])
+@pytest.mark.parametrize("period", ["mensual", "por_viaje", "por_vuelo", "por_periodo", None])
 def test_bff_preserva_prima_y_periodicidad_en_ofertas_y_seleccion(
     app: Flask, token: str, period: str | None
 ) -> None:

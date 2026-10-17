@@ -193,7 +193,9 @@ def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:
         customer_type=payload["tipoCliente"],
         document_type=payload["tipoDocumento"],
         identification=payload["identificacion"],
-        product_data=validate_product_data(product_id, payload["datosProducto"]),
+        product_data=validate_product_data(
+            product_id, payload["datosProducto"], for_creation=False
+        ),
         email=payload["correo"],
         phone=payload["telefono"],
     )
@@ -289,7 +291,7 @@ def _premium_from_json(payload: dict[str, Any]) -> Money:
     if "prima" not in payload and "periodicidad" not in payload:
         return _money_from_json(payload["primaMensual"])
     period = payload["periodicidad"]
-    if period not in ("mensual", "por_viaje", "por_vuelo"):
+    if period not in ("mensual", "por_viaje", "por_vuelo", "por_periodo"):
         raise ValueError("Periodicidad de prima desconocida.")
     return _money_from_json(payload["prima"])
 
