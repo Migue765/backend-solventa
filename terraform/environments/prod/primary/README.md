@@ -27,6 +27,34 @@ terraform apply prod.tfplan
 Quien ejecuta debe ser el usuario IAM `Migue` (o estar en `eks_admin_principal_arns`): el provider de
 Helm usa esa identidad para entrar al cluster.
 
+## Rutas del BFF web
+
+El ALB envia las rutas de usuarios, sesiones, productos, solicitudes y clientes al BFF web.
+`/v1/destinos-viaje` usa una regla exacta independiente (prioridad 11): la regla web de
+prioridad 10 ya contiene el maximo de cinco patrones. No se debe ampliar a `/v1/*`, pues
+eso desviaria tambien las rutas internas de cotizacion.
+
+Una integracion de PR no actualiza los contenedores de AWS. Para una validacion autorizada
+con una revision integrada de `develop`, se puede fijar el commit sin cambiar la rama
+`main` configurada ni los disparadores de los pipelines:
+
+```bash
+aws codepipeline start-pipeline-execution \
+  --name solventa-prod-cotizacion --region us-east-2 \
+  --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
+aws codepipeline start-pipeline-execution \
+  --name solventa-prod-bff-web --region us-east-2 \
+  --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
+```
+
+Verificar ambos resultados de despliegue, las imagenes de los pods y los endpoints publicos;
+un build exitoso no demuestra un rollout exitoso. Los tags ECR son inmutables: si esa
+imagen ya existe, no repetir su publicacion; usar la ejecucion o imagen ya construida.
+El clúster necesita espacio para el Job de migracion y el pod adicional de cada rollout.
+Si alcanza el limite de pods, no borrar previews ni servicios ajenos para liberarlo.
+Cualquier reduccion temporal autorizada de replicas requiere ajustar tambien su HPA y
+restaurar ambos valores al terminar; de lo contrario, el HPA revierte la reduccion.
+
 ## Tamaños y costo mensual aproximado
 
 | Recurso | Tamaño | USD/mes |
