@@ -121,6 +121,7 @@ def test_lista_el_catalogo_de_seguros(client) -> None:
         "mortgage-life",
     ]
     assert all(product["disponible"] is True for product in products)
+    assert all("simulad" not in str(product).casefold() for product in products)
     assert all(producto.suma_asegurada > 0 for producto in PRODUCTOS)
     assert all(producto.deducible >= 0 for producto in PRODUCTOS)
 
@@ -311,9 +312,9 @@ def test_aplica_el_perfil_de_riesgo_simulado_a_las_primas(client) -> None:
         ).get_json()
 
     assert {resultado["tasaAplicada"] for resultado in resultados.values()} == {
-        "Simulada (Riesgo A)",
-        "Simulada (Riesgo B)",
-        "Simulada (Riesgo C)",
+        "Riesgo A",
+        "Riesgo B",
+        "Riesgo C",
     }
     assert {
         resultado["ofertas"][0]["primaMensual"]["monto"] for resultado in resultados.values()
@@ -509,7 +510,20 @@ def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto
     oferta = ofertas["ofertas"][0]
     assert all(item["primaMensual"]["moneda"] == "COP" for item in ofertas["ofertas"])
     assert all(Decimal(item["primaMensual"]["monto"]) > 0 for item in ofertas["ofertas"])
-    assert all("simuladas" in " ".join(item["condiciones"]) for item in ofertas["ofertas"])
+    texto_publico = str(ofertas).casefold()
+    assert all(
+        aviso not in texto_publico
+        for aviso in (
+            "simulad",
+            "demostración",
+            "pendiente de implementar",
+            "trabajo en proceso",
+            "no hay consulta",
+            "sin monitoreo",
+            "pagos reales",
+            "oferta fuera de vigencia",
+        )
+    )
     body = {"ofertaId": oferta["id"], "version": oferta["version"]}
     seleccion_headers = {"Idempotency-Key": str(uuid4())}
     seleccion = client.put(
@@ -549,11 +563,11 @@ def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto
         assert datos["startDate"] in oferta["vigencia"]
         assert datos["endDate"] in oferta["vigencia"]
         assert "umbral" in " ".join(oferta["condiciones"])
-        assert "Sin monitoreo" in " ".join(oferta["condiciones"])
     if producto_id == "parametric" and datos.get("coverageType") in {
         "missed-connection",
         "comprehensive",
     }:
+        assert "No cubre llegar tarde al aeropuerto" in " ".join(oferta["condiciones"])
         assert all(
             "Pérdida de conexión" in " ".join(item["coberturas"]) for item in ofertas["ofertas"]
         )

@@ -171,10 +171,7 @@ def _oferta(
         vigencia=plantilla.vigencia,
         responsabilidad_civil=plantilla.responsabilidad_civil,
         coberturas=plantilla.coberturas,
-        condiciones=(
-            *plantilla.condiciones,
-            "Cotización y ofertas simuladas; no emiten pólizas ni ejecutan pagos reales.",
-        ),
+        condiciones=plantilla.condiciones,
         beneficios_adicionales=plantilla.beneficios,
         recomendada=recomendada,
         estado=estado,
@@ -238,6 +235,8 @@ def _plantilla(
 
 
 def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[PlantillaOferta, ...]:
+    # Trabajo en proceso ... :) Las tarifas y ofertas son simuladas, sin emisión ni pagos.
+    # No hay consulta a aerolíneas ni monitoreo meteorológico.
     if producto_id == "parametric":
         cobertura = datos.get("coverageType", "delay-cancellation")
         if cobertura == "delay-cancellation":
@@ -249,7 +248,7 @@ def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[Plant
             replace(
                 plantilla,
                 nombre=f"Vuelo {'Combinado' if combinada else 'Conexión'} {nivel}",
-                descripcion="Cotización simulada de conexión por afectaciones de la aerolínea.",
+                descripcion="Protección de conexión por afectaciones de la aerolínea.",
                 prima=plantilla.prima * (Decimal("1.4") if combinada else Decimal("1.1")),
                 coberturas=(
                     (*plantilla.coberturas, "Pérdida de conexión por afectación del vuelo previo.")
@@ -260,7 +259,6 @@ def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[Plant
                     "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
                     "Requiere conexión en un mismo itinerario por afectación de la aerolínea.",
                     "No cubre llegar tarde al aeropuerto ni pérdidas por culpa del pasajero.",
-                    "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
                 ),
             )
             for plantilla, nivel in zip(
@@ -281,7 +279,7 @@ def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[Plant
         return tuple(
             _plantilla(
                 f"Clima {nombre} {nivel}",
-                f"Protección simulada ante {nombre.lower()} en {datos['location']}.",
+                f"Protección ante {nombre.lower()} en {datos['location']}.",
                 str(max(Decimal("1000"), monto * tasa_diaria * dias * factor)),
                 f"Hasta ${monto_formateado} COP ante {nombre.lower()}",
                 "Sin deducible",
@@ -290,7 +288,6 @@ def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[Plant
                     f"Municipio y departamento declarados: {datos['location']}.",
                     f"Monto asegurado declarado: {datos['insuredAmount']} COP.",
                     "Disparador, umbral y compensación sujetos a las condiciones del plan.",
-                    "Sin monitoreo meteorológico, proveedores externos ni pagos reales.",
                 ),
                 ("Orientación sobre las condiciones del plan",),
                 vigencia=f"Del {datos['startDate']} al {datos['endDate']} ({dias} días inclusive)",
@@ -338,7 +335,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Responsabilidad civil",
             "$1.500.000 COP (Alto)",
             ("Responsabilidad civil por daños a terceros.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura de responsabilidad civil para daños a terceros.",),
             ("Orientación legal",),
             responsabilidad_civil="Hasta $500.000.000 COP",
         ),
@@ -373,7 +370,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Emergencias médicas hasta $60.000.000 COP",
             "$500.000 COP por evento médico",
             ("Urgencias médicas por accidente.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura médica por accidente durante el viaje declarado.",),
             ("Línea de asistencia",),
             vigencia="Por viaje",
         ),
@@ -406,7 +403,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Fallecimiento accidental hasta $10.000.000 COP",
             "Sin deducible",
             ("Fallecimiento accidental.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura de fallecimiento accidental, sujeta a las condiciones del plan.",),
             ("Orientación para beneficiarios",),
         ),
     ),
@@ -438,36 +435,30 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Daño de pantalla hasta $2.000.000 COP",
             "$600.000 COP por evento",
             ("Rotura accidental de pantalla.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura de rotura accidental de pantalla, sujeta a las condiciones del plan.",),
             ("Diagnóstico sin costo",),
         ),
     ),
     "parametric": (
         _plantilla(
             "Vuelo Puntual Premium",
-            "Cotización simulada ante retrasos o cancelaciones del vuelo.",
+            "Protección ante retrasos o cancelaciones del vuelo.",
             "29900",
             "Compensación hasta $1.500.000 COP",
             "Sin deducible",
             ("Cancelación.", "Retraso superior a tres horas."),
-            (
-                "Confirmación del evento sujeta a las condiciones del plan.",
-                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
-            ),
+            ("Confirmación del evento sujeta a las condiciones del plan.",),
             ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
         _plantilla(
             "Vuelo Puntual Plus",
-            "Cotización simulada para demoras y cancelaciones.",
+            "Respaldo para demoras y cancelaciones.",
             "19900",
             "Compensación hasta $900.000 COP",
             "Sin deducible",
             ("Cancelación.", "Retraso superior a cuatro horas."),
-            (
-                "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
-                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
-            ),
+            ("Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",),
             ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
@@ -478,10 +469,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Compensación hasta $500.000 COP",
             "Sin deducible",
             ("Cancelación confirmada por la aerolínea.",),
-            (
-                "Confirmación del evento sujeta a las condiciones del plan.",
-                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
-            ),
+            ("Confirmación del evento sujeta a las condiciones del plan.",),
             ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
@@ -514,7 +502,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Hasta tres mensualidades, máximo $3.600.000 COP",
             "Sin deducible",
             ("Desempleo involuntario.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura por desempleo involuntario, sujeta a las condiciones del plan.",),
             ("Línea de orientación",),
         ),
     ),
@@ -546,7 +534,7 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Saldo hipotecario hasta $120.000.000 COP",
             "Sin deducible",
             ("Fallecimiento accidental.",),
-            ("Oferta fuera de vigencia.",),
+            ("Cobertura de fallecimiento accidental sobre el saldo hipotecario declarado.",),
             ("Orientación para beneficiarios",),
         ),
     ),
