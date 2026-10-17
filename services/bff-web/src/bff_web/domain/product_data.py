@@ -59,7 +59,7 @@ def _iso_date(value: str) -> bool:
     return True
 
 
-_POSITIVE_INTEGER = _pattern(r"[1-9][0-9]*")
+_POSITIVE_INTEGER = _pattern(r"[1-9][0-9]{0,15}")
 _VALIDATORS: dict[str, dict[str, Validator]] = {
     "automotive": {"vehiclePlate": _pattern(r"[A-Z]{3}[0-9]{3}")},
     "travel": {

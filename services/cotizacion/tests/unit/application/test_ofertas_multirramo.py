@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 from cotizacion.application.ofertas import _plantillas_producto
+from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ReglaDeNegocioError
 
 
@@ -53,3 +54,18 @@ def test_cobertura_predeterminada_conserva_las_ofertas_de_vuelo_anteriores() -> 
 def test_rechaza_productos_y_variantes_sin_fallback(producto, datos) -> None:
     with pytest.raises(ReglaDeNegocioError):
         _plantillas_producto(producto, datos)
+
+
+def test_clima_legado_no_redondea_antes_de_aplicar_el_factor_de_riesgo() -> None:
+    plantillas = _plantillas_producto(
+        "parametric-weather",
+        {
+            "location": "Medellín, Antioquia",
+            "weatherEvent": "heavy-rain",
+            "insuredAmount": "10000004",
+            "startDate": "2030-01-01",
+            "endDate": "2030-01-30",
+        },
+    )
+    assert plantillas[0].prima == Decimal("30000.012")
+    assert Dinero(plantillas[0].prima * Decimal("1.25"), "COP").monto == Decimal("37500.02")

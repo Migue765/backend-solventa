@@ -56,6 +56,20 @@ no responden, el BFF contesta `503 servicio_no_disponible` (nunca `401`), para q
 cierre una sesión válida por una caída. Un `429 demasiados_intentos` conserva `Retry-After`.
 `X-Correlation-ID` se propaga a identidad.
 
+### Importes y periodicidad de ofertas
+
+Las ofertas y GET/PUT de selección transmiten `prima: {monto, moneda}` y
+`periodicidad: mensual | por_viaje | por_vuelo | por_periodo` calculadas y persistidas por cotización.
+El BFF no calcula precios ni transforma documentos de identidad en riesgo.
+`primaMensual` mantiene el importe solo para `mensual`; es `null` para viaje/vuelo/período asegurado.
+Los consumidores deben leer `prima` y usar la periodicidad para la etiqueta del importe:
+**el contrato no es retrocompatible con clientes que asumen `primaMensual` no nulo**.
+El adaptador acepta respuestas antiguas como mensuales únicamente si faltan ambos campos nuevos.
+La selección sigue recibiendo `{ofertaId, version}` con `Idempotency-Key`.
+En clima, `por_periodo` identifica el importe completo de la ventana inclusiva
+`datosProducto.startDate` a `endDate`; la oferta muestra ese intervalo en `vigencia`.
+`vigenteHasta` sigue siendo el plazo de aceptación de la cotización, no la ventana de cobertura.
+
 ### Cómo usa los tokens el frontend
 
 El access token vive solo en memoria; el refresh token, en `sessionStorage`. Cuando el access

@@ -669,7 +669,7 @@ components:
           maxLength: 80
         purchaseValue:
           type: string
-          pattern: "^[1-9][0-9]*$"
+          pattern: "^[1-9][0-9]{0,15}$"
     DatosVuelo:
       type: object
       description: |
@@ -733,7 +733,7 @@ components:
           maxLength: 60
         monthlyPayment:
           type: string
-          pattern: "^[1-9][0-9]*$"
+          pattern: "^[1-9][0-9]{0,15}$"
     DatosVidaHipotecaria:
       type: object
       additionalProperties: false
@@ -744,7 +744,7 @@ components:
           format: date
         mortgageBalance:
           type: string
-          pattern: "^[1-9][0-9]*$"
+          pattern: "^[1-9][0-9]{0,15}$"
     SolicitudCotizacion:
       type: object
       additionalProperties: false
@@ -810,6 +810,8 @@ components:
         - nombre
         - descripcion
         - primaMensual
+        - prima
+        - periodicidad
         - coberturaPrincipal
         - deducible
         - vigencia
@@ -834,7 +836,19 @@ components:
           type: string
           maxLength: 500
         primaMensual:
+          description: Solo para periodicidad mensual; null para viaje, vuelo o período asegurado.
+          oneOf:
+            - $ref: "#/components/schemas/Dinero"
+            - type: "null"
+        prima:
           $ref: "#/components/schemas/Dinero"
+        periodicidad:
+          type: string
+          enum: [mensual, por_viaje, por_vuelo, por_periodo]
+          description: >-
+            por_periodo identifica la prima total del período asegurado entre
+            datosProducto.startDate y endDate, ambos inclusive. No define cuotas
+            ni renovación. vigenteHasta es el plazo de aceptación de la oferta.
         coberturaPrincipal:
           type: string
           maxLength: 250
@@ -903,14 +917,23 @@ components:
       allOf:
         - $ref: "#/components/schemas/NuevaSeleccionOferta"
         - type: object
-          required: [solicitudId, nombreOferta, primaMensual, seleccionadaEn]
+          required: [solicitudId, nombreOferta, primaMensual, prima, periodicidad, seleccionadaEn]
           properties:
             solicitudId:
               type: string
             nombreOferta:
               type: string
             primaMensual:
+              description: Solo para periodicidad mensual; null para viaje, vuelo o período asegurado.
+              oneOf:
+                - $ref: "#/components/schemas/Dinero"
+                - type: "null"
+            prima:
               $ref: "#/components/schemas/Dinero"
+            periodicidad:
+              type: string
+              enum: [mensual, por_viaje, por_vuelo, por_periodo]
+              description: por_periodo conserva la prima total del período asegurado seleccionado.
             seleccionadaEn:
               type: string
               format: date-time

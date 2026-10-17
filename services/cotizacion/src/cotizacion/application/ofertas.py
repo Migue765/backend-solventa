@@ -1,7 +1,7 @@
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -18,6 +18,12 @@ from cotizacion.domain.errors import (
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
 )
+from cotizacion.domain.modelo_academico import VERSION_ACADEMICA
+from cotizacion.domain.modelo_climatico import (
+    VERSION_CLIMATICA,
+    duracion_climatica,
+    planes_climaticos,
+)
 from cotizacion.domain.ofertas import (
     EstadoOferta,
     Oferta,
@@ -25,6 +31,7 @@ from cotizacion.domain.ofertas import (
     SeleccionOferta,
 )
 from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.domain.solicitud import SolicitudCotizacion
 
 
 class GestionarOfertas:
@@ -44,6 +51,13 @@ class GestionarOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        instantanea = solicitud.cotizacion.instantanea
+        detalle = instantanea.contenido.get("tarificacion", {}) if instantanea else {}
+        if instantanea is not None and (
+            instantanea.regla_version == VERSION_ACADEMICA
+            or detalle.get("modelo") == VERSION_CLIMATICA
+        ):
+            return _ofertas_calculadas(solicitud, self._reloj())
         perfil_riesgo = self._perfiles_riesgo.consultar(
             solicitud.tipo_documento, solicitud.identificacion
         )
@@ -102,6 +116,7 @@ class GestionarOfertas:
             seleccionada_en=self._reloj(),
             idempotency_key=idempotency_key,
             request_fingerprint=fingerprint,
+            periodicidad=oferta.periodicidad,
         )
         self._selecciones.guardar_seleccion(seleccion)
         return seleccion
@@ -113,6 +128,56 @@ class GestionarOfertas:
         if seleccion is None:
             raise SeleccionNoEncontradaError()
         return seleccion
+
+
+def _ofertas_calculadas(solicitud: SolicitudCotizacion, ahora: datetime) -> ResultadoOfertas:
+    cotizacion = solicitud.cotizacion
+    instantanea = cotizacion.instantanea
+    assert instantanea is not None
+    detalle = instantanea.contenido.get("tarificacion")
+    if detalle is None or not detalle.get("planes") or cotizacion.valida_hasta is None:
+        raise OfertaNoDisponibleError()
+    vigente_hasta = cotizacion.valida_hasta
+    estado = EstadoOferta.DISPONIBLE if vigente_hasta > ahora else EstadoOferta.VENCIDA
+    periodicidad = detalle["periodicidad"]
+    vigencia = {
+        "mensual": "Mensual",
+        "por_viaje": f"Por viaje ({detalle['duracion']} días)",
+        "por_vuelo": "Por vuelo",
+        "por_periodo": "Por período asegurado",
+    }[periodicidad]
+    ofertas = tuple(
+        replace(
+            _oferta(
+                solicitud.solicitud_id,
+                (
+                    f"parametric-weather-{indice}"
+                    if detalle["modelo"] == VERSION_CLIMATICA
+                    else f"{VERSION_ACADEMICA}:{plan['codigo']}"
+                ),
+                _plantilla_guardada(
+                    solicitud, plan["nombre"], plan["prima"], detalle["baseAsegurada"], vigencia
+                ),
+                indice == 0,
+                estado,
+                vigente_hasta,
+                Decimal("1"),
+            ),
+            periodicidad=periodicidad,
+        )
+        for indice, plan in enumerate(detalle["planes"])
+    )
+    return ResultadoOfertas(
+        solicitud_id=solicitud.solicitud_id,
+        calculada_en=instantanea.creada_en,
+        vigente_hasta=vigente_hasta,
+        tasa_aplicada=(
+            detalle["tasaAplicada"]
+            if detalle["modelo"] == VERSION_CLIMATICA
+            else f"Tasa {instantanea.contenido['regla']['tasa']}"
+        ),
+        ofertas=ofertas,
+    )
 
 
 def _generar_ofertas(
@@ -234,6 +299,86 @@ def _plantilla(
     )
 
 
+def _plantilla_guardada(
+    solicitud: SolicitudCotizacion, nombre: str, prima: str, base: str, vigencia: str
+) -> PlantillaOferta:
+    # Trabajo en proceso ... :) Los precios se leen de la instantánea, sin volver a tarificar.
+    producto_id = _producto_publico(solicitud.cotizacion.producto_id)
+    if producto_id == "parametric-weather":
+        return _plantilla_climatica(solicitud.datos_producto, nombre, prima)
+    plantilla = _plantilla(
+        nombre,
+        "Protección sobre la base asegurada del producto.",
+        prima,
+        f"Base asegurada: ${Decimal(base):,.0f} COP".replace(",", "."),
+        f"${solicitud.cotizacion.coberturas[0].deducible.monto} COP por evento",
+        ("Cobertura del producto sobre la base asegurada declarada.",),
+        ("El deducible es una condición y no descuenta la base de cálculo.",),
+        ("Orientación sobre las condiciones del plan",),
+        vigencia=vigencia,
+    )
+    if producto_id == "parametric":
+        vuelo = _presentacion_vuelo(
+            _PLANTILLAS["parametric"][0], solicitud.datos_producto.get("coverageType"), "Premium"
+        )
+        plantilla = replace(
+            plantilla,
+            descripcion=vuelo.descripcion,
+            coberturas=vuelo.coberturas,
+            condiciones=(*plantilla.condiciones, *vuelo.condiciones),
+        )
+    return plantilla
+
+
+def _presentacion_vuelo(
+    plantilla: PlantillaOferta, cobertura: str | None, nivel: str
+) -> PlantillaOferta:
+    if cobertura is None or cobertura == "delay-cancellation":
+        return plantilla
+    if cobertura not in {"missed-connection", "comprehensive"}:
+        raise ReglaDeNegocioError("La cobertura de vuelo no admite ofertas.")
+    combinada = cobertura == "comprehensive"
+    return replace(
+        plantilla,
+        nombre=f"Vuelo {'Combinado' if combinada else 'Conexión'} {nivel}",
+        descripcion="Protección de conexión por afectaciones de la aerolínea.",
+        coberturas=(
+            (*plantilla.coberturas, "Pérdida de conexión por afectación del vuelo previo.")
+            if combinada
+            else ("Pérdida de conexión por afectación del vuelo previo.",)
+        ),
+        condiciones=(
+            "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
+            "Requiere conexión en un mismo itinerario por afectación de la aerolínea.",
+            "No cubre llegar tarde al aeropuerto ni pérdidas por culpa del pasajero.",
+        ),
+    )
+
+
+def _plantilla_climatica(datos: dict[str, str], nombre_plan: str, prima: str) -> PlantillaOferta:
+    evento = datos["weatherEvent"]
+    if evento not in {"heavy-rain", "drought"}:
+        raise ReglaDeNegocioError("El evento climático no admite ofertas.")
+    nombre = "Lluvia Intensa" if evento == "heavy-rain" else "Sequía"
+    monto_formateado = f"{int(datos['insuredAmount']):,}".replace(",", ".")
+    dias = duracion_climatica(datos)
+    return _plantilla(
+        nombre_plan,
+        f"Protección ante {nombre.lower()} en {datos['location']}.",
+        prima,
+        f"Hasta ${monto_formateado} COP ante {nombre.lower()}",
+        "Sin deducible",
+        (f"Evento de {nombre.lower()} durante el periodo declarado.",),
+        (
+            f"Municipio y departamento declarados: {datos['location']}.",
+            f"Monto asegurado declarado: {datos['insuredAmount']} COP.",
+            "Disparador, umbral y compensación sujetos a las condiciones del plan.",
+        ),
+        ("Orientación sobre las condiciones del plan",),
+        vigencia=f"Del {datos['startDate']} al {datos['endDate']} ({dias} días inclusive)",
+    )
+
+
 def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[PlantillaOferta, ...]:
     # Trabajo en proceso ... :) Las tarifas y ofertas son simuladas, sin emisión ni pagos.
     # No hay consulta a aerolíneas ni monitoreo meteorológico.
@@ -241,62 +386,20 @@ def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[Plant
         cobertura = datos.get("coverageType", "delay-cancellation")
         if cobertura == "delay-cancellation":
             return _PLANTILLAS["parametric"]
-        if cobertura not in {"missed-connection", "comprehensive"}:
-            raise ReglaDeNegocioError("La cobertura de vuelo no admite ofertas.")
         combinada = cobertura == "comprehensive"
         return tuple(
             replace(
-                plantilla,
-                nombre=f"Vuelo {'Combinado' if combinada else 'Conexión'} {nivel}",
-                descripcion="Protección de conexión por afectaciones de la aerolínea.",
+                _presentacion_vuelo(plantilla, cobertura, nivel),
                 prima=plantilla.prima * (Decimal("1.4") if combinada else Decimal("1.1")),
-                coberturas=(
-                    (*plantilla.coberturas, "Pérdida de conexión por afectación del vuelo previo.")
-                    if combinada
-                    else ("Pérdida de conexión por afectación del vuelo previo.",)
-                ),
-                condiciones=(
-                    "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
-                    "Requiere conexión en un mismo itinerario por afectación de la aerolínea.",
-                    "No cubre llegar tarde al aeropuerto ni pérdidas por culpa del pasajero.",
-                ),
             )
             for plantilla, nivel in zip(
                 _PLANTILLAS["parametric"], ("Premium", "Plus", "Esencial"), strict=True
             )
         )
     if producto_id == "parametric-weather":
-        evento = datos["weatherEvent"]
-        if evento not in {"heavy-rain", "drought"}:
-            raise ReglaDeNegocioError("El evento climático no admite ofertas.")
-        nombre = "Lluvia Intensa" if evento == "heavy-rain" else "Sequía"
-        monto = Decimal(datos["insuredAmount"])
-        monto_formateado = f"{int(monto):,}".replace(",", ".")
-        dias = (
-            date.fromisoformat(datos["endDate"]) - date.fromisoformat(datos["startDate"])
-        ).days + 1
-        tasa_diaria = Decimal("0.0001") if evento == "heavy-rain" else Decimal("0.00012")
         return tuple(
-            _plantilla(
-                f"Clima {nombre} {nivel}",
-                f"Protección ante {nombre.lower()} en {datos['location']}.",
-                str(max(Decimal("1000"), monto * tasa_diaria * dias * factor)),
-                f"Hasta ${monto_formateado} COP ante {nombre.lower()}",
-                "Sin deducible",
-                (f"Evento de {nombre.lower()} durante el periodo declarado.",),
-                (
-                    f"Municipio y departamento declarados: {datos['location']}.",
-                    f"Monto asegurado declarado: {datos['insuredAmount']} COP.",
-                    "Disparador, umbral y compensación sujetos a las condiciones del plan.",
-                ),
-                ("Orientación sobre las condiciones del plan",),
-                vigencia=f"Del {datos['startDate']} al {datos['endDate']} ({dias} días inclusive)",
-            )
-            for nivel, factor in (
-                ("Integral", Decimal("1")),
-                ("Plus", Decimal("0.85")),
-                ("Esencial", Decimal("0.70")),
-            )
+            _plantilla_climatica(datos, plan["nombre"], plan["prima"])
+            for plan in planes_climaticos(datos)
         )
     plantillas = _PLANTILLAS.get(producto_id)
     if plantillas is None:

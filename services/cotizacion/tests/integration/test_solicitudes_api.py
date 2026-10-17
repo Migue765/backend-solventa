@@ -71,16 +71,8 @@ DATOS_INVALIDOS = {
     "mortgage-life": {"birthDate": "1985-02-10", "mortgageBalance": "-1"},
 }
 
-NOMBRES_OFERTA = {
-    "automotive": "Seguro Automotriz Pro",
-    "travel": "Viaje Global Premium",
-    "life": "Microseguro Vida Familiar",
-    "device-protection": "Dispositivo Protección Total",
-    "parametric": "Vuelo Puntual Premium",
-    "parametric-weather": "Clima Lluvia Intensa Integral",
-    "payment-protection": "Protección de Pagos Integral",
-    "mortgage-life": "Vida Hipotecaria Integral",
-}
+NOMBRES_OFERTA = {producto.producto_id: f"{producto.nombre} Esencial" for producto in PRODUCTOS}
+NOMBRES_OFERTA["parametric-weather"] = "Clima Lluvia Intensa Integral"
 
 
 def nueva_solicitud(
@@ -290,14 +282,14 @@ def test_lista_ofertas_estables_con_datos_para_comparar(client) -> None:
     ]
     assert resultado["ofertas"][0]["recomendada"] is True
     assert resultado["ofertas"][0]["primaMensual"] == {
-        "monto": "189900.00",
+        "monto": "41250.00",
         "moneda": "COP",
     }
     assert resultado["ofertas"][0]["coberturas"]
     assert resultado["ofertas"][0]["condiciones"]
 
 
-def test_aplica_el_perfil_de_riesgo_simulado_a_las_primas(client) -> None:
+def test_identificacion_no_se_convierte_en_un_score_de_riesgo(client) -> None:
     resultados = {}
     for identificacion in ("1000000000", "2000000000", "3000000000"):
         payload = nueva_solicitud(identificacion=identificacion)
@@ -311,14 +303,11 @@ def test_aplica_el_perfil_de_riesgo_simulado_a_las_primas(client) -> None:
             query_string={"clienteId": payload["clienteId"]},
         ).get_json()
 
-    assert {resultado["tasaAplicada"] for resultado in resultados.values()} == {
-        "Riesgo A",
-        "Riesgo B",
-        "Riesgo C",
-    }
+    assert len({resultado["tasaAplicada"] for resultado in resultados.values()}) == 1
+    assert next(iter(resultados.values()))["tasaAplicada"] == "Tasa 0.001500"
     assert {
         resultado["ofertas"][0]["primaMensual"]["monto"] for resultado in resultados.values()
-    } == {"189900.00", "208890.00", "237375.00"}
+    } == {"41250.00"}
 
 
 @pytest.mark.parametrize(("producto_id", "nombre"), NOMBRES_OFERTA.items())
@@ -494,6 +483,7 @@ def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto
         "telefono",
         "estado",
         "creadaEn",
+        "cotizacion",
     }
     repetida = client.post("/v1/solicitudes-cotizacion", json=payload, headers=headers)
     assert repetida.get_json() == registro
@@ -508,8 +498,18 @@ def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto
     query = {"clienteId": payload["clienteId"]}
     ofertas = client.get(f"{url}/ofertas", query_string=query).get_json()
     oferta = ofertas["ofertas"][0]
-    assert all(item["primaMensual"]["moneda"] == "COP" for item in ofertas["ofertas"])
-    assert all(Decimal(item["primaMensual"]["monto"]) > 0 for item in ofertas["ofertas"])
+    assert all(item["prima"]["moneda"] == "COP" for item in ofertas["ofertas"])
+    assert all(Decimal(item["prima"]["monto"]) > 0 for item in ofertas["ofertas"])
+    periodicidad = {
+        "travel": "por_viaje",
+        "parametric": "por_vuelo",
+        "parametric-weather": "por_periodo",
+    }.get(producto_id, "mensual")
+    assert all(item["periodicidad"] == periodicidad for item in ofertas["ofertas"])
+    assert all(
+        item["primaMensual"] == (item["prima"] if periodicidad == "mensual" else None)
+        for item in ofertas["ofertas"]
+    )
     texto_publico = str(ofertas).casefold()
     assert all(
         aviso not in texto_publico
@@ -530,6 +530,8 @@ def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto
         f"{url}/seleccion", query_string=query, json=body, headers=seleccion_headers
     )
     assert seleccion.status_code == 200
+    assert seleccion.get_json()["prima"] == oferta["prima"]
+    assert seleccion.get_json()["periodicidad"] == periodicidad
     assert seleccion.get_json()["primaMensual"] == oferta["primaMensual"]
 
     otro_cliente = {"clienteId": str(uuid4())}
