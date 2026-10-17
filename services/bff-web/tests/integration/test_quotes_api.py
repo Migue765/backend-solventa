@@ -25,6 +25,7 @@ def test_every_quote_endpoint_requires_a_bearer_token(app: Flask) -> None:
 
     responses = [
         client.get("/v1/productos-seguro"),
+        client.get("/v1/productos-seguro/automotive"),
         client.post("/v1/solicitudes-cotizacion", json=REQUEST, headers=headers),
         client.get("/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234"),
     ]
@@ -47,6 +48,28 @@ def test_authenticated_client_lists_products(app: Flask, token: str) -> None:
 
     assert response.status_code == 200
     assert body(response)["productos"][0]["id"] == "automotive"
+    assert body(response)["productos"][0]["coberturasPrincipales"] == [
+        "Daños al vehículo",
+        "Responsabilidad civil",
+    ]
+
+
+def test_authenticated_client_reads_one_product_detail(app: Flask, token: str) -> None:
+    response = app.test_client().get(
+        "/v1/productos-seguro/automotive",
+        headers=bearer(token),
+    )
+
+    assert response.status_code == 200
+    assert body(response)["id"] == "automotive"
+    assert body(response)["coberturas"][0]["nombre"] == "Daños al vehículo"
+    assert body(response)["condiciones"]
+    assert body(response)["informacionRelevante"] == {
+        "sumaAsegurada": "25000000",
+        "deducible": "500000",
+        "moneda": "COP",
+        "vigencia": "Anual con renovación",
+    }
 
 
 def test_request_is_created_and_read_with_the_subject_of_the_token(

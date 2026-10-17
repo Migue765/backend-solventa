@@ -127,6 +127,21 @@ def producto_a_json(producto: ProductoSeguro) -> dict[str, object]:
         "nombre": producto.nombre,
         "descripcion": producto.descripcion,
         "disponible": producto.disponible,
+        "coberturasPrincipales": [cobertura.nombre for cobertura in producto.coberturas],
+        "coberturas": [
+            {
+                "nombre": cobertura.nombre,
+                "descripcion": cobertura.descripcion,
+            }
+            for cobertura in producto.coberturas
+        ],
+        "condiciones": list(producto.condiciones),
+        "informacionRelevante": {
+            "sumaAsegurada": str(producto.suma_asegurada),
+            "deducible": str(producto.deducible),
+            "moneda": "COP",
+            "vigencia": producto.vigencia,
+        },
     }
 
 
