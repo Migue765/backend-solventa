@@ -16,3 +16,7 @@ class OfertaNoDisponibleError(Exception):
 
 class SeleccionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una oferta seleccionada."""
+
+
+class SuscripcionNoEncontradaError(Exception):
+    """La solicitud todavía no tiene una suscripción."""

@@ -17,10 +17,13 @@ from bff_web.domain.auth import TokenSet, User
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    IssuanceSaga,
     OfferSelection,
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    Subscription,
+    SubscriptionDecision,
     TravelDestination,
 )
 from cryptography.hazmat.primitives import serialization
@@ -212,6 +215,7 @@ def rejected(status: int, code: str, retry_after: int | None = None) -> Identity
 class StubQuoteGateway(QuoteGateway):
     def __init__(self) -> None:
         self.record: QuoteRequestRecord | None = None
+        self.subscription: Subscription | None = None
         self.user_ids: list[UUID] = []
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
@@ -253,6 +257,35 @@ class StubQuoteGateway(QuoteGateway):
         idempotency_key: UUID,
     ) -> OfferSelection:
         raise NotImplementedError
+
+    def start_subscription(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID
+    ) -> Subscription:
+        self.user_ids.append(user_id)
+        now = datetime(2026, 10, 16, 15, 0, tzinfo=UTC)
+        self.subscription = Subscription(
+            subscription_id=UUID("30000000-0000-4000-8000-000000000001"),
+            request_id=request_id,
+            offer_id=UUID("20000000-0000-4000-8000-000000000001"),
+            offer_version=1,
+            status="aprobada",
+            rule_version="suscripcion-automatica-2026.1",
+            created_at=now,
+            updated_at=now,
+            decision=SubscriptionDecision(
+                result="aprobada",
+                rule_version="suscripcion-automatica-2026.1",
+                decision_hash="a" * 64,
+                decided_at=now,
+            ),
+            saga=IssuanceSaga(status="pago_pendiente", version=1, updated_at=now),
+        )
+        return self.subscription
+
+    def get_subscription(self, user_id: UUID, request_id: str) -> Subscription:
+        self.user_ids.append(user_id)
+        assert self.subscription is not None
+        return self.subscription
 
 
 def bearer(value: str) -> dict[str, str]:

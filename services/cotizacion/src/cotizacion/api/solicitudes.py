@@ -11,9 +11,11 @@ from cotizacion.api.schemas import (
     resultado_ofertas_a_json,
     seleccion_oferta_a_json,
     solicitud_a_json,
+    suscripcion_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
+from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
@@ -102,6 +104,27 @@ def seleccionar_oferta(solicitud_id: str) -> tuple[Response, int] | Response:
     return jsonify(seleccion_oferta_a_json(seleccion))
 
 
+@bp.post("/solicitudes-cotizacion/<solicitud_id>/suscripcion")
+def iniciar_suscripcion(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+    except ValidationError:
+        return jsonify(error="solicitud_invalida"), 400
+    suscripcion = _suscripciones().iniciar(solicitud_id, cliente_id, idempotency_key)
+    return jsonify(suscripcion_a_json(suscripcion)), 201
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/suscripcion")
+def consultar_suscripcion(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(suscripcion_a_json(_suscripciones().consultar(solicitud_id, cliente_id)))
+
+
 def _registrar() -> RegistrarSolicitud:
     return cast(RegistrarSolicitud, current_app.extensions["registrar_solicitud"])
 
@@ -115,6 +138,10 @@ def _repositorio() -> RepositorioCotizacionesSqlAlchemy:
 
 def _ofertas() -> GestionarOfertas:
     return cast(GestionarOfertas, current_app.extensions["gestionar_ofertas"])
+
+
+def _suscripciones() -> ProcesarSuscripcion:
+    return cast(ProcesarSuscripcion, current_app.extensions["procesar_suscripcion"])
 
 
 def _cliente_id() -> UUID | None:

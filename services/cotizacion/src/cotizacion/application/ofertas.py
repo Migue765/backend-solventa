@@ -45,9 +45,14 @@ class GestionarOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         instantanea = solicitud.cotizacion.instantanea
         if instantanea is not None and instantanea.regla_version == VERSION_ACADEMICA:
-            return _ofertas_calculadas(solicitud, self._reloj())
+            return _ofertas_calculadas(
+                solicitud,
+                self._reloj(),
+                seleccion.oferta_id if seleccion else None,
+            )
         perfil_riesgo = self._perfiles_riesgo.consultar(
             solicitud.tipo_documento, solicitud.identificacion
         )
@@ -59,6 +64,7 @@ class GestionarOfertas:
             self._reloj(),
             perfil_riesgo.factor_prima,
             perfil_riesgo.tarifa_aplicada,
+            seleccion.oferta_id if seleccion else None,
         )
 
     def seleccionar(
@@ -76,6 +82,10 @@ class GestionarOfertas:
             if existente.request_fingerprint != fingerprint:
                 raise ConflictoIdempotenciaError()
             return existente
+        if existente:
+            if existente.oferta_id == oferta_id and existente.version == version:
+                return existente
+            raise OfertaNoDisponibleError()
 
         oferta = next(
             (
@@ -119,7 +129,11 @@ class GestionarOfertas:
         return seleccion
 
 
-def _ofertas_calculadas(solicitud: SolicitudCotizacion, ahora: datetime) -> ResultadoOfertas:
+def _ofertas_calculadas(
+    solicitud: SolicitudCotizacion,
+    ahora: datetime,
+    oferta_aceptada_id: UUID | None,
+) -> ResultadoOfertas:
     cotizacion = solicitud.cotizacion
     instantanea = cotizacion.instantanea
     assert instantanea is not None
@@ -142,24 +156,27 @@ def _ofertas_calculadas(solicitud: SolicitudCotizacion, ahora: datetime) -> Resu
             ),
             version=1,
             nombre=plan["nombre"],
-            descripcion=(
-                "Paquete de beneficios del modelo académico v1; no es una tarifa comercial."
-            ),
+            descripcion="Paquete de beneficios calculado para el producto seleccionado.",
             prima_mensual=Dinero(Decimal(plan["prima"]), "COP"),
             cobertura_principal=f"Base asegurada: ${detalle['baseAsegurada']} COP",
             deducible=f"${cotizacion.coberturas[0].deducible.monto} COP por evento",
             vigencia=vigencia,
             responsabilidad_civil="No aplica",
             coberturas=("Cobertura del producto sobre la base asegurada declarada.",),
-            condiciones=(
-                "Simulación académica, no representa una oferta de una aseguradora.",
-                "El deducible es una condición y no descuenta la base de cálculo.",
-            ),
+            condiciones=("El deducible es una condición y no descuenta la base de cálculo.",),
             beneficios_adicionales=(
                 f"Paquete {plan['codigo']}; factor académico {plan['factor']}.",
             ),
             recomendada=indice == 0,
-            estado=estado,
+            estado=(
+                EstadoOferta.ACEPTADA
+                if uuid5(
+                    NAMESPACE_URL,
+                    f"solventa:{solicitud.solicitud_id}:{VERSION_ACADEMICA}:{plan['codigo']}",
+                )
+                == oferta_aceptada_id
+                else estado
+            ),
             vigente_hasta=vigente_hasta,
             periodicidad=periodicidad,
         )
@@ -185,6 +202,7 @@ def _generar_ofertas(
     ahora: datetime,
     factor_prima: Decimal,
     tarifa_aplicada: str,
+    oferta_aceptada_id: UUID | None,
 ) -> ResultadoOfertas:
     if vigente_hasta is None:
         raise OfertaNoDisponibleError()
@@ -197,7 +215,12 @@ def _generar_ofertas(
             f"{producto_id}-{indice}",
             plantilla,
             indice == 0,
-            estado_vigente,
+            (
+                EstadoOferta.ACEPTADA
+                if uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{producto_id}-{indice}")
+                == oferta_aceptada_id
+                else estado_vigente
+            ),
             vigente_hasta,
             factor_prima,
         )

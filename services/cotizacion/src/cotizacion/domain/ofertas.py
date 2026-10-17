@@ -8,6 +8,7 @@ from cotizacion.domain.dinero import Dinero
 
 class EstadoOferta(str, Enum):
     DISPONIBLE = "disponible"
+    ACEPTADA = "aceptada"
     VENCIDA = "vencida"
     RETIRADA = "retirada"
 

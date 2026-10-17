@@ -10,6 +10,7 @@ from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
 from cotizacion.application.crear_cotizacion import CrearCotizacion
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
+from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
@@ -17,6 +18,7 @@ from cotizacion.domain.errors import (
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
+    SuscripcionNoEncontradaError,
 )
 from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
 from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
@@ -50,6 +52,11 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["registrar_solicitud"] = RegistrarSolicitud(repositorio, calculadora)
     app.extensions["gestionar_ofertas"] = GestionarOfertas(
         repositorio, repositorio, PerfilRiesgoSimulado()
+    )
+    app.extensions["procesar_suscripcion"] = ProcesarSuscripcion(
+        repositorio,
+        repositorio,
+        repositorio,
     )
 
     app.register_blueprint(health.bp)
@@ -88,7 +95,10 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.errorhandler(SolicitudNoEncontradaError)
     @app.errorhandler(SeleccionNoEncontradaError)
-    def no_encontrado(_: SolicitudNoEncontradaError | SeleccionNoEncontradaError):
+    @app.errorhandler(SuscripcionNoEncontradaError)
+    def no_encontrado(
+        _: SolicitudNoEncontradaError | SeleccionNoEncontradaError | SuscripcionNoEncontradaError,
+    ):
         return jsonify(error="no_encontrado"), 404
 
     @app.errorhandler(OfertaNoDisponibleError)

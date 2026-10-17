@@ -1,8 +1,17 @@
 from datetime import UTC, datetime
-from uuid import uuid4
+from time import perf_counter
+from uuid import UUID, uuid4
 
 import pytest
 from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.infrastructure.persistence.models import (
+    DecisionSuscripcionModel,
+    OutboxEventoModel,
+    SagaEmisionModel,
+    SuscripcionModel,
+)
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 DATOS_PRODUCTO = {
     "automotive": {"vehiclePlate": "ABC123"},
@@ -317,7 +326,7 @@ def test_genera_ofertas_especificas_para_cada_producto(
         assert all(oferta["responsabilidadCivil"] == "No aplica" for oferta in resultado["ofertas"])
 
 
-def test_registra_y_reemplaza_la_seleccion(client) -> None:
+def test_registra_una_unica_aceptacion_y_actualiza_el_estado(client) -> None:
     payload = nueva_solicitud()
     solicitud = client.post(
         "/v1/solicitudes-cotizacion",
@@ -343,9 +352,16 @@ def test_registra_y_reemplaza_la_seleccion(client) -> None:
     consultada = client.get(f"{url}/seleccion", query_string=query)
 
     assert primera.status_code == 200
-    assert segunda.status_code == 200
-    assert consultada.get_json() == segunda.get_json()
-    assert consultada.get_json()["ofertaId"] == ofertas[1]["id"]
+    actualizadas = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"]
+
+    assert segunda.status_code == 422
+    assert consultada.get_json() == primera.get_json()
+    assert consultada.get_json()["ofertaId"] == ofertas[0]["id"]
+    assert actualizadas[0]["estado"] == "aceptada"
+    assert [oferta["estado"] for oferta in actualizadas[1:]] == [
+        "disponible",
+        "disponible",
+    ]
 
 
 def test_rechaza_una_oferta_vencida_o_con_otra_version(client) -> None:
@@ -429,6 +445,195 @@ def test_seleccion_es_idempotente_y_detecta_conflictos(client) -> None:
         json={"ofertaId": ofertas[1]["id"], "version": 1},
         headers=headers,
     )
+    reintento_con_otra_clave = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 1},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
 
     assert reintento.get_json() == primera.get_json()
+    assert reintento_con_otra_clave.get_json() == primera.get_json()
     assert conflicto.status_code == 409
+
+
+def test_aprueba_y_registra_la_suscripcion_de_una_oferta_aceptada(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    oferta = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
+    client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": oferta["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    creada = client.post(
+        f"{url}/suscripcion",
+        query_string=query,
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    consultada = client.get(f"{url}/suscripcion", query_string=query)
+
+    assert creada.status_code == 201
+    assert consultada.get_json() == creada.get_json()
+    assert creada.get_json()["estado"] == "aprobada"
+    assert creada.get_json()["decision"]["resultado"] == "aprobada"
+    assert creada.get_json()["decision"]["reglaVersion"] == "suscripcion-automatica-2026.1"
+    assert len(creada.get_json()["decision"]["hashDecision"]) == 64
+    assert creada.get_json()["saga"] == {
+        "estado": "pago_pendiente",
+        "version": 1,
+        "actualizadaEn": creada.get_json()["actualizadaEn"],
+    }
+
+
+def test_suscripcion_requiere_una_oferta_aceptada(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+
+    response = client.post(
+        f"/v1/solicitudes-cotizacion/{solicitud['id']}/suscripcion",
+        query_string={"clienteId": payload["clienteId"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    assert response.status_code == 404
+
+
+def test_suscripcion_es_idempotente_incluso_con_otra_clave(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    oferta = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
+    client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": oferta["version"]},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    primera = client.post(
+        f"{url}/suscripcion",
+        query_string=query,
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    reintento = client.post(
+        f"{url}/suscripcion",
+        query_string=query,
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    assert reintento.status_code == 201
+    assert reintento.get_json() == primera.get_json()
+
+
+def test_suscripcion_no_expone_operaciones_de_otro_cliente(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}/suscripcion"
+
+    assert (
+        client.post(
+            url,
+            query_string={"clienteId": str(uuid4())},
+            headers={"Idempotency-Key": str(uuid4())},
+        ).status_code
+        == 404
+    )
+    assert client.get(url, query_string={"clienteId": str(uuid4())}).status_code == 404
+
+
+def test_decision_de_suscripcion_es_reconstruible_y_saga_persistente(client, database_url) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    oferta = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
+    client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": 1},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    suscripcion = client.post(
+        f"{url}/suscripcion",
+        query_string=query,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    suscripcion_id = UUID(suscripcion["id"])
+
+    with Session(create_engine(database_url)) as session:
+        stored = session.get(SuscripcionModel, suscripcion_id)
+        decision = session.get(DecisionSuscripcionModel, suscripcion_id)
+        saga = session.get(SagaEmisionModel, suscripcion_id)
+        event = session.scalar(
+            select(OutboxEventoModel).where(
+                OutboxEventoModel.agregado_id == suscripcion_id,
+                OutboxEventoModel.tipo == "SuscripcionAprobada",
+            )
+        )
+
+        assert stored is not None
+        assert decision is not None
+        assert decision.datos_evaluados["datosProducto"] == payload["datosProducto"]
+        assert decision.datos_evaluados["reglaVersion"] == decision.regla_version
+        assert decision.hash_decision == suscripcion["decision"]["hashDecision"]
+        assert saga is not None and saga.estado == "pago_pendiente"
+        assert event is not None
+
+
+def test_decision_de_suscripcion_cumple_objetivos_de_latencia(client) -> None:
+    payload = nueva_solicitud()
+    solicitud = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=payload,
+        headers={"Idempotency-Key": str(uuid4())},
+    ).get_json()
+    url = f"/v1/solicitudes-cotizacion/{solicitud['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    oferta = client.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
+    client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": 1},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+
+    tiempos = []
+    for _ in range(100):
+        inicio = perf_counter()
+        response = client.post(
+            f"{url}/suscripcion",
+            query_string=query,
+            headers={"Idempotency-Key": str(uuid4())},
+        )
+        tiempos.append(perf_counter() - inicio)
+        assert response.status_code == 201
+
+    ordenados = sorted(tiempos)
+    assert ordenados[94] <= 1.5
+    assert ordenados[98] <= 3
