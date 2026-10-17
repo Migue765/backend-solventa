@@ -64,7 +64,9 @@ class RegistrarSolicitud:
             coberturas=[cobertura],
         )
         # El perfil de la solicitud es el perfil de riesgo vigente del propio cliente.
-        self._calculadora.calcular(cotizacion, str(comando.cliente_id), ahora)
+        self._calculadora.calcular(
+            cotizacion, str(comando.cliente_id), ahora, producto, comando.datos_producto
+        )
         solicitud = SolicitudCotizacion(
             solicitud_id=_generar_id(ahora),
             cotizacion=cotizacion,

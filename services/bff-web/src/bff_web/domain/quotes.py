@@ -60,6 +60,7 @@ class Offer:
     recommended: bool
     status: str
     valid_until: datetime
+    billing_period: str = "mensual"
 
 
 @dataclass(frozen=True)
@@ -79,3 +80,4 @@ class OfferSelection:
     offer_name: str
     monthly_premium: Money
     selected_at: datetime
+    billing_period: str = "mensual"
