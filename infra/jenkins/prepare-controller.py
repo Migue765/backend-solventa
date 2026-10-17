@@ -47,7 +47,7 @@ def prepare_files(scanner: str, policy: str) -> tuple[str, str]:
 def main() -> None:
     scanner = (ROOT / "init.groovy.d/09-web-comment-trigger.groovy").read_text()
     policy = Path("/opt/jenkins-web/comment-policy.groovy").read_text()
-    expected = "4279459c80505dcf0aa68f33248c8c67907e04518dfb859bfbc94f49ba7cd00e"
+    expected = "812e1fe51c8ede5430694815ba7201c99cfcf94e15ff380dafd8d8d6c2e4e267"
     if hashlib.sha256(scanner.encode()).hexdigest() != expected:
         raise RuntimeError("Web scanner differs from verified template; inspect before adapting")
     scanner, policy = prepare_files(scanner, policy)

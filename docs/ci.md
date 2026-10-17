@@ -19,6 +19,12 @@ Los porcentajes salen de los XML de esa ejecución, no de una línea base escrit
 
 ### Migración pendiente con Migue
 
+**Operación 2026-10-17:** `skipNotifications=true` ya se aplicó en los tres proyectos del
+controlador, conservando checks obligatorios y copias privadas. La política y el scanner
+corregidos se instalaron, compilaron y recargaron mediante reinicio autorizado del servicio,
+esperando a que terminaran los builds y la cola. El generador fija el hash de la nueva plantilla web verificada y
+mantiene su rechazo ante plantillas distintas. Falta validar el último SHA con un build nuevo.
+
 Se confirmó un caso real en PR26 #3: Jenkins agrupó solicitudes 31bad12/4cb9782 y compiló
 la primera. El generador confiable ahora incorpora la política que difiere comentarios
 mientras ese PR está en cola o ejecutándose, sin consumirlos. Tests:
