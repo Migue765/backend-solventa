@@ -4,6 +4,17 @@ Repositorio monorepo del Backend y la infraestructura de Solventa para Proyecto 
 
 Contiene la estructura prevista para microservicios Python, contratos compartidos, librerías técnicas e infraestructura como código con Terraform. La documentación de arquitectura describe el objetivo técnico; las instrucciones locales deben corresponder únicamente a los servicios y configuraciones que estén realmente disponibles en el repositorio.
 
+## Comprobaciones y cobertura
+
+En cada [pull request](https://github.com/Migue765/backend-solventa/pulls), abre **Checks → Cobertura**
+para ver líneas, ramas, pruebas y revisión compilada. El reporte corresponde a ese commit;
+no es un porcentaje fijo de la portada. En backend muestra scripts y cada servicio por separado.
+
+Actions se ejecuta automáticamente. Un colaborador solicita Jenkins con un comentario nuevo
+`/test-jenkins`; después de subir cambios debe solicitarlo para la revisión nueva.
+Los reportes HTML/XML se conservan en Jenkins privado. No se exige un porcentaje mínimo nuevo.
+Consulta [la guía de CI](docs/ci.md) para ver alcance, nombres y lectura de resultados.
+
 
 ## Tecnologías y herramientas
 
