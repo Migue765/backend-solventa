@@ -13,5 +13,6 @@ class PerfilRiesgoSimulado:
     """Genera escenarios repetibles sin representar una consulta a un buró real."""
 
     def consultar(self, tipo_documento: str, identificacion: str) -> PerfilRiesgo:
+        # Trabajo en proceso ... :) La asignación es determinista y no consulta un buró real.
         semilla = f"{tipo_documento}{identificacion}".encode()
         return _PERFILES[sum(semilla) % len(_PERFILES)]
