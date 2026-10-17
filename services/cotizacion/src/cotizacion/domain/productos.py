@@ -171,6 +171,21 @@ PRODUCTOS = (
         cobertura_id=UUID("12121212-1212-4212-8212-121212121212"),
         suma_asegurada=Decimal("10000000"),
         deducible=Decimal("0"),
+        coberturas=(
+            CoberturaProducto(
+                "Lluvia intensa",
+                "Protección ante lluvia intensa durante el periodo y en la ubicación declarados.",
+            ),
+            CoberturaProducto(
+                "Sequía",
+                "Protección ante sequía durante el periodo y en la ubicación declarados.",
+            ),
+        ),
+        condiciones=(
+            "La cobertura corresponde al evento climático y la ubicación declarados.",
+            "Disparador, umbral y compensación sujetos a las condiciones del plan.",
+        ),
+        vigencia="Por el periodo asegurado",
     ),
     ProductoSeguro(
         producto_id="payment-protection",

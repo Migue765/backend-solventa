@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from cotizacion.app import create_app
 from cotizacion.config import Config
-from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.infrastructure.persistence.models import (
     DecisionSuscripcionModel,
     OutboxEventoModel,
@@ -126,6 +126,30 @@ def test_lista_el_catalogo_de_seguros(client) -> None:
     assert all("simulad" not in str(product).casefold() for product in products)
     assert all(producto.suma_asegurada > 0 for producto in PRODUCTOS)
     assert all(producto.deducible >= 0 for producto in PRODUCTOS)
+
+
+@pytest.mark.parametrize("producto", PRODUCTOS, ids=lambda producto: producto.producto_id)
+def test_todos_los_productos_tienen_detalle_completo(client, producto: ProductoSeguro) -> None:
+    response = client.get(f"/v1/productos-seguro/{producto.producto_id}")
+
+    assert response.status_code == 200
+    detalle = response.get_json()
+    assert detalle["id"] == producto.producto_id
+    assert detalle["coberturas"]
+    assert all(
+        cobertura["nombre"] and cobertura["descripcion"] for cobertura in detalle["coberturas"]
+    )
+    assert detalle["coberturasPrincipales"] == [
+        cobertura["nombre"] for cobertura in detalle["coberturas"]
+    ]
+    assert detalle["condiciones"] and all(detalle["condiciones"])
+    assert detalle["informacionRelevante"] == {
+        "sumaAsegurada": str(producto.suma_asegurada),
+        "deducible": str(producto.deducible),
+        "moneda": "COP",
+        "vigencia": producto.vigencia,
+    }
+    assert detalle["informacionRelevante"]["vigencia"]
 
 
 def test_consulta_detalle_de_producto_sin_mezclar_coberturas(client) -> None:
