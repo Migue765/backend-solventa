@@ -218,7 +218,7 @@ def _offer_from_json(payload: dict[str, Any]) -> Offer:
         version=payload["version"],
         name=payload["nombre"],
         description=payload["descripcion"],
-        monthly_premium=_money_from_json(payload["primaMensual"]),
+        monthly_premium=_premium_from_json(payload),
         main_coverage=payload["coberturaPrincipal"],
         deductible=payload["deducible"],
         duration=payload["vigencia"],
@@ -229,6 +229,7 @@ def _offer_from_json(payload: dict[str, Any]) -> Offer:
         recommended=payload["recomendada"],
         status=payload["estado"],
         valid_until=_datetime(payload["vigenteHasta"]),
+        billing_period=payload.get("periodicidad", "mensual"),
     )
 
 
@@ -238,8 +239,9 @@ def _selection_from_json(payload: dict[str, Any]) -> OfferSelection:
         offer_id=UUID(payload["ofertaId"]),
         version=payload["version"],
         offer_name=payload["nombreOferta"],
-        monthly_premium=_money_from_json(payload["primaMensual"]),
+        monthly_premium=_premium_from_json(payload),
         selected_at=_datetime(payload["seleccionadaEn"]),
+        billing_period=payload.get("periodicidad", "mensual"),
     )
 
 
@@ -281,6 +283,15 @@ def _safe_subscription_from_json(payload: dict[str, Any]) -> Subscription:
 
 def _money_from_json(payload: dict[str, Any]) -> Money:
     return Money(Decimal(payload["monto"]), payload["moneda"])
+
+
+def _premium_from_json(payload: dict[str, Any]) -> Money:
+    if "prima" not in payload and "periodicidad" not in payload:
+        return _money_from_json(payload["primaMensual"])
+    period = payload["periodicidad"]
+    if period not in ("mensual", "por_viaje", "por_vuelo"):
+        raise ValueError("Periodicidad de prima desconocida.")
+    return _money_from_json(payload["prima"])
 
 
 def _datetime(value: str) -> datetime:

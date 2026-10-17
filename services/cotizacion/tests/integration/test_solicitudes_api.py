@@ -63,15 +63,7 @@ DATOS_INVALIDOS = {
     "mortgage-life": {"birthDate": "1985-02-10", "mortgageBalance": "-1"},
 }
 
-NOMBRES_OFERTA = {
-    "automotive": "Seguro Automotriz Pro",
-    "travel": "Viaje Global Premium",
-    "life": "Microseguro Vida Familiar",
-    "device-protection": "Dispositivo Protección Total",
-    "parametric": "Vuelo Puntual Premium",
-    "payment-protection": "Protección de Pagos Integral",
-    "mortgage-life": "Vida Hipotecaria Integral",
-}
+NOMBRES_OFERTA = {producto.producto_id: f"{producto.nombre} Esencial" for producto in PRODUCTOS}
 
 
 def nueva_solicitud(
@@ -279,14 +271,14 @@ def test_lista_ofertas_estables_con_datos_para_comparar(client) -> None:
     ]
     assert resultado["ofertas"][0]["recomendada"] is True
     assert resultado["ofertas"][0]["primaMensual"] == {
-        "monto": "189900.00",
+        "monto": "41250.00",
         "moneda": "COP",
     }
     assert resultado["ofertas"][0]["coberturas"]
     assert resultado["ofertas"][0]["condiciones"]
 
 
-def test_aplica_el_perfil_de_riesgo_simulado_a_las_primas(client) -> None:
+def test_identificacion_no_se_convierte_en_un_score_de_riesgo(client) -> None:
     resultados = {}
     for identificacion in ("1000000000", "2000000000", "3000000000"):
         payload = nueva_solicitud(identificacion=identificacion)
@@ -300,14 +292,11 @@ def test_aplica_el_perfil_de_riesgo_simulado_a_las_primas(client) -> None:
             query_string={"clienteId": payload["clienteId"]},
         ).get_json()
 
-    assert {resultado["tasaAplicada"] for resultado in resultados.values()} == {
-        "Simulada (Riesgo A)",
-        "Simulada (Riesgo B)",
-        "Simulada (Riesgo C)",
-    }
+    assert len({resultado["tasaAplicada"] for resultado in resultados.values()}) == 1
+    assert "perfil-simulado-1" in next(iter(resultados.values()))["tasaAplicada"]
     assert {
         resultado["ofertas"][0]["primaMensual"]["monto"] for resultado in resultados.values()
-    } == {"189900.00", "208890.00", "237375.00"}
+    } == {"41250.00"}
 
 
 @pytest.mark.parametrize(("producto_id", "nombre"), NOMBRES_OFERTA.items())

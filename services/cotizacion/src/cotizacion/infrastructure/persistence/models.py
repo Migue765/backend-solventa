@@ -56,6 +56,7 @@ class CotizacionModel(Base):
         lazy="selectin",
         order_by="CoberturaCotizadaModel.orden",
     )
+    instantanea: Mapped["InstantaneaDecisionModel | None"] = relationship(lazy="selectin")
 
 
 class CoberturaCotizadaModel(Base):
@@ -84,7 +85,10 @@ class SeleccionOfertaModel(Base):
     oferta_id: Mapped[UUID]
     version: Mapped[int] = mapped_column(Integer)
     nombre_oferta: Mapped[str] = mapped_column(String(120))
-    prima_mensual: Mapped[Decimal] = mapped_column(Numeric(10, 4))
+    prima_mensual: Mapped[Decimal] = mapped_column(MONTO)
+    periodicidad: Mapped[str] = mapped_column(
+        String(20), default="mensual", server_default="mensual"
+    )
     moneda: Mapped[str] = mapped_column(String(3))
     seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[UUID]
