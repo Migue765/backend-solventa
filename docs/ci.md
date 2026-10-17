@@ -19,6 +19,13 @@ Los porcentajes salen de los XML de esa ejecución, no de una línea base escrit
 
 ### Migración pendiente con Migue
 
+Se confirmó un caso real en PR26 #3: Jenkins agrupó solicitudes 31bad12/4cb9782 y compiló
+la primera. El generador confiable ahora incorpora la política que difiere comentarios
+mientras ese PR está en cola o ejecutándose, sin consumirlos. Tests:
+`python -m pytest tests/test_jenkins_controller.py`. No atribuir el verde antiguo al SHA nuevo.
+La corrección requiere despliegue y recarga administrativa controlada del scanner, sin
+duplicar timers. El generador conserva sus verificaciones de plantilla y activación deshabilitada.
+
 1. Verificar `CI / Validación (Jenkins)` en el mismo SHA y publicado por la App `5278678`.
 2. Migue debe sustituir el contexto antiguo en el ruleset `24763930`, conservando la App
    esperada, `Calidad`, `validate-branch`, revisión y demás restricciones. No desactivar el ruleset.
