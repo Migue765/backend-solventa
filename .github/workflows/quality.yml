@@ -1,4 +1,4 @@
-name: Calidad
+name: CI · Actions
 
 on:
   pull_request:
@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
