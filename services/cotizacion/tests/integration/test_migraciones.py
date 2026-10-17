@@ -26,5 +26,42 @@ def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
             text("select version, tasa from reglas_tarifa where vigente_hasta is null")
         ).all()
 
-    assert len(filas) == 7
-    assert {(fila.version, float(fila.tasa)) for fila in filas} == {("tarifa-2026.1", 0.015)}
+    assert len(filas) == 14
+    assert sum(fila.version == "tarifa-2026.1" for fila in filas) == 7
+    assert {float(fila.tasa) for fila in filas if fila.version == "academico-v1"} == {
+        0.0015,
+        0.00001,
+        0.001,
+        0.004,
+        0.01,
+        0.005,
+        0.0005,
+    }
+
+
+def test_upgrade_conserva_calculo_y_decision_historicos(alembic_config, database_url):
+    from uuid import UUID
+
+    from cotizacion.app import create_app
+    from cotizacion.config import Config
+    from cotizacion.infrastructure.persistence.database import crear_sesiones
+    from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
+        RepositorioCotizacionesSqlAlchemy,
+    )
+
+    from .test_api import solicitud
+
+    command.downgrade(alembic_config, "0005")
+    cliente = create_app(Config(database_url=database_url)).test_client()
+    respuesta = cliente.post("/v1/cotizaciones", json=solicitud())
+    assert respuesta.status_code == 201
+    registro = respuesta.get_json()
+    assert registro["primaEstimada"]["monto"] == "28350.00"
+    repositorio = RepositorioCotizacionesSqlAlchemy(crear_sesiones(database_url))
+    antes = repositorio.obtener(UUID(registro["cotizacionId"]))
+
+    command.upgrade(alembic_config, "head")
+
+    despues = repositorio.obtener(UUID(registro["cotizacionId"]))
+    assert despues == antes
+    assert despues.instantanea.regla_version == "tarifa-2026.1"

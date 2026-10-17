@@ -46,7 +46,7 @@ def _fecha_iso(valor: str) -> bool:
     return True
 
 
-_ENTERO_POSITIVO = _patron(r"[1-9][0-9]*")
+_ENTERO_POSITIVO = _patron(r"[1-9][0-9]{0,15}")
 _VALIDADORES: dict[str, dict[str, Validador]] = {
     "automotive": {"vehiclePlate": _patron(r"[A-Z]{3}[0-9]{3}")},
     "travel": {
