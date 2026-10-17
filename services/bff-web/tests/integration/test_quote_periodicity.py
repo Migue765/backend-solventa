@@ -5,13 +5,18 @@ from uuid import uuid4
 
 import pytest
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
+from flask import Flask
 from support import bearer
 
 
 @pytest.mark.parametrize("period", ["mensual", "por_viaje", "por_vuelo", None])
-def test_bff_preserva_prima_y_periodicidad_en_ofertas_y_seleccion(app, token, period):
+def test_bff_preserva_prima_y_periodicidad_en_ofertas_y_seleccion(
+    app: Flask, token: str, period: str | None
+) -> None:
     money = {"monto": "99000.00", "moneda": "COP"}
-    price = {"primaMensual": money if period in ("mensual", None) else None}
+    price: dict[str, dict[str, str] | str | None] = {
+        "primaMensual": money if period in ("mensual", None) else None
+    }
     if period is not None:
         price.update(prima=money, periodicidad=period)
     plan = {
