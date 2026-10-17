@@ -24,3 +24,10 @@ api_listener_protocol = "HTTP"
 
 api_throttling_rate_limit  = 50
 api_throttling_burst_limit = 100
+
+# Redis (ElastiCache): limitador de intentos de identidad
+redis_node_type = "cache.t4g.micro"
+
+# JWT emitidos por identidad y validados por el API Gateway
+# jwt_audience         = "solventa-api"
+# cors_allowed_origins = ["https://jazmincorandes.github.io", "http://localhost:4200"]

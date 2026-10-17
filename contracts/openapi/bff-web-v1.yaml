@@ -6,12 +6,40 @@ info:
 servers:
   - url: /api
 tags:
+  - name: Usuarios
   - name: Sesiones
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
   - name: Dashboard
 paths:
+  /v1/usuarios:
+    post:
+      tags: [Usuarios]
+      summary: Registra un usuario cliente
+      operationId: registrarUsuario
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevoUsuario"
+      responses:
+        "201":
+          description: Usuario creado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioCreado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "429":
+          $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones:
     post:
       tags: [Sesiones]
@@ -26,16 +54,18 @@ paths:
               $ref: "#/components/schemas/Credenciales"
       responses:
         "200":
-          description: Sesión creada
+          description: >-
+            Sesión creada. El `accessToken` (JWT RS256, 1 hora) se envía como
+            `Authorization: Bearer` y el `refreshToken` se usa en `/v1/sesiones/renovar`.
           headers:
-            Set-Cookie:
-              description: Cookie de sesión HttpOnly, Secure y SameSite.
+            Cache-Control:
               schema:
                 type: string
+                example: no-store
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Sesion"
+                $ref: "#/components/schemas/SesionIniciada"
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
@@ -44,10 +74,38 @@ paths:
           $ref: "#/components/responses/DemasiadasSolicitudes"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/renovar:
+    post:
+      tags: [Sesiones]
+      summary: Renueva la sesión con el refresh token
+      description: El refresh token rota en cada uso; el anterior deja de ser válido.
+      operationId: renovarSesion
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Renovacion"
+      responses:
+        "200":
+          description: Nueva sesión con tokens rotados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SesionIniciada"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/RefreshInvalido"
+        "429":
+          $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones/actual:
     get:
       tags: [Sesiones]
-      summary: Consulta la sesión actual
+      summary: Consulta la sesión actual a partir del access token
       operationId: consultarSesion
       responses:
         "200":
@@ -58,15 +116,27 @@ paths:
                 $ref: "#/components/schemas/Sesion"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
     delete:
       tags: [Sesiones]
-      summary: Cierra la sesión actual
+      summary: Cierra la sesión y revoca el refresh token si se envía
       operationId: cerrarSesion
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CierreSesion"
       responses:
         "204":
           description: Sesión cerrada
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/productos-seguro:
     get:
       tags: [Productos]
@@ -245,10 +315,11 @@ paths:
           $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
-    cookieSesion:
-      type: apiKey
-      in: cookie
-      name: solventa_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT RS256 emitido por identidad (dura 1 hora).
   parameters:
     SolicitudId:
       name: solicitudId
@@ -277,8 +348,19 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problema"
+    RefreshInvalido:
+      description: El refresh token no existe, expiró o ya fue usado
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     NoAutorizado:
-      description: La sesión no existe o expiró
+      description: El access token falta, expiró o no es válido
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: Bearer
       content:
         application/problem+json:
           schema:
@@ -333,6 +415,31 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+    NuevoUsuario:
+      type: object
+      additionalProperties: false
+      required: [nombre, correo, contrasena]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        contrasena:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+    UsuarioCreado:
+      type: object
+      additionalProperties: false
+      required: [usuario]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/UsuarioSesion"
     UsuarioSesion:
       type: object
       additionalProperties: false
@@ -371,6 +478,46 @@ components:
         expiraEn:
           type: string
           format: date-time
+          description: Vencimiento del access token.
+    SesionIniciada:
+      type: object
+      additionalProperties: false
+      required: [usuario, tokenType, accessToken, refreshToken, expiraEn, refreshExpiraEn]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/UsuarioSesion"
+        tokenType:
+          type: string
+          enum: [Bearer]
+        accessToken:
+          type: string
+          description: JWT RS256 de vida corta (1 hora). Se guarda solo en memoria.
+        refreshToken:
+          type: string
+          description: Token opaco de un solo uso que rota en cada renovación.
+        expiraEn:
+          type: string
+          format: date-time
+          description: Vencimiento del access token (ahora + expires_in de identidad).
+        refreshExpiraEn:
+          type: string
+          format: date-time
+    Renovacion:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+          maxLength: 2048
+    CierreSesion:
+      type: object
+      additionalProperties: false
+      properties:
+        refreshToken:
+          type: string
+          maxLength: 2048
     ProductoSeguro:
       type: object
       additionalProperties: false
@@ -684,4 +831,4 @@ components:
           items:
             $ref: "#/components/schemas/ErrorCampo"
 security:
-  - cookieSesion: []
+  - bearerAuth: []

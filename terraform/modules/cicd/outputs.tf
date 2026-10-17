@@ -5,12 +5,12 @@ output "pipeline_name" {
 
 output "connection_arn" {
   description = "ARN de la conexion con GitHub (autorizarla una vez en la consola)."
-  value       = aws_codestarconnections_connection.github.arn
+  value       = local.connection_arn
 }
 
 output "connection_status" {
-  description = "PENDING hasta autorizar la conexion; AVAILABLE despues."
-  value       = aws_codestarconnections_connection.github.connection_status
+  description = "PENDING hasta autorizar la conexion; AVAILABLE despues (null si se reutiliza una conexion externa)."
+  value       = try(aws_codestarconnections_connection.github[0].connection_status, null)
 }
 
 output "artifacts_bucket" {

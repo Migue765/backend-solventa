@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Despliega la version IMAGE_TAG: migra la base, actualiza el Deployment y revierte si el rollout falla.
+# SERVICE_NAME (default cotizacion) elige Deployment, Job de migracion y manifiestos:
+# deploy/k8s para cotizacion y deploy/k8s/<servicio> para el resto.
+# MIGRATE=false (default true) omite el Job de migraciones, para servicios sin base de datos propia (ej. los BFF).
 set -euo pipefail
+
+MIGRATE="${MIGRATE:-true}"
+
+SERVICE_NAME="${SERVICE_NAME:-cotizacion}"
+if [ "$SERVICE_NAME" = "cotizacion" ]; then
+  K8S_DIR="deploy/k8s"
+else
+  K8S_DIR="deploy/k8s/${SERVICE_NAME}"
+fi
 
 : "${CLUSTER_NAME:?}" "${NAMESPACE:?}" "${ECR_REPOSITORY_URL:?}" "${IMAGE_TAG:?}" "${AWS_REGION:?}"
 
@@ -10,23 +22,27 @@ export MIGRATION_ID="$(printf '%s' "$IMAGE_TAG" | tr '[:upper:]' '[:lower:]' | t
 
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
-previous="$(kubectl -n "$NAMESPACE" get deployment cotizacion -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+previous="$(kubectl -n "$NAMESPACE" get deployment "$SERVICE_NAME" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
 echo "Version actual: ${previous:-ninguna} -> nueva: $IMAGE"
 
-echo "== Migraciones =="
-envsubst < deploy/k8s/migrate-job.yaml | kubectl apply -f -
-if ! kubectl -n "$NAMESPACE" wait --for=condition=complete "job/cotizacion-migrate-${MIGRATION_ID}" --timeout=300s; then
-  echo "La migracion fallo; no se despliega la nueva version." >&2
-  kubectl -n "$NAMESPACE" logs "job/cotizacion-migrate-${MIGRATION_ID}" --tail=50 >&2 || true
-  exit 1
+if [ "$MIGRATE" = "true" ]; then
+  echo "== Migraciones =="
+  envsubst < "${K8S_DIR}/migrate-job.yaml" | kubectl apply -f -
+  if ! kubectl -n "$NAMESPACE" wait --for=condition=complete "job/${SERVICE_NAME}-migrate-${MIGRATION_ID}" --timeout=300s; then
+    echo "La migracion fallo; no se despliega la nueva version." >&2
+    kubectl -n "$NAMESPACE" logs "job/${SERVICE_NAME}-migrate-${MIGRATION_ID}" --tail=50 >&2 || true
+    exit 1
+  fi
+else
+  echo "== Migraciones omitidas (MIGRATE=false) =="
 fi
 
 echo "== Rollout =="
-kubectl -n "$NAMESPACE" set image deployment/cotizacion "cotizacion=${IMAGE}"
-if ! kubectl -n "$NAMESPACE" rollout status deployment/cotizacion --timeout=300s; then
+kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
+if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s; then
   echo "El rollout fallo; revirtiendo a ${previous:-la revision anterior}." >&2
-  kubectl -n "$NAMESPACE" rollout undo deployment/cotizacion
-  kubectl -n "$NAMESPACE" rollout status deployment/cotizacion --timeout=300s || true
+  kubectl -n "$NAMESPACE" rollout undo deployment/"$SERVICE_NAME"
+  kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s || true
   exit 1
 fi
 

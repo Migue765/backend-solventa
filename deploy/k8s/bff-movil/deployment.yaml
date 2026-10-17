@@ -1,0 +1,84 @@
+# Variables: IMAGE (ej. <bff_movil_ecr_repository_url>:<tag>), AWS_REGION, JWT_ISSUER, JWT_AUDIENCE
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff-movil
+  namespace: bff-movil
+  labels:
+    app.kubernetes.io/name: bff-movil
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bff-movil
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bff-movil
+    spec:
+      serviceAccountName: bff-movil
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: bff-movil
+      containers:
+        - name: bff-movil
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: ${AWS_REGION}
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: GUNICORN_THREADS
+              value: "2"
+            - name: IDENTIDAD_URL
+              value: http://identidad.identidad.svc.cluster.local:8080
+            - name: JWT_ISSUER
+              value: ${JWT_ISSUER}
+            - name: JWT_AUDIENCE
+              value: ${JWT_AUDIENCE}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
