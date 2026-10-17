@@ -9,6 +9,15 @@ from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCo
 from cotizacion.domain.decision import InstantaneaDecision
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
+from cotizacion.domain.pago_emision import (
+    EstadoPago,
+    EstadoPoliza,
+    MetodoPago,
+    OrdenPago,
+    PagoYEmision,
+    Poliza,
+    TransaccionPago,
+)
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import (
     DecisionSuscripcion,
@@ -22,10 +31,13 @@ from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
     InstantaneaDecisionModel,
+    OrdenPagoModel,
     OutboxEventoModel,
+    PolizaModel,
     SagaEmisionModel,
     SeleccionOfertaModel,
     SuscripcionModel,
+    TransaccionPagoModel,
 )
 
 
@@ -197,6 +209,103 @@ class RepositorioCotizacionesSqlAlchemy:
             )
             return _suscripcion_a_dominio(sesion, modelo) if modelo else None
 
+    def guardar_pago_emision(self, resultado: PagoYEmision) -> None:
+        pago = resultado.pago
+        poliza = resultado.poliza
+        with self._sesiones.begin() as sesion:
+            saga = sesion.get(SagaEmisionModel, pago.suscripcion_id)
+            suscripcion = sesion.get(SuscripcionModel, pago.suscripcion_id)
+            if saga is None or suscripcion is None:
+                raise ValueError("La suscripción persistida no tiene saga.")
+            sesion.add_all(
+                [
+                    OrdenPagoModel(
+                        orden_pago_id=pago.orden_pago_id,
+                        suscripcion_id=pago.suscripcion_id,
+                        solicitud_id=pago.solicitud_id,
+                        cliente_id=pago.cliente_id,
+                        monto=pago.monto,
+                        moneda=pago.moneda,
+                        metodo_pago=pago.metodo_pago.value,
+                        estado=pago.estado.value,
+                        idempotency_key=pago.idempotency_key,
+                        request_fingerprint=pago.request_fingerprint,
+                        creada_en=pago.creada_en,
+                        confirmada_en=pago.confirmada_en,
+                    ),
+                    TransaccionPagoModel(
+                        transaccion_id=pago.transaccion.transaccion_id,
+                        orden_pago_id=pago.orden_pago_id,
+                        estado=pago.transaccion.estado.value,
+                        referencia=pago.transaccion.referencia,
+                        procesada_en=pago.transaccion.procesada_en,
+                    ),
+                    PolizaModel(
+                        poliza_id=poliza.poliza_id,
+                        suscripcion_id=poliza.suscripcion_id,
+                        cliente_id=poliza.cliente_id,
+                        producto_id=poliza.producto_id,
+                        numero=poliza.numero,
+                        estado=poliza.estado.value,
+                        prima_mensual=poliza.prima_mensual,
+                        moneda=poliza.moneda,
+                        vigente_desde=poliza.vigente_desde,
+                        vigente_hasta=poliza.vigente_hasta,
+                        emitida_en=poliza.emitida_en,
+                    ),
+                    OutboxEventoModel(
+                        evento_id=uuid4(),
+                        tipo="PagoConfirmado",
+                        agregado_id=pago.orden_pago_id,
+                        payload={
+                            "ordenPagoId": str(pago.orden_pago_id),
+                            "suscripcionId": str(pago.suscripcion_id),
+                            "transaccionId": str(pago.transaccion.transaccion_id),
+                            "estado": pago.estado.value,
+                        },
+                        creado_en=pago.confirmada_en,
+                        intentos=0,
+                    ),
+                    OutboxEventoModel(
+                        evento_id=uuid4(),
+                        tipo="PolizaEmitida",
+                        agregado_id=poliza.poliza_id,
+                        payload={
+                            "polizaId": str(poliza.poliza_id),
+                            "suscripcionId": str(poliza.suscripcion_id),
+                            "numero": poliza.numero,
+                            "estado": poliza.estado.value,
+                        },
+                        creado_en=poliza.emitida_en,
+                        intentos=0,
+                    ),
+                ]
+            )
+            saga.estado = resultado.saga.estado.value
+            saga.version = resultado.saga.version
+            saga.actualizada_en = resultado.saga.actualizada_en
+            saga.ultimo_error = None
+            suscripcion.actualizada_en = resultado.saga.actualizada_en
+
+    def obtener_pago_emision(self, solicitud_id: str) -> PagoYEmision | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(OrdenPagoModel).where(OrdenPagoModel.solicitud_id == solicitud_id)
+            )
+            return _pago_emision_a_dominio(sesion, modelo) if modelo else None
+
+    def buscar_pago_por_idempotencia(
+        self, cliente_id: UUID, idempotency_key: UUID
+    ) -> PagoYEmision | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(OrdenPagoModel).where(
+                    OrdenPagoModel.cliente_id == cliente_id,
+                    OrdenPagoModel.idempotency_key == idempotency_key,
+                )
+            )
+            return _pago_emision_a_dominio(sesion, modelo) if modelo else None
+
 
 def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
     prima_estimada = cotizacion.prima_estimada
@@ -249,6 +358,63 @@ def _suscripcion_a_dominio(sesion: Session, modelo: SuscripcionModel) -> Suscrip
             datos_evaluados=decision.datos_evaluados,
             hash_decision=decision.hash_decision,
             decidida_en=_con_zona(decision.decidida_en),
+        ),
+        saga=SagaEmision(
+            suscripcion_id=saga.suscripcion_id,
+            estado=EstadoSagaEmision(saga.estado),
+            version=saga.version,
+            actualizada_en=_con_zona(saga.actualizada_en),
+            ultimo_error=saga.ultimo_error,
+        ),
+    )
+
+
+def _pago_emision_a_dominio(sesion: Session, modelo: OrdenPagoModel) -> PagoYEmision:
+    transaccion = sesion.scalar(
+        select(TransaccionPagoModel).where(
+            TransaccionPagoModel.orden_pago_id == modelo.orden_pago_id
+        )
+    )
+    poliza = sesion.scalar(
+        select(PolizaModel).where(PolizaModel.suscripcion_id == modelo.suscripcion_id)
+    )
+    saga = sesion.get(SagaEmisionModel, modelo.suscripcion_id)
+    if transaccion is None or poliza is None or saga is None:
+        raise ValueError("El pago persistido no tiene transacción, póliza o saga.")
+    return PagoYEmision(
+        pago=OrdenPago(
+            orden_pago_id=modelo.orden_pago_id,
+            suscripcion_id=modelo.suscripcion_id,
+            solicitud_id=modelo.solicitud_id,
+            cliente_id=modelo.cliente_id,
+            monto=modelo.monto,
+            moneda=modelo.moneda,
+            metodo_pago=MetodoPago(modelo.metodo_pago),
+            estado=EstadoPago(modelo.estado),
+            idempotency_key=modelo.idempotency_key,
+            request_fingerprint=modelo.request_fingerprint,
+            creada_en=_con_zona(modelo.creada_en),
+            confirmada_en=_con_zona(modelo.confirmada_en),
+            transaccion=TransaccionPago(
+                transaccion_id=transaccion.transaccion_id,
+                orden_pago_id=transaccion.orden_pago_id,
+                estado=EstadoPago(transaccion.estado),
+                referencia=transaccion.referencia,
+                procesada_en=_con_zona(transaccion.procesada_en),
+            ),
+        ),
+        poliza=Poliza(
+            poliza_id=poliza.poliza_id,
+            suscripcion_id=poliza.suscripcion_id,
+            cliente_id=poliza.cliente_id,
+            producto_id=poliza.producto_id,
+            numero=poliza.numero,
+            estado=EstadoPoliza(poliza.estado),
+            prima_mensual=poliza.prima_mensual,
+            moneda=poliza.moneda,
+            vigente_desde=_con_zona(poliza.vigente_desde),
+            vigente_hasta=_con_zona(poliza.vigente_hasta),
+            emitida_en=_con_zona(poliza.emitida_en),
         ),
         saga=SagaEmision(
             suscripcion_id=saga.suscripcion_id,

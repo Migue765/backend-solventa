@@ -5,6 +5,7 @@ from bff_web.domain.quotes import (
     InsuranceProduct,
     OfferSelection,
     OffersResult,
+    PaymentAndPolicy,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -44,3 +45,9 @@ class QuoteGateway(Protocol):
     ) -> Subscription: ...
 
     def get_subscription(self, user_id: UUID, request_id: str) -> Subscription: ...
+
+    def process_payment(
+        self, user_id: UUID, request_id: str, payment_method: str, idempotency_key: UUID
+    ) -> PaymentAndPolicy: ...
+
+    def get_policy(self, user_id: UUID, request_id: str) -> PaymentAndPolicy: ...

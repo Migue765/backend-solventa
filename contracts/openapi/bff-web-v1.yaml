@@ -12,6 +12,8 @@ tags:
   - name: Cotizaciones
   - name: Ofertas
   - name: Suscripciones
+  - name: Pagos
+  - name: Polizas
   - name: Dashboard
 paths:
   /v1/usuarios:
@@ -312,6 +314,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Suscripcion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/pago:
+    post:
+      tags: [Pagos]
+      summary: Confirma el pago de una suscripción aprobada y emite la póliza
+      operationId: procesarPago
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevoPago"
+      responses:
+        "201":
+          description: Pago confirmado y póliza emitida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagoYPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/poliza:
+    get:
+      tags: [Polizas]
+      summary: Consulta la póliza emitida para una solicitud
+      operationId: consultarPoliza
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Póliza emitida y pago asociado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagoYPoliza"
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "404":
@@ -882,6 +937,106 @@ components:
           type: integer
           minimum: 1
         actualizadaEn:
+          type: string
+          format: date-time
+    NuevoPago:
+      type: object
+      additionalProperties: false
+      required: [metodoPago]
+      properties:
+        metodoPago:
+          type: string
+          enum: [tarjeta]
+    PagoYPoliza:
+      type: object
+      additionalProperties: false
+      required: [pago, poliza, saga]
+      properties:
+        pago:
+          $ref: "#/components/schemas/Pago"
+        poliza:
+          $ref: "#/components/schemas/PolizaEmitida"
+        saga:
+          $ref: "#/components/schemas/SagaEmision"
+    Pago:
+      type: object
+      additionalProperties: false
+      required: [id, estado, monto, moneda, metodoPago, confirmadaEn, transaccion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          enum: [confirmado]
+        monto:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,2})?$"
+        moneda:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        metodoPago:
+          type: string
+          enum: [tarjeta]
+        confirmadaEn:
+          type: string
+          format: date-time
+        transaccion:
+          $ref: "#/components/schemas/TransaccionPago"
+    TransaccionPago:
+      type: object
+      additionalProperties: false
+      required: [id, estado, referencia, procesadaEn]
+      properties:
+        id:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          enum: [confirmado]
+        referencia:
+          type: string
+        procesadaEn:
+          type: string
+          format: date-time
+    PolizaEmitida:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - numero
+        - estado
+        - productoId
+        - primaMensual
+        - moneda
+        - vigenteDesde
+        - vigenteHasta
+        - emitidaEn
+      properties:
+        id:
+          type: string
+          format: uuid
+        numero:
+          type: string
+        estado:
+          type: string
+          enum: [vigente]
+        productoId:
+          type: string
+          format: uuid
+        primaMensual:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,2})?$"
+        moneda:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        vigenteDesde:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        emitidaEn:
           type: string
           format: date-time
     PolizaResumen:

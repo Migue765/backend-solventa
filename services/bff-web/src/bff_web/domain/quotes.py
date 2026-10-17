@@ -110,3 +110,40 @@ class Subscription:
     updated_at: datetime
     decision: SubscriptionDecision
     saga: IssuanceSaga
+
+
+@dataclass(frozen=True)
+class PaymentTransaction:
+    transaction_id: UUID
+    status: str
+    reference: str
+    processed_at: datetime
+
+
+@dataclass(frozen=True)
+class Payment:
+    payment_id: UUID
+    status: str
+    amount: Money
+    method: str
+    confirmed_at: datetime
+    transaction: PaymentTransaction
+
+
+@dataclass(frozen=True)
+class Policy:
+    policy_id: UUID
+    number: str
+    status: str
+    product_id: UUID
+    monthly_premium: Money
+    valid_from: datetime
+    valid_until: datetime
+    issued_at: datetime
+
+
+@dataclass(frozen=True)
+class PaymentAndPolicy:
+    payment: Payment
+    policy: Policy
+    saga: IssuanceSaga

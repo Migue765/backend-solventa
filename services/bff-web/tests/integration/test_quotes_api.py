@@ -143,3 +143,44 @@ def test_subscription_requires_authentication_and_idempotency_key(app: Flask, to
 
     assert app.test_client().post(url).status_code == 401
     assert app.test_client().post(url, headers=bearer(token)).status_code == 400
+
+
+def test_authenticated_client_pays_and_reads_issued_policy(
+    app: Flask, token: str, quotes: StubQuoteGateway
+) -> None:
+    client = app.test_client()
+    request_id = "AQT-2026-ABCDEF1234"
+    paid = client.post(
+        f"/v1/solicitudes-cotizacion/{request_id}/pago",
+        json={"metodoPago": "tarjeta"},
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+    found = client.get(
+        f"/v1/solicitudes-cotizacion/{request_id}/poliza",
+        headers=bearer(token),
+    )
+
+    assert paid.status_code == 201
+    assert body(paid)["pago"]["estado"] == "confirmado"
+    assert body(paid)["poliza"]["estado"] == "vigente"
+    assert body(paid)["saga"] == {
+        "estado": "emitida",
+        "version": 3,
+        "actualizadaEn": "2026-10-16T16:00:00Z",
+    }
+    assert found.get_json() == paid.get_json()
+    assert quotes.user_ids == [USER.user_id, USER.user_id]
+
+
+def test_payment_requires_authentication_valid_method_and_idempotency(
+    app: Flask, token: str
+) -> None:
+    url = "/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234/pago"
+
+    assert app.test_client().post(url).status_code == 401
+    assert (
+        app.test_client()
+        .post(url, json={"metodoPago": "efectivo"}, headers=bearer(token))
+        .status_code
+        == 400
+    )

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,8 +19,13 @@ from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableErro
 from bff_web.domain.quotes import (
     InsuranceProduct,
     IssuanceSaga,
+    Money,
     OfferSelection,
     OffersResult,
+    Payment,
+    PaymentAndPolicy,
+    PaymentTransaction,
+    Policy,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -216,6 +222,7 @@ class StubQuoteGateway(QuoteGateway):
     def __init__(self) -> None:
         self.record: QuoteRequestRecord | None = None
         self.subscription: Subscription | None = None
+        self.payment_policy: PaymentAndPolicy | None = None
         self.user_ids: list[UUID] = []
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
@@ -286,6 +293,44 @@ class StubQuoteGateway(QuoteGateway):
         self.user_ids.append(user_id)
         assert self.subscription is not None
         return self.subscription
+
+    def process_payment(
+        self, user_id: UUID, request_id: str, payment_method: str, idempotency_key: UUID
+    ) -> PaymentAndPolicy:
+        self.user_ids.append(user_id)
+        now = datetime(2026, 10, 16, 16, 0, tzinfo=UTC)
+        self.payment_policy = PaymentAndPolicy(
+            payment=Payment(
+                payment_id=UUID("40000000-0000-4000-8000-000000000001"),
+                status="confirmado",
+                amount=Money(Decimal("89700.00"), "COP"),
+                method=payment_method,
+                confirmed_at=now,
+                transaction=PaymentTransaction(
+                    transaction_id=UUID("50000000-0000-4000-8000-000000000001"),
+                    status="confirmado",
+                    reference="PAY-ABC123",
+                    processed_at=now,
+                ),
+            ),
+            policy=Policy(
+                policy_id=UUID("60000000-0000-4000-8000-000000000001"),
+                number="SOL-202610-ABC123",
+                status="vigente",
+                product_id=UUID("11111111-1111-4111-8111-111111111111"),
+                monthly_premium=Money(Decimal("89700.00"), "COP"),
+                valid_from=now,
+                valid_until=datetime(2027, 10, 16, 16, 0, tzinfo=UTC),
+                issued_at=now,
+            ),
+            saga=IssuanceSaga(status="emitida", version=3, updated_at=now),
+        )
+        return self.payment_policy
+
+    def get_policy(self, user_id: UUID, request_id: str) -> PaymentAndPolicy:
+        self.user_ids.append(user_id)
+        assert self.payment_policy is not None
+        return self.payment_policy
 
 
 def bearer(value: str) -> dict[str, str]:

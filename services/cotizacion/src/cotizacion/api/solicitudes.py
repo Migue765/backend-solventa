@@ -5,8 +5,10 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import TypeAdapter, ValidationError
 
 from cotizacion.api.schemas import (
+    ProcesarPagoRequest,
     RegistrarSolicitudRequest,
     SeleccionarOfertaRequest,
+    pago_emision_a_json,
     producto_a_json,
     resultado_ofertas_a_json,
     seleccion_oferta_a_json,
@@ -14,6 +16,7 @@ from cotizacion.api.schemas import (
     suscripcion_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.pagos_emision import ProcesarPagoYEmision
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
@@ -125,6 +128,30 @@ def consultar_suscripcion(solicitud_id: str) -> tuple[Response, int] | Response:
     return jsonify(suscripcion_a_json(_suscripciones().consultar(solicitud_id, cliente_id)))
 
 
+@bp.post("/solicitudes-cotizacion/<solicitud_id>/pago")
+def procesar_pago(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        payload = ProcesarPagoRequest.model_validate(request.get_json(silent=False))
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+    except (ValidationError, TypeError):
+        return jsonify(error="solicitud_invalida"), 400
+    resultado = _pagos_emision().procesar(
+        solicitud_id, cliente_id, payload.metodo_pago, idempotency_key
+    )
+    return jsonify(pago_emision_a_json(resultado)), 201
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/poliza")
+def consultar_poliza(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(pago_emision_a_json(_pagos_emision().consultar(solicitud_id, cliente_id)))
+
+
 def _registrar() -> RegistrarSolicitud:
     return cast(RegistrarSolicitud, current_app.extensions["registrar_solicitud"])
 
@@ -142,6 +169,10 @@ def _ofertas() -> GestionarOfertas:
 
 def _suscripciones() -> ProcesarSuscripcion:
     return cast(ProcesarSuscripcion, current_app.extensions["procesar_suscripcion"])
+
+
+def _pagos_emision() -> ProcesarPagoYEmision:
+    return cast(ProcesarPagoYEmision, current_app.extensions["procesar_pago_emision"])
 
 
 def _cliente_id() -> UUID | None:
