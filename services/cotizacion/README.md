@@ -148,6 +148,53 @@ no la tasa ni los factores de los planes académicos.
 Ejemplo: saldo hipotecario `180000000`, score `0.50`: primas `99000`, `113850`, `128700` COP/mes.
 Con saldo `90000000`, el plan Esencial cuesta `49500` COP/mes.
 
+#### Beneficios de los planes nuevos
+
+Las nuevas solicitudes académicas y climáticas guardan `planes[].presentacion` con versión
+`beneficios-v1` dentro de la instantánea y su hash. Esencial incluye la primera cobertura
+del catálogo, Integral agrega la segunda y Premium la tercera cuando existe.
+Todos conservan la misma suma asegurada, deducible, duración y fórmula de precio.
+Los campos HTTP `descripcion`, `coberturaPrincipal`, `coberturas`, `condiciones`,
+`responsabilidadCivil` y `beneficiosAdicionales` reflejan el paquete guardado.
+Responsabilidad civil solo se indica incluida cuando forma parte de ese paquete,
+sin inventar un límite monetario.
+
+| Producto | Esencial | Integral agrega | Premium agrega |
+|----------|----------|-----------------|----------------|
+| Automotriz | Daños al vehículo | Responsabilidad civil | Asistencia en carretera |
+| Viaje | Asistencia médica | Equipaje | Demoras y cancelaciones |
+| Vida | Fallecimiento | Incapacidad total y permanente | Orientación adicional |
+| Dispositivos | Daño accidental | Hurto calificado | Falla funcional |
+| Vuelos: retraso/cancelación | Retraso de vuelo | Cancelación | Orientación adicional |
+| Vuelos: conexión | Pérdida de conexión | Orientación adicional | Orientación adicional |
+| Vuelos: combinado | Pérdida de conexión y cancelación | Retraso de vuelo | Orientación adicional |
+| Pagos | Desempleo involuntario | Incapacidad temporal | Orientación adicional |
+| Vida hipotecaria | Fallecimiento | Incapacidad total y permanente | Orientación adicional |
+
+Clima conserva sus niveles existentes **Esencial, Plus e Integral** y sus primas.
+La cobertura sigue siendo únicamente lluvia intensa o sequía según lo declarado;
+los temas de orientación crecen de uno a tres: condiciones, evento elegido y
+disparador/umbral del plan, sin inventar umbrales ni compensaciones.
+
+La orientación también es acumulativa: condiciones del plan (Esencial), orientación
+sobre la primera cobertura (Integral) y sobre la última del catálogo (Premium).
+En conexión exclusivamente, el tercer tema son las exclusiones de conexión.
+Son temas de la orientación simulada ya existente, no servicios nuevos de proveedores,
+asesoría profesional contratada ni pagos adicionales. Si hay menos de tres coberturas,
+no se inventan riesgos, montos, umbrales o servicios para llenar el nivel superior.
+La modalidad de vuelo elegida se respeta en todos los niveles.
+
+**Compatibilidad:** una lectura o selección nunca regenera estos beneficios desde el
+catálogo actual. Las instantáneas sin `presentacion` mantienen exactamente la plantilla
+anterior, incluso si la oferta ya fue aceptada; no hay migración ni reescritura de registros.
+Los planes climáticos conservan su modelo independiente, precios, evento único elegido
+y condiciones; solo amplían los temas de orientación: no se agrega sequía a una
+solicitud de lluvia ni viceversa.
+Para ver los paquetes nuevos se debe crear una **nueva solicitud de cotización**
+con nueva clave de idempotencia; reintentar la anterior devuelve la decisión original.
+Los contratos HTTP y de selección no cambian: la selección identifica la oferta y versión,
+y sus beneficios se consultan en el listado persistido de esa misma solicitud.
+
 En solicitudes, se validan nuevamente los datos antes de calcular. Fechas de viaje iguales
 cuentan como un día. Edad, país, placa, aerolínea y demás campos declarativos no añaden factores
 de precio. Los importes declarados son enteros positivos de hasta 16 dígitos; la base derivada

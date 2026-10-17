@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import patch
@@ -6,8 +7,10 @@ from uuid import UUID, uuid4
 import pytest
 from cotizacion.app import create_app
 from cotizacion.config import Config
+from cotizacion.domain.decision import construir_instantanea
 from cotizacion.domain.perfil_riesgo import NivelRiesgo
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
+from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.domain.tarifa import PerfilRiesgo
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
@@ -76,6 +79,30 @@ def test_importes_exactos_por_producto_y_plan(
             Decimal(plan["prima"]) for plan in snapshot.contenido["tarificacion"]["planes"]
         ] == [Decimal(monto) for monto in importes]
         assert snapshot.contenido["perfil"]["score"] == "0.50"
+        presentaciones = [
+            plan["presentacion"] for plan in snapshot.contenido["tarificacion"]["planes"]
+        ]
+        producto_catalogo = next(p for p in PRODUCTOS if p.producto_id == producto)
+        for indice, (plan, presentacion) in enumerate(zip(planes, presentaciones, strict=True)):
+            assert len(plan["coberturas"]) == min(indice + 1, len(producto_catalogo.coberturas))
+            assert len(plan["beneficiosAdicionales"]) == indice + 1
+            for campo in (
+                "descripcion",
+                "coberturaPrincipal",
+                "coberturas",
+                "condiciones",
+                "beneficiosAdicionales",
+                "responsabilidadCivil",
+            ):
+                assert plan[campo] == presentacion[campo]
+            assert f"${producto_catalogo.deducible}.00 COP" in plan["deducible"]
+            assert (
+                f"${Decimal(snapshot.contenido['tarificacion']['baseAsegurada']):,.0f} COP".replace(
+                    ",", "."
+                )
+            ) in plan["coberturaPrincipal"]
+        assert len({plan["deducible"] for plan in planes}) == 1
+        assert len({plan["descripcion"] for plan in planes}) == 3
 
 
 @pytest.mark.parametrize(
@@ -139,7 +166,7 @@ def test_utiliza_score_y_version_del_perfil_realmente_recibido(client, database_
         assert snapshot.perfil_modelo_version == "modelo-prueba-v3"
 
 
-@pytest.mark.parametrize("producto", ["travel", "parametric", "mortgage-life"])
+@pytest.mark.parametrize("producto", [p.producto_id for p in PRODUCTOS])
 def test_seleccion_persiste_prima_y_periodicidad(client, database_url, producto):
     payload, registro = registrar(client, producto)
     plan = ofertas(client, payload, registro)["ofertas"][2]
@@ -159,6 +186,86 @@ def test_seleccion_persiste_prima_y_periodicidad(client, database_url, producto)
         nuevo_client.put(url, query_string=query, headers=headers, json=body).get_json()
         == seleccion
     )
+    aceptada = ofertas(nuevo_client, payload, registro)["ofertas"][2]
+    assert aceptada == {**plan, "estado": "aceptada"}
+
+
+@pytest.mark.parametrize("producto", [p.producto_id for p in PRODUCTOS])
+def test_presentacion_guardada_no_depende_del_catalogo_o_generador_actual(
+    client, database_url, producto
+):
+    payload, registro = registrar(client, producto)
+    iniciales = ofertas(client, payload, registro)
+    with crear_sesiones(database_url)() as sesion:
+        snapshot = sesion.get(
+            InstantaneaDecisionModel, UUID(registro["cotizacion"]["cotizacionId"])
+        )
+        evidencia = (snapshot.contenido, snapshot.hash_decision, snapshot.hash_contenido)
+    nuevo_client = create_app(Config(database_url=database_url)).test_client()
+    with (
+        patch(
+            "cotizacion.application.calculadora_cotizacion.beneficios_plan",
+            side_effect=AssertionError("No regenerar beneficios"),
+        ),
+        patch(
+            "cotizacion.application.ofertas._plantilla_guardada",
+            side_effect=AssertionError("No usar plantilla histórica"),
+        ),
+        patch("cotizacion.application.ofertas.PRODUCTOS", ()),
+    ):
+        assert ofertas(nuevo_client, payload, registro) == iniciales
+    with crear_sesiones(database_url)() as sesion:
+        snapshot = sesion.get(
+            InstantaneaDecisionModel, UUID(registro["cotizacion"]["cotizacionId"])
+        )
+        assert (snapshot.contenido, snapshot.hash_decision, snapshot.hash_contenido) == evidencia
+
+
+@pytest.mark.parametrize("producto", [p.producto_id for p in PRODUCTOS])
+def test_instantaneas_anteriores_y_aceptadas_no_cambian(client, database_url, producto):
+    def instantanea_anterior(cotizacion, regla, perfil, ahora, detalle):
+        historico = deepcopy(detalle)
+        for plan in historico["planes"]:
+            del plan["presentacion"]
+        return construir_instantanea(cotizacion, regla, perfil, ahora, historico)
+
+    with patch(
+        "cotizacion.application.calculadora_cotizacion.construir_instantanea",
+        side_effect=instantanea_anterior,
+    ):
+        payload, registro = registrar(client, producto)
+    originales = ofertas(client, payload, registro)
+    for plan in originales["ofertas"]:
+        assert plan["beneficiosAdicionales"] == ["Orientación sobre las condiciones del plan"]
+        assert plan["responsabilidadCivil"] == "No aplica"
+        if producto not in {"parametric", "parametric-weather"}:
+            assert plan["descripcion"] == "Protección sobre la base asegurada del producto."
+            assert plan["coberturas"] == [
+                "Cobertura del producto sobre la base asegurada declarada."
+            ]
+    with crear_sesiones(database_url)() as sesion:
+        snapshot = sesion.get(
+            InstantaneaDecisionModel, UUID(registro["cotizacion"]["cotizacionId"])
+        )
+        evidencia = (snapshot.contenido, snapshot.hash_decision, snapshot.hash_contenido)
+    registrar(client, producto)
+    assert ofertas(client, payload, registro) == originales
+    plan = originales["ofertas"][2]
+    url = f"/v1/solicitudes-cotizacion/{registro['id']}/seleccion"
+    seleccion = client.put(
+        url,
+        query_string={"clienteId": payload["clienteId"]},
+        headers={"Idempotency-Key": str(uuid4())},
+        json={"ofertaId": plan["id"], "version": plan["version"]},
+    )
+    assert seleccion.status_code == 200
+    nuevo_client = create_app(Config(database_url=database_url)).test_client()
+    assert ofertas(nuevo_client, payload, registro)["ofertas"][2] == {**plan, "estado": "aceptada"}
+    with crear_sesiones(database_url)() as sesion:
+        snapshot = sesion.get(
+            InstantaneaDecisionModel, UUID(registro["cotizacion"]["cotizacionId"])
+        )
+        assert (snapshot.contenido, snapshot.hash_decision, snapshot.hash_contenido) == evidencia
 
 
 @pytest.mark.parametrize("tipo_fallo", ["sin_perfil", "score_invalido", "sin_regla", "outbox"])
@@ -289,6 +396,14 @@ def test_clima_conserva_calculos_y_guarda_planes_por_periodo(
     assert all(
         plan["periodicidad"] == "por_periodo" and plan["primaMensual"] is None for plan in planes
     )
+    assert [len(plan["beneficiosAdicionales"]) for plan in planes] == [3, 2, 1]
+    assert len({tuple(plan["coberturas"]) for plan in planes}) == 1
+    assert all(len(plan["coberturas"]) == 1 for plan in planes)
+    assert all(plan["deducible"] == "Sin deducible" for plan in planes)
+    assert len({plan["vigencia"] for plan in planes}) == 1
+    evento_nombre = "lluvia intensa" if evento == "heavy-rain" else "sequía"
+    assert all(evento_nombre in plan["coberturas"][0].lower() for plan in planes)
+    assert all("$10.000.000 COP" in plan["coberturaPrincipal"] for plan in planes)
     assert registro["cotizacion"]["primaEstimada"]["monto"] == "157500.00"
     with crear_sesiones(database_url)() as sesion:
         snapshot = sesion.get(

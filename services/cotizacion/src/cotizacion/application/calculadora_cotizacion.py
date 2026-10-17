@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypedDict
 
 from cotizacion.application.ports import ProveedorPerfil, RepositorioReglas, Tarificador
+from cotizacion.domain.beneficios_plan import PresentacionPlan, beneficios_plan
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.decision import construir_instantanea
@@ -21,6 +22,14 @@ from cotizacion.domain.modelo_climatico import (
 )
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.productos import ProductoSeguro
+
+
+class _PlanAcademico(TypedDict):
+    codigo: str
+    nombre: str
+    factor: str
+    prima: str
+    presentacion: PresentacionPlan
 
 
 class CalculadoraCotizacion:
@@ -75,7 +84,16 @@ class CalculadoraCotizacion:
                 "factorRiesgoOfertas": str(perfil_ofertas.factor_prima),
                 "tasaAplicada": perfil_ofertas.tarifa_aplicada,
                 "planes": [
-                    {**plan, "prima": str(Dinero(Decimal(plan["prima"]), "COP").monto)}
+                    {
+                        **plan,
+                        "prima": str(Dinero(Decimal(plan["prima"]), "COP").monto),
+                        "presentacion": beneficios_plan(
+                            producto,
+                            datos_clima,
+                            plan["codigo"],
+                            Decimal(datos_clima["insuredAmount"]),
+                        ),
+                    }
                     for plan in planes_climaticos(datos_clima, perfil_ofertas.factor_prima)
                 ],
             }
@@ -96,11 +114,12 @@ class CalculadoraCotizacion:
                 deducible=original.deducible,
                 deducible_descuenta_base=False,
             )
-            planes = [
+            planes: list[_PlanAcademico] = [
                 {
                     "codigo": codigo,
                     "nombre": f"{producto.nombre} {nombre}",
                     "factor": str(factor),
+                    "presentacion": beneficios_plan(producto, datos_producto, codigo, base),
                     "prima": str(
                         prima_academica(
                             base, regla.tasa, perfil.score, regla.factor_perfil, factor, duracion

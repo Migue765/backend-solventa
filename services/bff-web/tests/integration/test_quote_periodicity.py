@@ -23,15 +23,19 @@ def test_bff_preserva_prima_y_periodicidad_en_ofertas_y_seleccion(
         "id": str(uuid4()),
         "version": 1,
         "nombre": "Plan de prueba",
-        "descripcion": "Modelo académico v1",
+        "descripcion": "Daños al vehículo y responsabilidad civil",
         **price,
         "coberturaPrincipal": "Base asegurada",
         "deducible": "Sin descuento",
         "vigencia": "Por viaje" if period == "por_viaje" else "Periodo declarado",
         "responsabilidadCivil": "No aplica",
-        "coberturas": ["Cobertura"],
-        "condiciones": ["Simulación"],
-        "beneficiosAdicionales": [],
+        "coberturas": ["Daños al vehículo", "Responsabilidad civil"],
+        "condiciones": ["Simulación", "Deducible por evento"],
+        "beneficiosAdicionales": [
+            "Orientación sobre las condiciones del plan",
+            "Orientación sobre daños al vehículo",
+            "Orientación sobre responsabilidad civil",
+        ],
         "recomendada": True,
         "estado": "disponible",
         "vigenteHasta": "2026-11-01T00:00:00Z",
@@ -73,6 +77,16 @@ def test_bff_preserva_prima_y_periodicidad_en_ofertas_y_seleccion(
         result = response.get_json()
         if "ofertas" in result:
             result = result["ofertas"][0]
+            for field in (
+                "descripcion",
+                "coberturaPrincipal",
+                "deducible",
+                "responsabilidadCivil",
+                "coberturas",
+                "condiciones",
+                "beneficiosAdicionales",
+            ):
+                assert result[field] == plan[field]
         assert result["prima"] == money
         assert result["periodicidad"] == (period or "mensual")
         assert result["primaMensual"] == price["primaMensual"]
