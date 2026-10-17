@@ -287,7 +287,11 @@ def _offer_json(offer: Offer) -> dict[str, object]:
         "version": offer.version,
         "nombre": offer.name,
         "descripcion": offer.description,
-        "primaMensual": _money_json(offer.monthly_premium),
+        "prima": _money_json(offer.monthly_premium),
+        "periodicidad": offer.billing_period,
+        "primaMensual": (
+            _money_json(offer.monthly_premium) if offer.billing_period == "mensual" else None
+        ),
         "coberturaPrincipal": offer.main_coverage,
         "deducible": offer.deductible,
         "vigencia": offer.duration,
@@ -307,7 +311,13 @@ def _selection_json(selection: OfferSelection) -> dict[str, object]:
         "ofertaId": str(selection.offer_id),
         "version": selection.version,
         "nombreOferta": selection.offer_name,
-        "primaMensual": _money_json(selection.monthly_premium),
+        "prima": _money_json(selection.monthly_premium),
+        "periodicidad": selection.billing_period,
+        "primaMensual": (
+            _money_json(selection.monthly_premium)
+            if selection.billing_period == "mensual"
+            else None
+        ),
         "seleccionadaEn": _date_json(selection.selected_at),
     }
 

@@ -29,6 +29,7 @@ class Oferta:
     recomendada: bool
     estado: EstadoOferta
     vigente_hasta: datetime
+    periodicidad: str = "mensual"
 
 
 @dataclass(frozen=True)
@@ -51,3 +52,4 @@ class SeleccionOferta:
     seleccionada_en: datetime
     idempotency_key: UUID
     request_fingerprint: str
+    periodicidad: str = "mensual"
