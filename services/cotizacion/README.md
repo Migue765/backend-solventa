@@ -28,8 +28,11 @@ tests/
 | GET    | `/ping`            | Health check                   |
 | POST   | `/v1/cotizaciones` | Crea y calcula una cotización  |
 | GET    | `/v1/productos-seguro` | Lista el catálogo de seguros |
+| GET    | `/v1/destinos-viaje` | Lista países de destino admitidos |
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
+| GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
 
 Ejemplo:
 
@@ -57,6 +60,50 @@ La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID
 clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
 produce `409`.
 
+## Solicitudes multirramo
+
+El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe exclusivamente
+`{productoId, datosProducto}` y toma la identidad y el contacto del usuario autenticado mediante
+`Authorization: Bearer`. El servicio interno recibe además `clienteId`, `tipoCliente`,
+`tipoDocumento`, `identificacion`, `correo` y `telefono`; sus consultas usan `clienteId`.
+No se admiten campos adicionales ni datos de otro producto:
+
+| productoId | datosProducto (todos sus valores son strings) |
+|------------|----------------------------------------------|
+| `automotive` | `vehiclePlate` |
+| `travel` | `destinationCountryCode`, `departureDate`, `returnDate` |
+| `life` | `birthDate` |
+| `device-protection` | `deviceType`, `brandModel`, `purchaseValue` |
+| `parametric` | `airline`, `flightNumber`, `flightDate`, opcional `coverageType` |
+| `parametric-weather` | `location`, `weatherEvent`, `startDate`, `endDate`, `insuredAmount` |
+| `payment-protection` | `creditType`, `monthlyPayment` |
+| `mortgage-life` | `birthDate`, `mortgageBalance` |
+
+`coverageType` admite `delay-cancellation` (predeterminado si se omite), `missed-connection`
+y `comprehensive`. Las solicitudes antiguas conservan sus datos sin añadir este campo.
+`flightDate` debe ser posterior a hoy al crear. Las ofertas para conexión siempre incluyen
+pérdida de conexión por afectación del vuelo previo atribuible a la aerolínea, sujeta a las
+condiciones del plan; no cubren llegar tarde al aeropuerto por responsabilidad del pasajero.
+
+Para clima, `location` es municipio y departamento en texto no vacío de hasta 120 caracteres
+(sin DANE ni catálogo externo). `weatherEvent` admite `heavy-rain` o `drought`.
+`startDate` y `endDate` son fechas reales `YYYY-MM-DD`, posteriores a hoy al crear, en orden,
+con máximo 366 días inclusive. `insuredAmount` es un entero positivo sin separadores,
+entre `"1"` y `"1000000000"` COP. La suma asegurada declarada se usa en la cotización
+persistida y las ofertas muestran el evento, monto, ubicación y periodo declarados.
+Las fechas pasadas no impiden consultar registros históricos.
+
+Todas las ofertas y sus primas son **simuladas**, no propuestas vinculantes de aseguradoras.
+Los importes de respuesta conservan `{monto, moneda}` con moneda `COP`; el nombre
+`primaMensual` se mantiene por compatibilidad incluso en planes por vuelo o periodo.
+En clima, la prima ilustrativa por periodo es `max(1000, monto * tasaDiaria * días * factorPlan)`
+por el factor de riesgo simulado: tasa diaria `0.0001` para lluvia o `0.00012` para sequía,
+y factores de plan `1`, `0.85` y `0.70`. Este cálculo de comparación es independiente
+del cálculo genérico versionado de la cotización base descrito abajo.
+El disparador, umbral y compensación quedan sujetos a las condiciones del plan.
+No se implementan emisión, monitoreo meteorológico, consultas a aerolíneas, siniestros
+ni pagos automáticos o reales.
+
 ## Tarificación
 
 `prima = (sumaAsegurada - deducible) * tasa * (1 + score * factorPerfil)`, por cobertura.
@@ -64,6 +111,7 @@ produce `409`.
 - La **regla de tarifa** (`tasa`, `factorPerfil`) es versionada y tiene vigencia (`reglas_tarifa`).
   Se aplica la regla vigente del producto al momento del cálculo; sin regla vigente se rechaza.
   La migración `0003` siembra `tarifa-2026.1` para el seguro automotriz.
+  `0005` agrega los otros seis ramos iniciales y `0006` la tarifa simulada climática.
 - El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil`. Mientras no exista el contexto de
   Perfilamiento se usa `ProveedorPerfilSimulado` (score fijo `COTIZACION_PERFIL_SCORE_SIMULADO`).
 - En `/v1/solicitudes-cotizacion` el perfil es el del propio cliente (`perfilId = clienteId`).
@@ -110,6 +158,19 @@ alembic upgrade head
 flask --app cotizacion.app run
 pytest
 ```
+
+En PowerShell, desde la raíz del repositorio (entorno con dependencias instaladas):
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path services\cotizacion\src).Path
+$env:DATABASE_URL = "sqlite:///cotizacion-local.db"
+python -m alembic -c services\cotizacion\alembic.ini upgrade head
+python -m flask --app cotizacion.app run --host 127.0.0.1 --port 5000
+```
+
+Para integrar la web, ejecutar también identidad y BFF Web según sus README; configurar
+`QUOTE_SERVICE_URL=http://127.0.0.1:5000`. El servicio de cotización es interno:
+el navegador debe llamar al BFF, no enviar un `clienteId` elegido por el cliente.
 
 ## Contenedor
 

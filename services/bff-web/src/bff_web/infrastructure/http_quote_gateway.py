@@ -174,7 +174,9 @@ def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:
         customer_type=payload["tipoCliente"],
         document_type=payload["tipoDocumento"],
         identification=payload["identificacion"],
-        product_data=validate_product_data(product_id, payload["datosProducto"]),
+        product_data=validate_product_data(
+            product_id, payload["datosProducto"], for_creation=False
+        ),
         email=payload["correo"],
         phone=payload["telefono"],
     )

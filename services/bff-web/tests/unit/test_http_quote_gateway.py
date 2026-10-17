@@ -4,6 +4,7 @@ from io import BytesIO
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from bff_web.domain.quotes import QuoteRequestDraft
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 
@@ -75,3 +76,50 @@ def test_propagates_product_data_when_creating_and_reading_a_request() -> None:
         "telefono": "+573001234567",
     }
     assert record.draft.product_data == product_data
+
+
+@pytest.mark.parametrize(
+    ("product_id", "data"),
+    [
+        (
+            "parametric",
+            {
+                "airline": "Aerolínea de prueba",
+                "flightNumber": "AV123",
+                "flightDate": "2020-01-01",
+            },
+        ),
+        (
+            "parametric-weather",
+            {
+                "location": "Medellín, Antioquia",
+                "weatherEvent": "drought",
+                "startDate": "2020-01-01",
+                "endDate": "2020-02-01",
+                "insuredAmount": "10000000",
+            },
+        ),
+    ],
+)
+def test_reads_historical_requests_without_requiring_future_dates(
+    product_id: str, data: dict[str, str]
+) -> None:
+    request_id = "AQT-2020-ABCDEF1234"
+    response = {
+        "id": request_id,
+        "productoId": product_id,
+        "tipoCliente": "persona_natural",
+        "tipoDocumento": "cc",
+        "identificacion": "1234567890",
+        "datosProducto": data,
+        "correo": "cliente@solventa.co",
+        "telefono": "+573001234567",
+        "estado": "recibida",
+        "creadaEn": "2019-12-01T12:00:00Z",
+    }
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(response).encode()),
+    ):
+        record = HttpQuoteGateway("http://cotizacion").get_request(uuid4(), request_id)
+    assert record.draft.product_data == data

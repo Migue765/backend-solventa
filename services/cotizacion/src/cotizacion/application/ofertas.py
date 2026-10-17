@@ -1,7 +1,7 @@
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -14,6 +14,7 @@ from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
     OfertaNoDisponibleError,
+    ReglaDeNegocioError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
 )
@@ -54,6 +55,7 @@ class GestionarOfertas:
             self._reloj(),
             perfil_riesgo.factor_prima,
             perfil_riesgo.tarifa_aplicada,
+            solicitud.datos_producto,
         )
 
     def seleccionar(
@@ -121,6 +123,7 @@ def _generar_ofertas(
     ahora: datetime,
     factor_prima: Decimal,
     tarifa_aplicada: str,
+    datos_producto: dict[str, str],
 ) -> ResultadoOfertas:
     if vigente_hasta is None:
         raise OfertaNoDisponibleError()
@@ -137,7 +140,7 @@ def _generar_ofertas(
             vigente_hasta,
             factor_prima,
         )
-        for indice, plantilla in enumerate(_PLANTILLAS[producto_id])
+        for indice, plantilla in enumerate(_plantillas_producto(producto_id, datos_producto))
     )
     return ResultadoOfertas(
         solicitud_id=solicitud_id,
@@ -168,7 +171,10 @@ def _oferta(
         vigencia=plantilla.vigencia,
         responsabilidad_civil=plantilla.responsabilidad_civil,
         coberturas=plantilla.coberturas,
-        condiciones=plantilla.condiciones,
+        condiciones=(
+            *plantilla.condiciones,
+            "Cotización y ofertas simuladas; no emiten pólizas ni ejecutan pagos reales.",
+        ),
         beneficios_adicionales=plantilla.beneficios,
         recomendada=recomendada,
         estado=estado,
@@ -177,11 +183,17 @@ def _oferta(
 
 
 def _producto_publico(producto_interno_id: UUID) -> str:
-    return next(
-        producto.producto_id
-        for producto in PRODUCTOS
-        if producto.producto_interno_id == producto_interno_id
+    producto_id = next(
+        (
+            producto.producto_id
+            for producto in PRODUCTOS
+            if producto.producto_interno_id == producto_interno_id
+        ),
+        None,
     )
+    if producto_id is None:
+        raise ReglaDeNegocioError("El producto no admite ofertas.")
+    return producto_id
 
 
 @dataclass(frozen=True)
@@ -223,6 +235,76 @@ def _plantilla(
         vigencia,
         responsabilidad_civil,
     )
+
+
+def _plantillas_producto(producto_id: str, datos: dict[str, str]) -> tuple[PlantillaOferta, ...]:
+    if producto_id == "parametric":
+        cobertura = datos.get("coverageType", "delay-cancellation")
+        if cobertura == "delay-cancellation":
+            return _PLANTILLAS["parametric"]
+        if cobertura not in {"missed-connection", "comprehensive"}:
+            raise ReglaDeNegocioError("La cobertura de vuelo no admite ofertas.")
+        combinada = cobertura == "comprehensive"
+        return tuple(
+            replace(
+                plantilla,
+                nombre=f"Vuelo {'Combinado' if combinada else 'Conexión'} {nivel}",
+                descripcion="Cotización simulada de conexión por afectaciones de la aerolínea.",
+                prima=plantilla.prima * (Decimal("1.4") if combinada else Decimal("1.1")),
+                coberturas=(
+                    (*plantilla.coberturas, "Pérdida de conexión por afectación del vuelo previo.")
+                    if combinada
+                    else ("Pérdida de conexión por afectación del vuelo previo.",)
+                ),
+                condiciones=(
+                    "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
+                    "Requiere conexión en un mismo itinerario por afectación de la aerolínea.",
+                    "No cubre llegar tarde al aeropuerto ni pérdidas por culpa del pasajero.",
+                    "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
+                ),
+            )
+            for plantilla, nivel in zip(
+                _PLANTILLAS["parametric"], ("Premium", "Plus", "Esencial"), strict=True
+            )
+        )
+    if producto_id == "parametric-weather":
+        evento = datos["weatherEvent"]
+        if evento not in {"heavy-rain", "drought"}:
+            raise ReglaDeNegocioError("El evento climático no admite ofertas.")
+        nombre = "Lluvia Intensa" if evento == "heavy-rain" else "Sequía"
+        monto = Decimal(datos["insuredAmount"])
+        monto_formateado = f"{int(monto):,}".replace(",", ".")
+        dias = (
+            date.fromisoformat(datos["endDate"]) - date.fromisoformat(datos["startDate"])
+        ).days + 1
+        tasa_diaria = Decimal("0.0001") if evento == "heavy-rain" else Decimal("0.00012")
+        return tuple(
+            _plantilla(
+                f"Clima {nombre} {nivel}",
+                f"Protección simulada ante {nombre.lower()} en {datos['location']}.",
+                str(max(Decimal("1000"), monto * tasa_diaria * dias * factor)),
+                f"Hasta ${monto_formateado} COP ante {nombre.lower()}",
+                "Sin deducible",
+                (f"Evento de {nombre.lower()} durante el periodo declarado.",),
+                (
+                    f"Municipio y departamento declarados: {datos['location']}.",
+                    f"Monto asegurado declarado: {datos['insuredAmount']} COP.",
+                    "Disparador, umbral y compensación sujetos a las condiciones del plan.",
+                    "Sin monitoreo meteorológico, proveedores externos ni pagos reales.",
+                ),
+                ("Orientación sobre las condiciones del plan",),
+                vigencia=f"Del {datos['startDate']} al {datos['endDate']} ({dias} días inclusive)",
+            )
+            for nivel, factor in (
+                ("Integral", Decimal("1")),
+                ("Plus", Decimal("0.85")),
+                ("Esencial", Decimal("0.70")),
+            )
+        )
+    plantillas = _PLANTILLAS.get(producto_id)
+    if plantillas is None:
+        raise ReglaDeNegocioError("El producto no admite ofertas.")
+    return plantillas
 
 
 _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]] = {
@@ -363,24 +445,30 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
     "parametric": (
         _plantilla(
             "Vuelo Puntual Premium",
-            "Compensación automática amplia ante afectaciones del vuelo.",
+            "Cotización simulada ante retrasos o cancelaciones del vuelo.",
             "29900",
             "Compensación hasta $1.500.000 COP",
             "Sin deducible",
             ("Cancelación.", "Retraso superior a tres horas."),
-            ("La aerolínea debe confirmar el evento.",),
-            ("Pago automático", "Acceso a sala VIP por demora"),
+            (
+                "Confirmación del evento sujeta a las condiciones del plan.",
+                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
+            ),
+            ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
         _plantilla(
             "Vuelo Puntual Plus",
-            "Respaldo automático para demoras y cancelaciones.",
+            "Cotización simulada para demoras y cancelaciones.",
             "19900",
             "Compensación hasta $900.000 COP",
             "Sin deducible",
             ("Cancelación.", "Retraso superior a cuatro horas."),
-            ("Aplica al vuelo y fecha declarados.",),
-            ("Pago digital",),
+            (
+                "Aplica al vuelo y fecha declarados, sujeto a las condiciones del plan.",
+                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
+            ),
+            ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
         _plantilla(
@@ -390,8 +478,11 @@ _PLANTILLAS: dict[str, tuple[PlantillaOferta, PlantillaOferta, PlantillaOferta]]
             "Compensación hasta $500.000 COP",
             "Sin deducible",
             ("Cancelación confirmada por la aerolínea.",),
-            ("Oferta fuera de vigencia.",),
-            ("Notificación automática",),
+            (
+                "Confirmación del evento sujeta a las condiciones del plan.",
+                "No hay consulta a aerolíneas ni verificación automática de eventos reales.",
+            ),
+            ("Orientación sobre la cobertura",),
             vigencia="Por vuelo",
         ),
     ),

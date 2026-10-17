@@ -26,5 +26,5 @@ def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
             text("select version, tasa from reglas_tarifa where vigente_hasta is null")
         ).all()
 
-    assert len(filas) == 7
+    assert len(filas) == 8
     assert {(fila.version, float(fila.tasa)) for fila in filas} == {("tarifa-2026.1", 0.015)}

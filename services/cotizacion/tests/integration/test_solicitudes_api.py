@@ -1,7 +1,10 @@
-from datetime import UTC, datetime
-from uuid import uuid4
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 import pytest
+from cotizacion.app import create_app
+from cotizacion.config import Config
 from cotizacion.domain.productos import PRODUCTOS
 
 DATOS_PRODUCTO = {
@@ -20,7 +23,14 @@ DATOS_PRODUCTO = {
     "parametric": {
         "airline": "Aerolínea Colombiana",
         "flightNumber": "AV123",
-        "flightDate": "2026-11-20",
+        "flightDate": (date.today() + timedelta(days=30)).isoformat(),
+    },
+    "parametric-weather": {
+        "location": "Medellín, Antioquia",
+        "weatherEvent": "heavy-rain",
+        "startDate": (date.today() + timedelta(days=1)).isoformat(),
+        "endDate": (date.today() + timedelta(days=30)).isoformat(),
+        "insuredAmount": "10000000",
     },
     "payment-protection": {
         "creditType": "Crédito de libre inversión",
@@ -47,6 +57,13 @@ DATOS_INVALIDOS = {
         "flightNumber": "A",
         "flightDate": "2026-11-20",
     },
+    "parametric-weather": {
+        "location": "Medellín, Antioquia",
+        "weatherEvent": "snow",
+        "startDate": (date.today() + timedelta(days=1)).isoformat(),
+        "endDate": (date.today() + timedelta(days=30)).isoformat(),
+        "insuredAmount": "10000000",
+    },
     "payment-protection": {
         "creditType": "Crédito de libre inversión",
         "monthlyPayment": "850000.50",
@@ -60,6 +77,7 @@ NOMBRES_OFERTA = {
     "life": "Microseguro Vida Familiar",
     "device-protection": "Dispositivo Protección Total",
     "parametric": "Vuelo Puntual Premium",
+    "parametric-weather": "Clima Lluvia Intensa Integral",
     "payment-protection": "Protección de Pagos Integral",
     "mortgage-life": "Vida Hipotecaria Integral",
 }
@@ -98,6 +116,7 @@ def test_lista_el_catalogo_de_seguros(client) -> None:
         "life",
         "device-protection",
         "parametric",
+        "parametric-weather",
         "payment-protection",
         "mortgage-life",
     ]
@@ -443,3 +462,190 @@ def test_seleccion_es_idempotente_y_detecta_conflictos(client) -> None:
 
     assert reintento.get_json() == primera.get_json()
     assert conflicto.status_code == 409
+
+
+VARIANTES = [
+    *((producto, datos) for producto, datos in DATOS_PRODUCTO.items()),
+    *(
+        ("parametric", {**DATOS_PRODUCTO["parametric"], "coverageType": cobertura})
+        for cobertura in ("delay-cancellation", "missed-connection", "comprehensive")
+    ),
+    ("parametric-weather", {**DATOS_PRODUCTO["parametric-weather"], "weatherEvent": "drought"}),
+]
+
+
+@pytest.mark.parametrize(("producto_id", "datos"), VARIANTES)
+def test_ciclo_multirramo_persistido_y_autorizado(client, database_url, producto_id, datos) -> None:
+    payload = nueva_solicitud(producto_id=producto_id, datos_producto=datos)
+    headers = {"Idempotency-Key": str(uuid4())}
+    respuesta = client.post("/v1/solicitudes-cotizacion", json=payload, headers=headers)
+    assert respuesta.status_code == 201
+    registro = respuesta.get_json()
+    assert registro["datosProducto"] == datos
+    assert set(registro) == {
+        "id",
+        "productoId",
+        "tipoCliente",
+        "tipoDocumento",
+        "identificacion",
+        "datosProducto",
+        "correo",
+        "telefono",
+        "estado",
+        "creadaEn",
+    }
+    repetida = client.post("/v1/solicitudes-cotizacion", json=payload, headers=headers)
+    assert repetida.get_json() == registro
+    conflicto = client.post(
+        "/v1/solicitudes-cotizacion",
+        json={**payload, "telefono": "+573009876543"},
+        headers=headers,
+    )
+    assert conflicto.status_code == 409
+
+    url = f"/v1/solicitudes-cotizacion/{registro['id']}"
+    query = {"clienteId": payload["clienteId"]}
+    ofertas = client.get(f"{url}/ofertas", query_string=query).get_json()
+    oferta = ofertas["ofertas"][0]
+    assert all(item["primaMensual"]["moneda"] == "COP" for item in ofertas["ofertas"])
+    assert all(Decimal(item["primaMensual"]["monto"]) > 0 for item in ofertas["ofertas"])
+    assert all("simuladas" in " ".join(item["condiciones"]) for item in ofertas["ofertas"])
+    body = {"ofertaId": oferta["id"], "version": oferta["version"]}
+    seleccion_headers = {"Idempotency-Key": str(uuid4())}
+    seleccion = client.put(
+        f"{url}/seleccion", query_string=query, json=body, headers=seleccion_headers
+    )
+    assert seleccion.status_code == 200
+    assert seleccion.get_json()["primaMensual"] == oferta["primaMensual"]
+
+    otro_cliente = {"clienteId": str(uuid4())}
+    for sufijo in ("", "/ofertas", "/seleccion"):
+        assert client.get(f"{url}{sufijo}", query_string=otro_cliente).status_code == 404
+    assert (
+        client.put(
+            f"{url}/seleccion", query_string=otro_cliente, json=body, headers=seleccion_headers
+        ).status_code
+        == 404
+    )
+
+    reiniciado = create_app(Config(database_url=database_url, vigencia_dias=15)).test_client()
+    assert reiniciado.get(url, query_string=query).get_json() == registro
+    assert reiniciado.get(f"{url}/ofertas", query_string=query).get_json() == ofertas
+    assert reiniciado.get(f"{url}/seleccion", query_string=query).get_json() == seleccion.get_json()
+    assert (
+        reiniciado.put(
+            f"{url}/seleccion", query_string=query, json=body, headers=seleccion_headers
+        ).get_json()
+        == seleccion.get_json()
+    )
+    if producto_id == "parametric-weather":
+        repositorio = reiniciado.application.extensions["repositorio_cotizaciones"]
+        solicitud = repositorio.obtener_solicitud(registro["id"], UUID(payload["clienteId"]))
+        assert solicitud.cotizacion.coberturas[0].suma_asegurada.monto == Decimal(
+            datos["insuredAmount"]
+        )
+        assert datos["location"] in oferta["descripcion"]
+        assert datos["insuredAmount"] in " ".join(oferta["condiciones"])
+        assert datos["startDate"] in oferta["vigencia"]
+        assert datos["endDate"] in oferta["vigencia"]
+        assert "umbral" in " ".join(oferta["condiciones"])
+        assert "Sin monitoreo" in " ".join(oferta["condiciones"])
+    if producto_id == "parametric" and datos.get("coverageType") in {
+        "missed-connection",
+        "comprehensive",
+    }:
+        assert all(
+            "Pérdida de conexión" in " ".join(item["coberturas"]) for item in ofertas["ofertas"]
+        )
+        if datos["coverageType"] == "missed-connection":
+            assert all(
+                "Cancelación" not in " ".join(item["coberturas"]) for item in ofertas["ofertas"]
+            )
+        else:
+            assert all("Cancelación" in " ".join(item["coberturas"]) for item in ofertas["ofertas"])
+
+
+@pytest.mark.parametrize("producto_id", DATOS_PRODUCTO)
+@pytest.mark.parametrize("error", ["extra", "faltante", "cruzado"])
+def test_rechaza_campos_extra_faltantes_o_de_otro_ramo(client, producto_id, error) -> None:
+    datos = dict(DATOS_PRODUCTO[producto_id])
+    if error == "extra":
+        datos["campoAjeno"] = "no"
+    elif error == "faltante":
+        datos.pop(next(iter(datos)))
+    else:
+        otro_producto = "life" if producto_id != "life" else "automotive"
+        datos = DATOS_PRODUCTO[otro_producto]
+    respuesta = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=nueva_solicitud(producto_id=producto_id, datos_producto=datos),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert respuesta.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("producto_id", "cambios"),
+    [
+        ("parametric", {"coverageType": ""}),
+        ("parametric", {"coverageType": "baggage"}),
+        ("parametric", {"airline": "   "}),
+        ("parametric", {"flightNumber": "AV-123"}),
+        ("parametric", {"flightDate": "2026-02-30"}),
+        ("parametric", {"flightDate": date.today().isoformat()}),
+        ("parametric", {"flightDate": "2020-01-01"}),
+        ("parametric-weather", {"location": " \t "}),
+        ("parametric-weather", {"location": "x" * 121}),
+        ("parametric-weather", {"weatherEvent": "Heavy-Rain"}),
+        ("parametric-weather", {"startDate": "2026-02-30"}),
+        ("parametric-weather", {"endDate": "2026-2-3"}),
+        ("parametric-weather", {"startDate": date.today().isoformat()}),
+        ("parametric-weather", {"endDate": date.today().isoformat()}),
+        ("parametric-weather", {"endDate": (date.today() + timedelta(days=367)).isoformat()}),
+        ("parametric-weather", {"insuredAmount": "0"}),
+        ("parametric-weather", {"insuredAmount": "-1"}),
+        ("parametric-weather", {"insuredAmount": "1.5"}),
+        ("parametric-weather", {"insuredAmount": "01"}),
+        ("parametric-weather", {"insuredAmount": "1e3"}),
+        ("parametric-weather", {"insuredAmount": "1000000001"}),
+        ("parametric-weather", {"insuredAmount": "9" * 5000}),
+        ("parametric-weather", {"insuredAmount": 1000}),
+        ("parametric-weather", {"airline": "No aplica"}),
+    ],
+)
+def test_rechaza_variantes_invalidas_de_vuelo_y_clima(client, producto_id, cambios) -> None:
+    respuesta = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=nueva_solicitud(
+            producto_id=producto_id, datos_producto={**DATOS_PRODUCTO[producto_id], **cambios}
+        ),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert respuesta.status_code == 400
+
+
+@pytest.mark.parametrize("monto", ["1", "1000000000"])
+def test_acepta_limites_de_monto_y_periodo_climatico(client, monto) -> None:
+    respuesta = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=nueva_solicitud(
+            producto_id="parametric-weather",
+            datos_producto={
+                **DATOS_PRODUCTO["parametric-weather"],
+                "location": "x" * 120,
+                "insuredAmount": monto,
+                "endDate": (date.today() + timedelta(days=366)).isoformat(),
+            },
+        ),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert respuesta.status_code == 201
+
+
+def test_rechaza_productos_desconocidos_sin_fallback_automotriz(client) -> None:
+    respuesta = client.post(
+        "/v1/solicitudes-cotizacion",
+        json=nueva_solicitud(producto_id="desconocido", datos_producto={"vehiclePlate": "ABC123"}),
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert respuesta.status_code == 400

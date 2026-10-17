@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
@@ -53,9 +54,14 @@ class RegistrarSolicitud:
             raise ReglaDeNegocioError("El seguro seleccionado no está disponible.")
 
         ahora = self._reloj()
+        suma_asegurada = (
+            Decimal(comando.datos_producto["insuredAmount"])
+            if producto.producto_id == "parametric-weather"
+            else producto.suma_asegurada
+        )
         cobertura = CoberturaCotizada(
             cobertura_id=producto.cobertura_id,
-            suma_asegurada=Dinero(producto.suma_asegurada, "COP"),
+            suma_asegurada=Dinero(suma_asegurada, "COP"),
             deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
