@@ -9,12 +9,7 @@ ROOT = Path("/var/lib/jenkins")
 DEST = Path("/opt/jenkins-backend")
 
 
-def main() -> None:
-    scanner = (ROOT / "init.groovy.d/09-web-comment-trigger.groovy").read_text()
-    policy = Path("/opt/jenkins-web/comment-policy.groovy").read_text()
-    expected = "4279459c80505dcf0aa68f33248c8c67907e04518dfb859bfbc94f49ba7cd00e"
-    if hashlib.sha256(scanner.encode()).hexdigest() != expected:
-        raise RuntimeError("Web scanner differs from verified template; inspect before adapting")
+def prepare_files(scanner: str, policy: str) -> tuple[str, str]:
     substitutions = {
         "JazminCorAndes": "Migue765",
         "solventa-web-pf2": "backend-solventa",
@@ -29,8 +24,33 @@ def main() -> None:
     }
     for old, new in substitutions.items():
         scanner = scanner.replace(old, new)
+    guard = "if (!policy.canSchedule(job.isInQueue(), job.isBuilding())) return"
+    if guard not in scanner:
+        anchor = "def branch = project.getProjectFactory().getBranch(job)"
+        if scanner.count(anchor) != 1:
+            raise RuntimeError("Expected one scheduling point; inspect before adapting")
+        scanner = scanner.replace(anchor, guard + "\n                " + anchor)
+    if "static boolean canSchedule(" not in policy:
+        policy = policy.replace(
+            "class SolventaWebCommentPolicy {",
+            "class SolventaWebCommentPolicy {\n"
+            "    static boolean canSchedule(boolean queued, boolean building) {\n"
+            "        !queued && !building\n    }\n",
+        )
     policy = policy.replace("SolventaWebCommentPolicy", "SolventaBackendCommentPolicy")
     policy = policy.replace("['develop', 'master']", "['develop', 'main']")
+    if "static boolean canSchedule(" not in policy:
+        raise RuntimeError("Expected queue policy; inspect before adapting")
+    return scanner, policy
+
+
+def main() -> None:
+    scanner = (ROOT / "init.groovy.d/09-web-comment-trigger.groovy").read_text()
+    policy = Path("/opt/jenkins-web/comment-policy.groovy").read_text()
+    expected = "812e1fe51c8ede5430694815ba7201c99cfcf94e15ff380dafd8d8d6c2e4e267"
+    if hashlib.sha256(scanner.encode()).hexdigest() != expected:
+        raise RuntimeError("Web scanner differs from verified template; inspect before adapting")
+    scanner, policy = prepare_files(scanner, policy)
     config_path = ROOT / "backend-comment-trigger.json"
     config = {
         "enabled": False,
