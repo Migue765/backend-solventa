@@ -7,6 +7,7 @@ from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
+from cotizacion.domain.suscripcion import Suscripcion
 from cotizacion.domain.tarifa import PerfilRiesgo, ReglaTarifa
 
 
@@ -30,6 +31,16 @@ class SeleccionOfertaRepository(Protocol):
     def guardar_seleccion(self, seleccion: SeleccionOferta) -> None: ...
 
     def obtener_seleccion(self, solicitud_id: str) -> SeleccionOferta | None: ...
+
+
+class SuscripcionRepository(Protocol):
+    def guardar_suscripcion(self, suscripcion: Suscripcion) -> None: ...
+
+    def obtener_suscripcion(self, solicitud_id: str) -> Suscripcion | None: ...
+
+    def buscar_suscripcion_por_idempotencia(
+        self, cliente_id: UUID, idempotency_key: UUID
+    ) -> Suscripcion | None: ...
 
 
 class PerfilRiesgoGateway(Protocol):

@@ -175,7 +175,7 @@ no se migran ni revalorizan decisiones ya registradas.
 - La **regla de tarifa** (`tasa`, `factorPerfil`) es versionada y tiene vigencia (`reglas_tarifa`).
   Se aplica la regla vigente del producto al momento del cálculo; sin regla vigente se rechaza.
   La migración `0003` siembra `tarifa-2026.1` para el seguro automotriz.
-  `0005` agrega los otros seis ramos iniciales y `0006` la tarifa simulada climática.
+  `0005` agrega los otros seis ramos iniciales y `clima_v1` la tarifa simulada climática.
   Las reglas históricas se conservan; las nuevas tienen una fecha de inicio posterior.
 - El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil`. Mientras no exista el contexto de
   Perfilamiento se usa `ProveedorPerfilSimulado` (score fijo `COTIZACION_PERFIL_SCORE_SIMULADO`).
@@ -208,9 +208,16 @@ inmutable en `instantaneas_decision` (entradas, perfil, regla y resultado con su
 `InstantaneaDecisionRegistrada` en `outbox_eventos` pendiente de publicar. Las tablas están definidas en `infrastructure/persistence/models.py` y versionadas con
 Alembic.
 
-Las revisiones `0006` (clima) y `academico_v1` conservan su padre `0005` y sus identidades
-originales. La revisión vacía de unión `clima_academico` tiene ambas como padres:
-`alembic upgrade head` aplica las que falten sin reescribir migraciones ya aplicadas.
+Las revisiones `clima_v1` y `academico_v1` conservan su padre `0005`.
+La revisión vacía `clima_academico` une ambas; `clima_suscripciones` une ese resultado
+con `0006`, la revisión de suscripciones integrada en `develop`, que permanece intacta.
+`alembic upgrade head` aplica las que falten y deja una sola cabeza.
+La revisión climática de este PR cambia su identificador anterior `0006` a `clima_v1`
+para evitar la colisión con suscripciones, sin cambiar su tarifa.
+Una base previa de este PR que todavía registre `0006` debe revisar su historial antes
+de actualizar: ese identificador ahora corresponde a suscripciones y no debe
+reinterpretarse automáticamente como clima. Respaldar y verificar esquema y reglas
+antes de ajustar un historial climático anterior.
 Se conservan las ocho reglas `tarifa-2026.1` y las siete reglas `academico-v1`,
 además de las primas e instantáneas históricas.
 La columna histórica `selecciones_oferta.prima_mensual` se conserva por compatibilidad física:

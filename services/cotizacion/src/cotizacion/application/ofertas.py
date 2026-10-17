@@ -51,13 +51,18 @@ class GestionarOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         instantanea = solicitud.cotizacion.instantanea
         detalle = instantanea.contenido.get("tarificacion", {}) if instantanea else {}
         if instantanea is not None and (
             instantanea.regla_version == VERSION_ACADEMICA
             or detalle.get("modelo") == VERSION_CLIMATICA
         ):
-            return _ofertas_calculadas(solicitud, self._reloj())
+            return _ofertas_calculadas(
+                solicitud,
+                self._reloj(),
+                seleccion.oferta_id if seleccion else None,
+            )
         perfil_riesgo = self._perfiles_riesgo.consultar(
             solicitud.tipo_documento, solicitud.identificacion
         )
@@ -70,6 +75,7 @@ class GestionarOfertas:
             perfil_riesgo.factor_prima,
             perfil_riesgo.tarifa_aplicada,
             solicitud.datos_producto,
+            seleccion.oferta_id if seleccion else None,
         )
 
     def seleccionar(
@@ -87,6 +93,10 @@ class GestionarOfertas:
             if existente.request_fingerprint != fingerprint:
                 raise ConflictoIdempotenciaError()
             return existente
+        if existente:
+            if existente.oferta_id == oferta_id and existente.version == version:
+                return existente
+            raise OfertaNoDisponibleError()
 
         oferta = next(
             (
@@ -130,7 +140,11 @@ class GestionarOfertas:
         return seleccion
 
 
-def _ofertas_calculadas(solicitud: SolicitudCotizacion, ahora: datetime) -> ResultadoOfertas:
+def _ofertas_calculadas(
+    solicitud: SolicitudCotizacion,
+    ahora: datetime,
+    oferta_aceptada_id: UUID | None,
+) -> ResultadoOfertas:
     cotizacion = solicitud.cotizacion
     instantanea = cotizacion.instantanea
     assert instantanea is not None
@@ -162,6 +176,7 @@ def _ofertas_calculadas(solicitud: SolicitudCotizacion, ahora: datetime) -> Resu
                 estado,
                 vigente_hasta,
                 Decimal("1"),
+                oferta_aceptada_id,
             ),
             periodicidad=periodicidad,
         )
@@ -189,6 +204,7 @@ def _generar_ofertas(
     factor_prima: Decimal,
     tarifa_aplicada: str,
     datos_producto: dict[str, str],
+    oferta_aceptada_id: UUID | None,
 ) -> ResultadoOfertas:
     if vigente_hasta is None:
         raise OfertaNoDisponibleError()
@@ -204,6 +220,7 @@ def _generar_ofertas(
             estado_vigente,
             vigente_hasta,
             factor_prima,
+            oferta_aceptada_id,
         )
         for indice, plantilla in enumerate(_plantillas_producto(producto_id, datos_producto))
     )
@@ -224,9 +241,11 @@ def _oferta(
     estado: EstadoOferta,
     vigente_hasta: datetime,
     factor_prima: Decimal,
+    oferta_aceptada_id: UUID | None = None,
 ) -> Oferta:
+    oferta_id = uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{key}")
     return Oferta(
-        oferta_id=uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{key}"),
+        oferta_id=oferta_id,
         version=1,
         nombre=plantilla.nombre,
         descripcion=plantilla.descripcion,
@@ -239,7 +258,7 @@ def _oferta(
         condiciones=plantilla.condiciones,
         beneficios_adicionales=plantilla.beneficios,
         recomendada=recomendada,
-        estado=estado,
+        estado=EstadoOferta.ACEPTADA if oferta_id == oferta_aceptada_id else estado,
         vigente_hasta=vigente_hasta,
     )
 

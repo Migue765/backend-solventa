@@ -1,6 +1,6 @@
 """Agregar la tarifa simulada del seguro climatico.
 
-Revision ID: 0006
+Revision ID: clima_v1
 Revises: 0005
 """
 
@@ -11,7 +11,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0006"
+revision = "clima_v1"
 down_revision = "0005"
 branch_labels = None
 depends_on = None

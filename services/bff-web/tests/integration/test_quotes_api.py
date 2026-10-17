@@ -200,3 +200,32 @@ def test_rejects_cross_product_data_and_client_identity(
     )
     assert response.status_code == 400
     assert quotes.record is None
+
+
+def test_authenticated_client_starts_and_reads_subscription(
+    app: Flask, token: str, quotes: StubQuoteGateway
+) -> None:
+    client = app.test_client()
+    request_id = "AQT-2026-ABCDEF1234"
+    created = client.post(
+        f"/v1/solicitudes-cotizacion/{request_id}/suscripcion",
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+    found = client.get(
+        f"/v1/solicitudes-cotizacion/{request_id}/suscripcion",
+        headers=bearer(token),
+    )
+
+    assert created.status_code == 201
+    assert body(created)["estado"] == "aprobada"
+    assert body(created)["decision"]["reglaVersion"] == "suscripcion-automatica-2026.1"
+    assert body(created)["saga"]["estado"] == "pago_pendiente"
+    assert found.get_json() == created.get_json()
+    assert quotes.user_ids == [USER.user_id, USER.user_id]
+
+
+def test_subscription_requires_authentication_and_idempotency_key(app: Flask, token: str) -> None:
+    url = "/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234/suscripcion"
+
+    assert app.test_client().post(url).status_code == 401
+    assert app.test_client().post(url, headers=bearer(token)).status_code == 400

@@ -19,12 +19,15 @@ from bff_web.domain.quote_errors import (
 )
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    IssuanceSaga,
     Money,
     Offer,
     OfferSelection,
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    Subscription,
+    SubscriptionDecision,
     TravelDestination,
 )
 
@@ -122,6 +125,22 @@ class HttpQuoteGateway(QuoteGateway):
             body={"ofertaId": str(offer_id), "version": version},
         )
         return _safe_selection_from_json(payload)
+
+    def start_subscription(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID
+    ) -> Subscription:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/suscripcion?{query}",
+            method="POST",
+            headers={"Idempotency-Key": str(idempotency_key)},
+        )
+        return _safe_subscription_from_json(payload)
+
+    def get_subscription(self, user_id: UUID, request_id: str) -> Subscription:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(f"/v1/solicitudes-cotizacion/{request_id}/suscripcion?{query}")
+        return _safe_subscription_from_json(payload)
 
     def _request_json(
         self,
@@ -231,6 +250,35 @@ def _selection_from_json(payload: dict[str, Any]) -> OfferSelection:
 def _safe_selection_from_json(payload: dict[str, Any]) -> OfferSelection:
     try:
         return _selection_from_json(payload)
+    except (KeyError, TypeError, ValueError) as error:
+        raise QuoteServiceUnavailableError() from error
+
+
+def _safe_subscription_from_json(payload: dict[str, Any]) -> Subscription:
+    try:
+        decision = payload["decision"]
+        saga = payload["saga"]
+        return Subscription(
+            subscription_id=UUID(payload["id"]),
+            request_id=payload["solicitudId"],
+            offer_id=UUID(payload["ofertaId"]),
+            offer_version=payload["ofertaVersion"],
+            status=payload["estado"],
+            rule_version=payload["reglaVersion"],
+            created_at=_datetime(payload["creadaEn"]),
+            updated_at=_datetime(payload["actualizadaEn"]),
+            decision=SubscriptionDecision(
+                result=decision["resultado"],
+                rule_version=decision["reglaVersion"],
+                decision_hash=decision["hashDecision"],
+                decided_at=_datetime(decision["decididaEn"]),
+            ),
+            saga=IssuanceSaga(
+                status=saga["estado"],
+                version=saga["version"],
+                updated_at=_datetime(saga["actualizadaEn"]),
+            ),
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise QuoteServiceUnavailableError() from error
 

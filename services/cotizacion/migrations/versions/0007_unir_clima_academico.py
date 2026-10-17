@@ -1,11 +1,11 @@
 """Unir las revisiones climatica y academica sin alterar datos.
 
 Revision ID: clima_academico
-Revises: 0006, academico_v1
+Revises: clima_v1, academico_v1
 """
 
 revision = "clima_academico"
-down_revision = ("0006", "academico_v1")
+down_revision = ("clima_v1", "academico_v1")
 branch_labels = None
 depends_on = None
 
