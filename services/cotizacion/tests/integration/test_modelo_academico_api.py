@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 import pytest
 from cotizacion.app import create_app
 from cotizacion.config import Config
+from cotizacion.domain.perfil_riesgo import NivelRiesgo
+from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.tarifa import PerfilRiesgo
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
@@ -250,3 +252,105 @@ def test_campos_declarativos_no_anaden_factores_de_precio(client, producto, camp
     assert [p["prima"] for p in ofertas(client, payload, primera)["ofertas"]] == [
         p["prima"] for p in ofertas(client, otro_payload, segunda)["ofertas"]
     ]
+
+
+@pytest.mark.parametrize("cobertura", ["delay-cancellation", "missed-connection", "comprehensive"])
+def test_coberturas_de_vuelo_preservan_los_precios_academicos(client, cobertura):
+    payload, registro = registrar(
+        client, "parametric", {**DATOS_PRODUCTO["parametric"], "coverageType": cobertura}
+    )
+    planes = ofertas(client, payload, registro)["ofertas"]
+    assert [plan["prima"]["monto"] for plan in planes] == ["16500.00", "18975.00", "21450.00"]
+    assert all(
+        plan["periodicidad"] == "por_vuelo" and plan["primaMensual"] is None for plan in planes
+    )
+    assert all(
+        ("Pérdida de conexión" in " ".join(plan["coberturas"]))
+        == (cobertura != "delay-cancellation")
+        for plan in planes
+    )
+
+
+@pytest.mark.parametrize(
+    ("evento", "importes"),
+    [
+        ("heavy-rain", ["30000.00", "25500.00", "21000.00"]),
+        ("drought", ["36000.00", "30600.00", "25200.00"]),
+    ],
+)
+def test_clima_conserva_calculos_y_guarda_planes_por_periodo(
+    client, database_url, evento, importes
+):
+    datos = {**DATOS_PRODUCTO["parametric-weather"], "weatherEvent": evento}
+    payload, registro = registrar(client, "parametric-weather", datos)
+    resultado = ofertas(client, payload, registro)
+    planes = resultado["ofertas"]
+    assert [plan["prima"]["monto"] for plan in planes] == importes
+    assert all(
+        plan["periodicidad"] == "por_periodo" and plan["primaMensual"] is None for plan in planes
+    )
+    assert registro["cotizacion"]["primaEstimada"]["monto"] == "157500.00"
+    with crear_sesiones(database_url)() as sesion:
+        snapshot = sesion.get(
+            InstantaneaDecisionModel, UUID(registro["cotizacion"]["cotizacionId"])
+        )
+        assert snapshot.regla_version == "tarifa-2026.1"
+        detalle = snapshot.contenido["tarificacion"]
+        assert detalle["modelo"] == "clima-v1"
+        assert detalle["datosProducto"] == datos
+        assert detalle["duracion"] == 30
+        assert detalle["factorRiesgoOfertas"] == "1.00"
+        assert [plan["prima"] for plan in detalle["planes"]] == importes
+
+    otro_proceso = create_app(
+        Config(database_url=database_url, perfil_score_simulado=Decimal("1"))
+    ).test_client()
+    with crear_sesiones(database_url).begin() as sesion:
+        sesion.execute(update(ReglaTarifaModel).values(tasa=Decimal("0.9")))
+    gestion = otro_proceso.application.extensions["gestionar_ofertas"]
+    with patch.object(
+        gestion._perfiles_riesgo, "consultar", side_effect=AssertionError("No recalcular")
+    ):
+        with patch(
+            "cotizacion.application.ofertas.planes_climaticos",
+            side_effect=AssertionError("No recalcular"),
+        ):
+            assert ofertas(otro_proceso, payload, registro) == resultado
+            plan = planes[1]
+            url = f"/v1/solicitudes-cotizacion/{registro['id']}/seleccion"
+            query = {"clienteId": payload["clienteId"]}
+            seleccion = otro_proceso.put(
+                url,
+                query_string=query,
+                headers={"Idempotency-Key": str(uuid4())},
+                json={"ofertaId": plan["id"], "version": plan["version"]},
+            )
+            assert seleccion.status_code == 200
+            assert seleccion.get_json()["prima"] == plan["prima"]
+            assert seleccion.get_json()["periodicidad"] == "por_periodo"
+            assert seleccion.get_json()["primaMensual"] is None
+            assert otro_proceso.get(url, query_string=query).get_json() == seleccion.get_json()
+
+
+@pytest.mark.parametrize(
+    ("monto", "esperadas"),
+    [
+        ("10000000", ["37500.00", "31875.00", "26250.00"]),
+        ("10000004", ["37500.02", "31875.01", "26250.01"]),
+    ],
+)
+def test_clima_conserva_factor_legado_en_vez_de_nuevos_factores_academicos(
+    client, monto, esperadas
+):
+    registrar_solicitud = client.application.extensions["registrar_solicitud"]
+    perfil = PerfilRiesgoOferta(NivelRiesgo.C, Decimal("1.25"))
+    with patch.object(registrar_solicitud._perfiles_riesgo, "consultar", return_value=perfil):
+        payload, registro = registrar(
+            client,
+            "parametric-weather",
+            {**DATOS_PRODUCTO["parametric-weather"], "insuredAmount": monto},
+        )
+    assert [
+        plan["prima"]["monto"] for plan in ofertas(client, payload, registro)["ofertas"]
+    ] == esperadas
+    assert ofertas(client, payload, registro)["tasaAplicada"] == "Riesgo C"

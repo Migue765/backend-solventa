@@ -28,8 +28,11 @@ tests/
 | GET    | `/ping`            | Health check                   |
 | POST   | `/v1/cotizaciones` | Crea y calcula una cotización  |
 | GET    | `/v1/productos-seguro` | Lista el catálogo de seguros |
+| GET    | `/v1/destinos-viaje` | Lista países de destino admitidos |
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
+| GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
 
 Ejemplo:
 
@@ -56,6 +59,55 @@ Mismas entradas y misma versión de reglas producen la misma prima y el mismo `h
 La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID. La misma
 clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
 produce `409`.
+
+## Solicitudes multirramo
+
+El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe exclusivamente
+`{productoId, datosProducto}` y toma la identidad y el contacto del usuario autenticado mediante
+`Authorization: Bearer`. El servicio interno recibe además `clienteId`, `tipoCliente`,
+`tipoDocumento`, `identificacion`, `correo` y `telefono`; sus consultas usan `clienteId`.
+No se admiten campos adicionales ni datos de otro producto:
+
+| productoId | datosProducto (todos sus valores son strings) |
+|------------|----------------------------------------------|
+| `automotive` | `vehiclePlate` |
+| `travel` | `destinationCountryCode`, `departureDate`, `returnDate` |
+| `life` | `birthDate` |
+| `device-protection` | `deviceType`, `brandModel`, `purchaseValue` |
+| `parametric` | `airline`, `flightNumber`, `flightDate`, opcional `coverageType` |
+| `parametric-weather` | `location`, `weatherEvent`, `startDate`, `endDate`, `insuredAmount` |
+| `payment-protection` | `creditType`, `monthlyPayment` |
+| `mortgage-life` | `birthDate`, `mortgageBalance` |
+
+`coverageType` admite `delay-cancellation` (predeterminado si se omite), `missed-connection`
+y `comprehensive`. Las solicitudes antiguas conservan sus datos sin añadir este campo.
+`flightDate` debe ser posterior a hoy al crear. Las ofertas para conexión siempre incluyen
+pérdida de conexión por afectación del vuelo previo atribuible a la aerolínea, sujeta a las
+condiciones del plan; no cubren llegar tarde al aeropuerto por responsabilidad del pasajero.
+
+Para clima, `location` es municipio y departamento en texto no vacío de hasta 120 caracteres
+(sin DANE ni catálogo externo). `weatherEvent` admite `heavy-rain` o `drought`.
+`startDate` y `endDate` son fechas reales `YYYY-MM-DD`, posteriores a hoy al crear, en orden,
+con máximo 366 días inclusive. `insuredAmount` es un entero positivo sin separadores,
+entre `"1"` y `"1000000000"` COP. La suma asegurada declarada se usa en la cotización
+persistida y las ofertas muestran el evento, monto, ubicación y periodo declarados.
+Las fechas pasadas no impiden consultar registros históricos.
+
+Todas las ofertas y sus primas son **simuladas**, no propuestas vinculantes de aseguradoras.
+Los importes de respuesta conservan `{monto, moneda}` con moneda `COP` en `prima`;
+`primaMensual` es `null` para planes por viaje, vuelo o período asegurado.
+En clima, la prima ilustrativa por periodo es `max(1000, monto * tasaDiaria * días * factorPlan)`
+por el factor de riesgo simulado: tasa diaria `0.0001` para lluvia o `0.00012` para sequía,
+y factores de plan `1`, `0.85` y `0.70`. Este cálculo de comparación es independiente
+del cálculo genérico versionado de la cotización base descrito abajo. Se conserva
+la fórmula previa del clima, sin atribuirle una tasa del modelo académico.
+Sus tres planes y el factor de riesgo de comparación se guardan al crear en
+`tarificacion.modelo = clima-v1`; las lecturas y selecciones usan esos importes
+guardados aunque cambien después el perfil o las reglas. La cotización base sigue
+aplicando la regla climática `tarifa-2026.1`, sin cambiar su importe ni fórmula.
+El disparador, umbral y compensación quedan sujetos a las condiciones del plan.
+No se implementan emisión, monitoreo meteorológico, consultas a aerolíneas, siniestros
+ni pagos automáticos o reales.
 
 ## Tarificación
 
@@ -86,6 +138,8 @@ impone un mínimo adicional al valor declarado del dispositivo.
 Los factores de paquetes de beneficios son **Esencial 1.00**, **Integral 1.15** y **Premium 1.30**.
 Los tres comparten la base del producto; no representan los límites/deducibles de las antiguas
 plantillas comerciales simuladas. La prima estimada de la cotización es la del plan Esencial.
+Las modalidades de `parametric.coverageType` cambian las coberturas y condiciones,
+no la tasa ni los factores de los planes académicos.
 Ejemplo: saldo hipotecario `180000000`, score `0.50`: primas `99000`, `113850`, `128700` COP/mes.
 Con saldo `90000000`, el plan Esencial cuesta `49500` COP/mes.
 
@@ -120,6 +174,8 @@ no se migran ni revalorizan decisiones ya registradas.
 
 - La **regla de tarifa** (`tasa`, `factorPerfil`) es versionada y tiene vigencia (`reglas_tarifa`).
   Se aplica la regla vigente del producto al momento del cálculo; sin regla vigente se rechaza.
+  La migración `0003` siembra `tarifa-2026.1` para el seguro automotriz.
+  `0005` agrega los otros seis ramos iniciales y `clima_v1` la tarifa simulada climática.
   Las reglas históricas se conservan; las nuevas tienen una fecha de inicio posterior.
 - El **perfil de riesgo** lo entrega el puerto `ProveedorPerfil`. Mientras no exista el contexto de
   Perfilamiento se usa `ProveedorPerfilSimulado` (score fijo `COTIZACION_PERFIL_SCORE_SIMULADO`).
@@ -127,19 +183,21 @@ no se migran ni revalorizan decisiones ya registradas.
 - Las reglas se leen con una caché local de `COTIZACION_REGLAS_CACHE_SEGUNDOS` que nunca usa una
   regla que ya no esté vigente.
 
-Solo las ofertas legadas usan el adaptador determinista A/B/C; las académicas no lo consultan.
+Las ofertas legadas y la creación de planes climáticos usan el adaptador determinista A/B/C;
+las académicas no lo consultan. Clima guarda su factor en la instantánea y no vuelve
+a consultar ese adaptador al listar o seleccionar ofertas.
 
 ### Contrato de primas y compatibilidad
 
 Ofertas y GET/PUT de selección devuelven `prima: {monto, moneda}` y
-`periodicidad: mensual | por_viaje | por_vuelo`. `primaMensual` conserva el importe para
-mensualidades y es **null** para viaje/vuelo. El BFF web transmite ambos campos nuevos y
+`periodicidad: mensual | por_viaje | por_vuelo | por_periodo`. `primaMensual` conserva el importe para
+mensualidades y es **null** para viaje/vuelo/período asegurado. El BFF web transmite ambos campos nuevos y
 acepta respuestas legadas mensuales cuando faltan ambos.
 El POST/GET de solicitud incluye además `cotizacion` con prima estimada, coberturas y decisión.
 
 **La nulabilidad de `primaMensual` no es retrocompatible para consumidores que solo leen ese
 campo**: deben desplegarse con un consumidor que lea `prima` y etiquete según `periodicidad`.
-No mostrar el importe de un viaje/vuelo como mensualidad. La selección mantiene la petición
+No mostrar el importe de un viaje/vuelo/período como mensualidad. La selección mantiene la petición
 `{ofertaId, version}` y sus claves de idempotencia; su importe/periodicidad se conservan en BD.
 
 ## Base de datos
@@ -150,9 +208,18 @@ inmutable en `instantaneas_decision` (entradas, perfil, regla y resultado con su
 `InstantaneaDecisionRegistrada` en `outbox_eventos` pendiente de publicar. Las tablas están definidas en `infrastructure/persistence/models.py` y versionadas con
 Alembic.
 
-La revisión Alembic nueva es `academico_v1` (padre `0005`), con identidad distinta de otras
-ramas que también parten de `0005`. Al integrar en el futuro otra cabeza independiente se debe
-crear la correspondiente revisión de unión; este cambio no incorpora el PR de otros productos.
+Las revisiones `clima_v1` y `academico_v1` conservan su padre `0005`.
+La revisión vacía `clima_academico` une ambas; `clima_suscripciones` une ese resultado
+con `0006`, la revisión de suscripciones integrada en `develop`, que permanece intacta.
+`alembic upgrade head` aplica las que falten y deja una sola cabeza.
+La revisión climática de este PR cambia su identificador anterior `0006` a `clima_v1`
+para evitar la colisión con suscripciones, sin cambiar su tarifa.
+Una base previa de este PR que todavía registre `0006` debe revisar su historial antes
+de actualizar: ese identificador ahora corresponde a suscripciones y no debe
+reinterpretarse automáticamente como clima. Respaldar y verificar esquema y reglas
+antes de ajustar un historial climático anterior.
+Se conservan las ocho reglas `tarifa-2026.1` y las siete reglas `academico-v1`,
+además de las primas e instantáneas históricas.
 La columna histórica `selecciones_oferta.prima_mensual` se conserva por compatibilidad física:
 almacena el importe seleccionado y se interpreta junto a `periodicidad`.
 Su precisión se amplía a `Numeric(18,2)`. El downgrade elimina reglas nuevas y periodicidad,
@@ -187,6 +254,19 @@ alembic upgrade head
 flask --app cotizacion.app run
 pytest
 ```
+
+En PowerShell, desde la raíz del repositorio (entorno con dependencias instaladas):
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path services\cotizacion\src).Path
+$env:DATABASE_URL = "sqlite:///cotizacion-local.db"
+python -m alembic -c services\cotizacion\alembic.ini upgrade head
+python -m flask --app cotizacion.app run --host 127.0.0.1 --port 5000
+```
+
+Para integrar la web, ejecutar también identidad y BFF Web según sus README; configurar
+`QUOTE_SERVICE_URL=http://127.0.0.1:5000`. El servicio de cotización es interno:
+el navegador debe llamar al BFF, no enviar un `clienteId` elegido por el cliente.
 
 ## Contenedor
 

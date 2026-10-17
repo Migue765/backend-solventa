@@ -5,7 +5,9 @@ from datetime import date
 Validator = Callable[[str], bool]
 
 
-def validate_product_data(product_id: str, data: object) -> dict[str, str]:
+def validate_product_data(
+    product_id: str, data: object, *, for_creation: bool = True
+) -> dict[str, str]:
     if not isinstance(data, dict) or not all(
         isinstance(key, str) and isinstance(value, str) for key, value in data.items()
     ):
@@ -14,14 +16,27 @@ def validate_product_data(product_id: str, data: object) -> dict[str, str]:
     validators = _VALIDATORS.get(product_id)
     if validators is None:
         raise ValueError("The product does not support quote requests.")
-    if data.keys() != validators.keys():
+    optional = _OPTIONAL.get(product_id, {})
+    if not validators.keys() <= data.keys() <= validators.keys() | optional.keys():
         raise ValueError("datosProducto must contain exactly the required fields.")
-    if not all(validators[key](value) for key, value in data.items()):
+    allowed = validators | optional
+    if not all(allowed[key](value) for key, value in data.items()):
         raise ValueError("datosProducto contains invalid values.")
     if product_id == "travel" and date.fromisoformat(data["returnDate"]) < date.fromisoformat(
         data["departureDate"]
     ):
         raise ValueError("returnDate must be on or after departureDate.")
+    if (
+        for_creation
+        and product_id == "parametric"
+        and date.fromisoformat(data["flightDate"]) <= date.today()
+    ):
+        raise ValueError("flightDate debe ser posterior a hoy.")
+    if product_id == "parametric-weather":
+        start = date.fromisoformat(data["startDate"])
+        end = date.fromisoformat(data["endDate"])
+        if end < start or (end - start).days >= 366 or (for_creation and start <= date.today()):
+            raise ValueError("El periodo debe ser futuro, ordenado y de hasta 366 días inclusive.")
     return dict(data)
 
 
@@ -63,6 +78,15 @@ _VALIDATORS: dict[str, dict[str, Validator]] = {
         "flightNumber": _pattern(r"[A-Za-z0-9]{2,10}"),
         "flightDate": _iso_date,
     },
+    "parametric-weather": {
+        "location": _text(120),
+        "weatherEvent": lambda value: value in {"heavy-rain", "drought"},
+        "startDate": _iso_date,
+        "endDate": _iso_date,
+        "insuredAmount": lambda value: (
+            len(value) <= 10 and _POSITIVE_INTEGER(value) and int(value) <= 1_000_000_000
+        ),
+    },
     "payment-protection": {
         "creditType": _text(60),
         "monthlyPayment": _POSITIVE_INTEGER,
@@ -70,5 +94,12 @@ _VALIDATORS: dict[str, dict[str, Validator]] = {
     "mortgage-life": {
         "birthDate": _iso_date,
         "mortgageBalance": _POSITIVE_INTEGER,
+    },
+}
+
+_OPTIONAL: dict[str, dict[str, Validator]] = {
+    "parametric": {
+        "coverageType": lambda value: value
+        in {"delay-cancellation", "missed-connection", "comprehensive"},
     },
 }
