@@ -17,6 +17,7 @@ from cotizacion.domain.errors import (
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
 )
+from cotizacion.domain.modelo_academico import VERSION_ACADEMICA
 from cotizacion.domain.ofertas import (
     EstadoOferta,
     Oferta,
@@ -24,6 +25,7 @@ from cotizacion.domain.ofertas import (
     SeleccionOferta,
 )
 from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.domain.solicitud import SolicitudCotizacion
 
 
 class GestionarOfertas:
@@ -43,10 +45,17 @@ class GestionarOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        seleccion = self._selecciones.obtener_seleccion(solicitud_id)
+        instantanea = solicitud.cotizacion.instantanea
+        if instantanea is not None and instantanea.regla_version == VERSION_ACADEMICA:
+            return _ofertas_calculadas(
+                solicitud,
+                self._reloj(),
+                seleccion.oferta_id if seleccion else None,
+            )
         perfil_riesgo = self._perfiles_riesgo.consultar(
             solicitud.tipo_documento, solicitud.identificacion
         )
-        seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         return _generar_ofertas(
             solicitud_id,
             _producto_publico(solicitud.cotizacion.producto_id),
@@ -106,6 +115,7 @@ class GestionarOfertas:
             seleccionada_en=self._reloj(),
             idempotency_key=idempotency_key,
             request_fingerprint=fingerprint,
+            periodicidad=oferta.periodicidad,
         )
         self._selecciones.guardar_seleccion(seleccion)
         return seleccion
@@ -117,6 +127,71 @@ class GestionarOfertas:
         if seleccion is None:
             raise SeleccionNoEncontradaError()
         return seleccion
+
+
+def _ofertas_calculadas(
+    solicitud: SolicitudCotizacion,
+    ahora: datetime,
+    oferta_aceptada_id: UUID | None,
+) -> ResultadoOfertas:
+    cotizacion = solicitud.cotizacion
+    instantanea = cotizacion.instantanea
+    assert instantanea is not None
+    detalle = instantanea.contenido.get("tarificacion")
+    if detalle is None or not detalle.get("planes") or cotizacion.valida_hasta is None:
+        raise OfertaNoDisponibleError()
+    vigente_hasta = cotizacion.valida_hasta
+    estado = EstadoOferta.DISPONIBLE if vigente_hasta > ahora else EstadoOferta.VENCIDA
+    periodicidad = detalle["periodicidad"]
+    vigencia = {
+        "mensual": "Mensual",
+        "por_viaje": f"Por viaje ({detalle['duracion']} días)",
+        "por_vuelo": "Por vuelo",
+    }[periodicidad]
+    ofertas = tuple(
+        Oferta(
+            oferta_id=uuid5(
+                NAMESPACE_URL,
+                f"solventa:{solicitud.solicitud_id}:{VERSION_ACADEMICA}:{plan['codigo']}",
+            ),
+            version=1,
+            nombre=plan["nombre"],
+            descripcion="Paquete de beneficios calculado para el producto seleccionado.",
+            prima_mensual=Dinero(Decimal(plan["prima"]), "COP"),
+            cobertura_principal=f"Base asegurada: ${detalle['baseAsegurada']} COP",
+            deducible=f"${cotizacion.coberturas[0].deducible.monto} COP por evento",
+            vigencia=vigencia,
+            responsabilidad_civil="No aplica",
+            coberturas=("Cobertura del producto sobre la base asegurada declarada.",),
+            condiciones=("El deducible es una condición y no descuenta la base de cálculo.",),
+            beneficios_adicionales=(
+                f"Paquete {plan['codigo']}; factor académico {plan['factor']}.",
+            ),
+            recomendada=indice == 0,
+            estado=(
+                EstadoOferta.ACEPTADA
+                if uuid5(
+                    NAMESPACE_URL,
+                    f"solventa:{solicitud.solicitud_id}:{VERSION_ACADEMICA}:{plan['codigo']}",
+                )
+                == oferta_aceptada_id
+                else estado
+            ),
+            vigente_hasta=vigente_hasta,
+            periodicidad=periodicidad,
+        )
+        for indice, plan in enumerate(detalle["planes"])
+    )
+    return ResultadoOfertas(
+        solicitud_id=solicitud.solicitud_id,
+        calculada_en=instantanea.creada_en,
+        vigente_hasta=vigente_hasta,
+        tasa_aplicada=(
+            f"Modelo académico v1; tasa {instantanea.contenido['regla']['tasa']}; "
+            f"perfil {instantanea.perfil_modelo_version}"
+        ),
+        ofertas=ofertas,
+    )
 
 
 def _generar_ofertas(

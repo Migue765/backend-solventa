@@ -1,7 +1,7 @@
 """agregar suscripciones y saga de emision
 
 Revision ID: 0006
-Revises: 0005
+Revises: academico_v1
 Create Date: 2026-10-16
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0006"
-down_revision = "0005"
+down_revision = "academico_v1"
 branch_labels = None
 depends_on = None
 

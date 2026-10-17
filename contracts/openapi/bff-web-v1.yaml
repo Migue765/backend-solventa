@@ -677,7 +677,7 @@ components:
         payment-protection: creditType y monthlyPayment;
         mortgage-life: birthDate y mortgageBalance.
         Las fechas usan YYYY-MM-DD; los montos, saldos, cuotas y cantidad de viajeros
-        son enteros positivos representados como string.
+        son enteros positivos representados como string; los importes admiten hasta 16 dígitos.
       minProperties: 1
       additionalProperties:
         type: string
@@ -746,6 +746,8 @@ components:
         - nombre
         - descripcion
         - primaMensual
+        - prima
+        - periodicidad
         - coberturaPrincipal
         - deducible
         - vigencia
@@ -770,7 +772,15 @@ components:
           type: string
           maxLength: 500
         primaMensual:
+          description: Solo para periodicidad mensual; null para viaje o vuelo.
+          oneOf:
+            - $ref: "#/components/schemas/Dinero"
+            - type: "null"
+        prima:
           $ref: "#/components/schemas/Dinero"
+        periodicidad:
+          type: string
+          enum: [mensual, por_viaje, por_vuelo]
         coberturaPrincipal:
           type: string
           maxLength: 250
@@ -839,14 +849,22 @@ components:
       allOf:
         - $ref: "#/components/schemas/NuevaSeleccionOferta"
         - type: object
-          required: [solicitudId, nombreOferta, primaMensual, seleccionadaEn]
+          required: [solicitudId, nombreOferta, primaMensual, prima, periodicidad, seleccionadaEn]
           properties:
             solicitudId:
               type: string
             nombreOferta:
               type: string
             primaMensual:
+              description: Solo para periodicidad mensual; null para viaje o vuelo.
+              oneOf:
+                - $ref: "#/components/schemas/Dinero"
+                - type: "null"
+            prima:
               $ref: "#/components/schemas/Dinero"
+            periodicidad:
+              type: string
+              enum: [mensual, por_viaje, por_vuelo]
             seleccionadaEn:
               type: string
               format: date-time

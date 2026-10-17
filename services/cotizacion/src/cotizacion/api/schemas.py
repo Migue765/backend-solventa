@@ -147,6 +147,7 @@ def solicitud_a_json(solicitud: SolicitudCotizacion) -> dict[str, object]:
         "telefono": solicitud.telefono,
         "estado": "recibida",
         "creadaEn": solicitud.creada_en.isoformat().replace("+00:00", "Z"),
+        "cotizacion": cotizacion_a_json(solicitud.cotizacion),
     }
 
 
@@ -166,7 +167,11 @@ def seleccion_oferta_a_json(seleccion: SeleccionOferta) -> dict[str, object]:
         "ofertaId": str(seleccion.oferta_id),
         "version": seleccion.version,
         "nombreOferta": seleccion.nombre_oferta,
-        "primaMensual": _dinero(seleccion.prima_mensual),
+        "prima": _dinero(seleccion.prima_mensual),
+        "periodicidad": seleccion.periodicidad,
+        "primaMensual": (
+            _dinero(seleccion.prima_mensual) if seleccion.periodicidad == "mensual" else None
+        ),
         "seleccionadaEn": _fecha(seleccion.seleccionada_en),
     }
 
@@ -238,7 +243,11 @@ def _oferta_a_json(oferta: Oferta) -> dict[str, object]:
         "version": oferta.version,
         "nombre": oferta.nombre,
         "descripcion": oferta.descripcion,
-        "primaMensual": _dinero(oferta.prima_mensual),
+        "prima": _dinero(oferta.prima_mensual),
+        "periodicidad": oferta.periodicidad,
+        "primaMensual": (
+            _dinero(oferta.prima_mensual) if oferta.periodicidad == "mensual" else None
+        ),
         "coberturaPrincipal": oferta.cobertura_principal,
         "deducible": oferta.deducible,
         "vigencia": oferta.vigencia,

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
+from cotizacion.domain.decision import InstantaneaDecision
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
 from cotizacion.domain.pago_emision import (
@@ -106,6 +107,7 @@ class RepositorioCotizacionesSqlAlchemy:
                     version=seleccion.version,
                     nombre_oferta=seleccion.nombre_oferta,
                     prima_mensual=seleccion.prima_mensual.monto,
+                    periodicidad=seleccion.periodicidad,
                     moneda=seleccion.prima_mensual.moneda,
                     seleccionada_en=seleccion.seleccionada_en,
                     idempotency_key=seleccion.idempotency_key,
@@ -135,6 +137,7 @@ class RepositorioCotizacionesSqlAlchemy:
                 seleccionada_en=seleccionada_en,
                 idempotency_key=modelo.idempotency_key,
                 request_fingerprint=modelo.request_fingerprint,
+                periodicidad=modelo.periodicidad,
             )
 
     def guardar_suscripcion(self, suscripcion: Suscripcion) -> None:
@@ -472,6 +475,8 @@ def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
     if valida_hasta.tzinfo is None:
         # Motores sin soporte de zona horaria (ej. SQLite) devuelven fechas naive en UTC.
         valida_hasta = valida_hasta.replace(tzinfo=timezone.utc)
+    instantanea = _instantanea_a_dominio(modelo.instantanea)
+    detalle = instantanea.contenido.get("tarificacion", {}) if instantanea else {}
     return Cotizacion(
         cotizacion_id=modelo.cotizacion_id,
         cliente_id=modelo.cliente_id,
@@ -479,15 +484,35 @@ def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
         estado=EstadoCotizacion(modelo.estado),
         prima_estimada=Dinero(modelo.prima_estimada, moneda),
         valida_hasta=valida_hasta,
+        instantanea=instantanea,
         coberturas=[
             CoberturaCotizada(
                 cobertura_id=c.cobertura_id,
                 suma_asegurada=Dinero(c.suma_asegurada, moneda),
                 deducible=Dinero(c.deducible, moneda),
                 prima=Dinero(c.prima, moneda),
+                deducible_descuenta_base=detalle.get("deducibleDescuentaBase", True),
             )
             for c in modelo.coberturas
         ],
+    )
+
+
+def _instantanea_a_dominio(modelo: InstantaneaDecisionModel | None) -> InstantaneaDecision | None:
+    if modelo is None:
+        return None
+    return InstantaneaDecision(
+        cotizacion_id=modelo.cotizacion_id,
+        regla_id=modelo.regla_id,
+        regla_version=modelo.regla_version,
+        perfil_id=modelo.perfil_id,
+        perfil_modelo_version=modelo.perfil_modelo_version,
+        hash_decision=modelo.hash_decision,
+        hash_contenido=modelo.hash_contenido,
+        contenido=modelo.contenido,
+        creada_en=(
+            modelo.creada_en if modelo.creada_en.tzinfo else modelo.creada_en.replace(tzinfo=UTC)
+        ),
     )
 
 
