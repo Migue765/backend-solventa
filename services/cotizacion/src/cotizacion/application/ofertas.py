@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from cotizacion.application.ports import (
@@ -169,9 +170,7 @@ def _ofertas_calculadas(
                     if detalle["modelo"] == VERSION_CLIMATICA
                     else f"{VERSION_ACADEMICA}:{plan['codigo']}"
                 ),
-                _plantilla_guardada(
-                    solicitud, plan["nombre"], plan["prima"], detalle["baseAsegurada"], vigencia
-                ),
+                _plantilla_plan(solicitud, plan, detalle["baseAsegurada"], vigencia),
                 indice == 0,
                 estado,
                 vigente_hasta,
@@ -315,6 +314,29 @@ def _plantilla(
         beneficios,
         vigencia,
         responsabilidad_civil,
+    )
+
+
+def _plantilla_plan(
+    solicitud: SolicitudCotizacion, plan: dict[str, Any], base: str, vigencia: str
+) -> PlantillaOferta:
+    if "presentacion" not in plan:
+        return _plantilla_guardada(solicitud, plan["nombre"], plan["prima"], base, vigencia)
+    presentacion = plan["presentacion"]
+    return _plantilla(
+        plan["nombre"],
+        presentacion["descripcion"],
+        plan["prima"],
+        presentacion["coberturaPrincipal"],
+        presentacion.get(
+            "deducible",
+            f"${solicitud.cotizacion.coberturas[0].deducible.monto} COP por evento",
+        ),
+        tuple(presentacion["coberturas"]),
+        tuple(presentacion["condiciones"]),
+        tuple(presentacion["beneficiosAdicionales"]),
+        vigencia=presentacion.get("vigencia", vigencia),
+        responsabilidad_civil=presentacion["responsabilidadCivil"],
     )
 
 
