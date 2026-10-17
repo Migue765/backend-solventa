@@ -1,0 +1,358 @@
+openapi: 3.1.0
+info:
+  title: Solventa Identidad
+  version: 1.0.0
+  description: >-
+    Contrato del servicio de identidad: registro de usuarios y emisión de tokens
+    (OAuth 2.0 con JWT RS256). El API Gateway valida los JWT con el JWKS publicado.
+servers:
+  - url: /
+tags:
+  - name: Usuarios
+  - name: OAuth
+  - name: Descubrimiento
+paths:
+  /v1/usuarios:
+    post:
+      tags: [Usuarios]
+      summary: Registra un usuario cliente
+      operationId: registrarUsuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevoUsuario"
+      responses:
+        "201":
+          description: Usuario creado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioCreado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "409":
+          $ref: "#/components/responses/CorreoYaRegistrado"
+        "429":
+          $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /oauth/token:
+    post:
+      tags: [OAuth]
+      summary: Emite tokens (grant password o refresh_token)
+      description: >-
+        Con `grant_type=password` autentica al usuario. Con `grant_type=refresh_token`
+        rota el refresh token: el presentado queda revocado y se emite uno nuevo en la misma
+        familia. Presentar un refresh token ya rotado revoca toda la familia.
+        El access token es un JWT RS256 de 1 hora (`expires_in: 3600`).
+      operationId: emitirToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudToken"
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/SolicitudToken"
+      responses:
+        "200":
+          description: Tokens emitidos
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RespuestaToken"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutenticado"
+        "429":
+          $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /oauth/revoke:
+    post:
+      tags: [OAuth]
+      summary: Revoca un refresh token y su familia
+      description: Siempre responde 204 si el cuerpo es válido, exista o no el token.
+      operationId: revocarToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudRevocacion"
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/SolicitudRevocacion"
+      responses:
+        "204":
+          description: Token revocado (o inexistente)
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /.well-known/openid-configuration:
+    get:
+      tags: [Descubrimiento]
+      summary: Metadatos OpenID Connect del emisor
+      operationId: consultarConfiguracionOpenId
+      responses:
+        "200":
+          description: Configuración del emisor
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfiguracionOpenId"
+  /.well-known/jwks.json:
+    get:
+      tags: [Descubrimiento]
+      summary: Claves públicas de firma
+      operationId: consultarJwks
+      responses:
+        "200":
+          description: Conjunto de claves JWK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
+components:
+  responses:
+    SolicitudInvalida:
+      description: La solicitud no cumple el contrato (`solicitud_invalida`)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoAutenticado:
+      description: Credenciales o refresh token inválidos (`credenciales_invalidas`, `refresh_invalido`)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    CorreoYaRegistrado:
+      description: Ya existe una cuenta con ese correo (`correo_ya_registrado`)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    DemasiadosIntentos:
+      description: Se superó el límite de intentos por correo (`demasiados_intentos`)
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    ServicioNoDisponible:
+      description: Una dependencia no está disponible (`servicio_no_disponible`)
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+  schemas:
+    NuevoUsuario:
+      type: object
+      additionalProperties: false
+      required: [nombre, correo, contrasena]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        contrasena:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+    Usuario:
+      type: object
+      additionalProperties: false
+      required: [id, nombre, correo, rol]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+        correo:
+          type: string
+          format: email
+        rol:
+          type: string
+          enum: [cliente]
+    UsuarioCreado:
+      type: object
+      additionalProperties: false
+      required: [usuario]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/Usuario"
+    SolicitudToken:
+      type: object
+      required: [grant_type, client_id]
+      properties:
+        grant_type:
+          type: string
+          enum: [password, refresh_token]
+        client_id:
+          type: string
+          enum: [web, movil]
+        username:
+          type: string
+          format: email
+          description: Correo del usuario (obligatorio con `grant_type=password`).
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+          description: Obligatorio con `grant_type=password`.
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Obligatorio con `grant_type=refresh_token`.
+    RespuestaToken:
+      type: object
+      additionalProperties: false
+      required:
+        - access_token
+        - token_type
+        - expires_in
+        - refresh_token
+        - refresh_expires_in
+        - scope
+        - usuario
+      properties:
+        access_token:
+          type: string
+          description: JWT RS256 con claims iss, sub, aud, iat, exp, jti, scope, rol, nombre, correo y client_id.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Vida del access token en segundos.
+          example: 3600
+        refresh_token:
+          type: string
+        refresh_expires_in:
+          type: integer
+          description: Vida del refresh token en segundos (web 28800, movil 2592000).
+        scope:
+          type: string
+          enum: [cliente]
+        usuario:
+          $ref: "#/components/schemas/Usuario"
+    SolicitudRevocacion:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 512
+    ConfiguracionOpenId:
+      type: object
+      required:
+        - issuer
+        - jwks_uri
+        - token_endpoint
+        - response_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+        - scopes_supported
+      properties:
+        issuer:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        response_types_supported:
+          type: array
+          items:
+            type: string
+        subject_types_supported:
+          type: array
+          items:
+            type: string
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+        scopes_supported:
+          type: array
+          items:
+            type: string
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, use, alg, kid, "n", e]
+            properties:
+              kty:
+                type: string
+                enum: [RSA]
+              use:
+                type: string
+                enum: [sig]
+              alg:
+                type: string
+                enum: [RS256]
+              kid:
+                type: string
+              "n":
+                type: string
+              e:
+                type: string
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string
+          format: uuid

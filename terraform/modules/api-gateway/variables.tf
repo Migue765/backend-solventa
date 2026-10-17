@@ -70,3 +70,69 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "bff_web_path_patterns" {
+  description = "Patrones de path del ALB que se desvian a bff-web (max. 5 por regla). El resto va a cotizacion."
+  type        = list(string)
+  default = [
+    "/v1/sesiones*",
+    "/v1/usuarios*",
+    "/v1/productos-seguro*",
+    "/v1/solicitudes-cotizacion*",
+    "/v1/clientes/*",
+  ]
+
+  validation {
+    condition     = length(var.bff_web_path_patterns) >= 1 && length(var.bff_web_path_patterns) <= 5
+    error_message = "Una regla de listener admite entre 1 y 5 patrones de path."
+  }
+}
+
+variable "auth_throttling_rate_limit" {
+  description = "Limite (req/s) de login, renovacion y registro, web y movil (proteccion contra fuerza bruta). Es global por ruta, no por cliente."
+  type        = number
+  default     = 5
+}
+
+variable "auth_throttling_burst_limit" {
+  description = "Burst de login, renovacion y registro, web y movil."
+  type        = number
+  default     = 10
+}
+
+variable "bff_movil_path_patterns" {
+  description = "Patrones de path del ALB que se desvian a bff-movil. Deben ser disjuntos de bff_web_path_patterns."
+  type        = list(string)
+  default     = ["/movil/*"]
+
+  validation {
+    condition     = length(var.bff_movil_path_patterns) >= 1 && length(var.bff_movil_path_patterns) <= 5
+    error_message = "Una regla de listener admite entre 1 y 5 patrones de path."
+  }
+}
+
+variable "identidad_path_patterns" {
+  description = "Patrones de path del ALB que se desvian a identidad (solo discovery OIDC y JWKS)."
+  type        = list(string)
+  default     = ["/.well-known/*"]
+
+  validation {
+    condition     = length(var.identidad_path_patterns) >= 1 && length(var.identidad_path_patterns) <= 5
+    error_message = "Una regla de listener admite entre 1 y 5 patrones de path."
+  }
+}
+
+variable "jwt_audience" {
+  description = "Audiencia (claim aud) que el authorizer JWT exige a los access tokens."
+  type        = string
+  default     = "solventa-api"
+}
+
+variable "cors_allowed_origins" {
+  description = "Origenes de navegador autorizados por CORS (el gateway responde los preflight)."
+  type        = list(string)
+  default = [
+    "https://jazmincorandes.github.io",
+    "http://localhost:4200",
+  ]
+}

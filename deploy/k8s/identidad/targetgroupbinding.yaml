@@ -1,0 +1,14 @@
+# Variable: TARGET_GROUP_ARN (terraform output identidad_target_group_arn)
+# Registra los pods como targets (tipo ip) del target group de identidad en el ALB interno.
+# Solo se publica /.well-known/* (discovery OIDC y JWKS); el resto de rutas son internas al cluster.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: identidad
+  namespace: identidad
+spec:
+  serviceRef:
+    name: identidad
+    port: 8080
+  targetGroupARN: ${TARGET_GROUP_ARN}
+  targetType: ip

@@ -4,20 +4,24 @@ data "aws_region" "current" {}
 locals {
   account_id   = data.aws_caller_identity.current.account_id
   region       = data.aws_region.current.name
-  pipeline     = "${var.name}-cotizacion"
+  pipeline     = "${var.name}-${var.service_name}"
+  prefix       = coalesce(var.resource_prefix, var.name)
+  service_dir  = coalesce(var.service_dir, "services/${var.service_name}")
   cluster_arn  = "arn:aws:eks:${local.region}:${local.account_id}:cluster/${var.cluster_name}"
   buildspec    = "deploy/codebuild"
   logs_prefix  = "logs"
   source_vars  = "SourceVariables"
   build_vars   = "BuildVariables"
   build_action = "Build"
+
+  connection_arn = coalesce(var.github_connection_arn, one(aws_codestarconnections_connection.github[*].arn))
 }
 
 # ---------------------------------------------------------------------------
 # Artefactos y logs (los logs van a S3: no se usa CloudWatch)
 # ---------------------------------------------------------------------------
 resource "aws_s3_bucket" "artifacts" {
-  bucket        = "${var.name}-cicd-${local.account_id}"
+  bucket        = "${local.prefix}-cicd-${local.account_id}"
   force_destroy = true
 
   tags = var.tags
@@ -59,22 +63,30 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 # ---------------------------------------------------------------------------
 # Conexion con GitHub (queda PENDING hasta autorizarla una vez en la consola)
 # ---------------------------------------------------------------------------
+# Con github_connection_arn se reutiliza una conexion ya autorizada (otro servicio) y no se crea otra.
 resource "aws_codestarconnections_connection" "github" {
-  name          = "${var.name}-github"
+  count = var.github_connection_arn == null ? 1 : 0
+
+  name          = "${local.prefix}-github"
   provider_type = "GitHub"
 
   tags = var.tags
+}
+
+moved {
+  from = aws_codestarconnections_connection.github
+  to   = aws_codestarconnections_connection.github[0]
 }
 
 # ---------------------------------------------------------------------------
 # Red del CodeBuild de despliegue
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "deploy" {
-  name        = "${var.name}-codebuild-deploy"
+  name        = "${local.prefix}-codebuild-deploy"
   description = "CodeBuild de despliegue: salida libre, sin entrada"
   vpc_id      = var.vpc_id
 
-  tags = merge(var.tags, { Name = "${var.name}-codebuild-deploy" })
+  tags = merge(var.tags, { Name = "${local.prefix}-codebuild-deploy" })
 }
 
 resource "aws_vpc_security_group_egress_rule" "deploy_all" {
@@ -108,7 +120,7 @@ data "aws_iam_policy_document" "codebuild_assume" {
 }
 
 resource "aws_iam_role" "build" {
-  name               = "${var.name}-codebuild-build"
+  name               = "${local.prefix}-codebuild-build"
   assume_role_policy = data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
@@ -153,7 +165,7 @@ resource "aws_iam_role_policy" "build" {
 # IAM: CodeBuild (despliegue)
 # ---------------------------------------------------------------------------
 resource "aws_iam_role" "deploy" {
-  name               = "${var.name}-codebuild-deploy"
+  name               = "${local.prefix}-codebuild-deploy"
   assume_role_policy = data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
@@ -232,7 +244,7 @@ resource "aws_eks_access_policy_association" "deploy" {
 # ---------------------------------------------------------------------------
 resource "aws_codebuild_project" "build" {
   name         = "${local.pipeline}-build"
-  description  = "Pruebas, construccion y publicacion de la imagen de cotizacion en ECR"
+  description  = "Pruebas, construccion y publicacion de la imagen de ${var.service_name} en ECR"
   service_role = aws_iam_role.build.arn
 
   artifacts {
@@ -248,6 +260,16 @@ resource "aws_codebuild_project" "build" {
     environment_variable {
       name  = "ECR_REPOSITORY_URL"
       value = var.ecr_repository_url
+    }
+
+    environment_variable {
+      name  = "SERVICE_NAME"
+      value = var.service_name
+    }
+
+    environment_variable {
+      name  = "SERVICE_DIR"
+      value = local.service_dir
     }
   }
 
@@ -272,7 +294,7 @@ resource "aws_codebuild_project" "build" {
 
 resource "aws_codebuild_project" "deploy" {
   name         = "${local.pipeline}-deploy"
-  description  = "Migraciones y rollout de cotizacion en EKS, con rollback automatico"
+  description  = "Migraciones y rollout de ${var.service_name} en EKS, con rollback automatico"
   service_role = aws_iam_role.deploy.arn
 
   artifacts {
@@ -297,6 +319,21 @@ resource "aws_codebuild_project" "deploy" {
     environment_variable {
       name  = "ECR_REPOSITORY_URL"
       value = var.ecr_repository_url
+    }
+
+    environment_variable {
+      name  = "SERVICE_NAME"
+      value = var.service_name
+    }
+
+    # Solo se define cuando el servicio no migra (los demas proyectos quedan sin cambios).
+    dynamic "environment_variable" {
+      for_each = var.run_migrations ? [] : [1]
+
+      content {
+        name  = "MIGRATE"
+        value = "false"
+      }
     }
   }
 
@@ -342,7 +379,7 @@ data "aws_iam_policy_document" "pipeline_assume" {
 }
 
 resource "aws_iam_role" "pipeline" {
-  name               = "${var.name}-codepipeline"
+  name               = "${local.prefix}-codepipeline"
   assume_role_policy = data.aws_iam_policy_document.pipeline_assume.json
 
   tags = var.tags
@@ -364,7 +401,7 @@ data "aws_iam_policy_document" "pipeline" {
   statement {
     sid       = "ConexionGitHub"
     actions   = ["codestar-connections:UseConnection", "codeconnections:UseConnection"]
-    resources = [aws_codestarconnections_connection.github.arn]
+    resources = [local.connection_arn]
   }
 
   statement {
@@ -426,7 +463,7 @@ resource "aws_codepipeline" "this" {
       output_artifacts = ["source"]
 
       configuration = {
-        ConnectionArn        = aws_codestarconnections_connection.github.arn
+        ConnectionArn        = local.connection_arn
         FullRepositoryId     = var.github_repository
         BranchName           = var.branch_name
         OutputArtifactFormat = "CODE_ZIP"

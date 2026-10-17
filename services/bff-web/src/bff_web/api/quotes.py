@@ -6,11 +6,10 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 
-from bff_web.application.auth_service import AuthService
+from bff_web.api.security import authenticate, invalid_session_response
 from bff_web.application.quote_ports import QuoteGateway
-from bff_web.config import Config
 from bff_web.domain.auth import User
-from bff_web.domain.errors import UnauthorizedError
+from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductUnavailableError,
@@ -234,13 +233,10 @@ def _authenticated_user_id() -> UUID | None:
 
 
 def _authenticated_user() -> User | None:
-    config = cast(Config, current_app.extensions["bff_config"])
-    auth_service = cast(AuthService, current_app.extensions["auth_service"])
     try:
-        session = auth_service.current_session(request.cookies.get(config.session_cookie_name))
-    except UnauthorizedError:
+        return authenticate().user
+    except InvalidAccessTokenError:
         return None
-    return session.user
 
 
 def _gateway() -> QuoteGateway:
@@ -325,12 +321,7 @@ def _date_json(value: datetime) -> str:
 
 
 def _unauthorized() -> Response:
-    return problem_response(
-        401,
-        "sesion_invalida",
-        "Sesión no válida",
-        "Inicia sesión nuevamente.",
-    )
+    return invalid_session_response()
 
 
 def _unavailable() -> Response:

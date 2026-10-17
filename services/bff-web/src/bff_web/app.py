@@ -2,48 +2,49 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from flask import Flask, Response, g, request
-from flask_cors import CORS
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_web.api import health, quotes, sessions
-from bff_web.application.auth_service import AuthService
+from bff_web.api import health, quotes, sessions, users
+from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.config import Config
-from bff_web.infrastructure.development_credentials import DevelopmentCredentialProvider
+from bff_web.domain.auth import CHANNEL
+from bff_web.domain.errors import IdentityUnavailableError
+from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
-from bff_web.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
-from bff_web.infrastructure.memory_sessions import InMemorySessionRepository
+from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_web.problems import problem_response
 
 
 def create_app(
     config: Config | None = None,
     quote_gateway: QuoteGateway | None = None,
+    identity_gateway: IdentityGateway | None = None,
+    token_verifier: TokenVerifier | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
-    CORS(
-        app,
-        origins=active_config.cors_allowed_origins,
-        supports_credentials=True,
-    )
 
     app.extensions["bff_config"] = active_config
-    app.extensions["auth_service"] = AuthService(
-        credentials=DevelopmentCredentialProvider(active_config.credentials),
-        sessions=InMemorySessionRepository(),
-        attempt_limiter=InMemoryLoginAttemptLimiter(
-            active_config.max_attempts,
-            active_config.attempt_window,
+    app.extensions["clock"] = lambda: datetime.now(UTC)
+    app.extensions["identity_gateway"] = identity_gateway or HttpIdentityGateway(
+        active_config.identity_url,
+        active_config.identity_timeout_seconds,
+    )
+    app.extensions["token_verifier"] = token_verifier or JwtVerifier(
+        JwksKeyStore(
+            http_jwks_fetcher(active_config.jwks_endpoint, active_config.identity_timeout_seconds)
         ),
-        clock=lambda: datetime.now(UTC),
-        session_duration=active_config.session_duration,
+        issuer=active_config.jwt_issuer,
+        audience=active_config.jwt_audience,
+        client_id=CHANNEL,
     )
     app.extensions["quote_gateway"] = quote_gateway or HttpQuoteGateway(
         active_config.quote_service_url
     )
 
     app.register_blueprint(health.bp)
+    app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
     app.register_blueprint(quotes.bp)
 
@@ -65,6 +66,17 @@ def create_app(
             title="Solicitud inválida",
             detail="El cuerpo de la solicitud no contiene JSON válido.",
         )
+
+    @app.errorhandler(IdentityUnavailableError)
+    def identity_unavailable(_: IdentityUnavailableError) -> Response:
+        response = problem_response(
+            status=503,
+            code="servicio_no_disponible",
+            title="Servicio no disponible",
+            detail="Intenta nuevamente en unos minutos.",
+        )
+        response.headers["Retry-After"] = "5"
+        return response
 
     return app
 

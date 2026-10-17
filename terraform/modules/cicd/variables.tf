@@ -3,6 +3,36 @@ variable "name" {
   type        = string
 }
 
+variable "service_name" {
+  description = "Servicio que despliega este pipeline (nombre del Deployment, del pipeline y de los manifiestos)."
+  type        = string
+  default     = "cotizacion"
+}
+
+variable "service_dir" {
+  description = "Directorio del servicio en el repo (default: services/<service_name>)."
+  type        = string
+  default     = null
+}
+
+variable "run_migrations" {
+  description = "Ejecuta el Job de migraciones antes del rollout. false para servicios sin base de datos propia (ej. los BFF)."
+  type        = bool
+  default     = true
+}
+
+variable "resource_prefix" {
+  description = "Prefijo de bucket, conexion, roles y SG (default: name). Usar uno distinto en la segunda instancia del modulo para evitar colisiones."
+  type        = string
+  default     = null
+}
+
+variable "github_connection_arn" {
+  description = "Conexion con GitHub ya autorizada para reutilizar; si es null se crea una nueva."
+  type        = string
+  default     = null
+}
+
 variable "github_repository" {
   description = "Repositorio de GitHub en formato owner/repo."
   type        = string
@@ -15,7 +45,7 @@ variable "branch_name" {
 }
 
 variable "release_tag_patterns" {
-  description = "Patrones de tag de GitHub que disparan el pipeline."
+  description = "Patrones de tag de GitHub que disparan el pipeline. Deben ser disjuntos entre servicios (ej. v* y bff-web-v*)."
   type        = list(string)
   default     = ["v*"]
 }
