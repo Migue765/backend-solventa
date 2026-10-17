@@ -10,6 +10,27 @@ class InsuranceProduct:
     name: str
     description: str
     available: bool
+    main_coverages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProductCoverage:
+    name: str
+    description: str
+
+
+@dataclass(frozen=True)
+class InsuranceProductDetail:
+    product_id: str
+    name: str
+    description: str
+    available: bool
+    coverages: tuple[ProductCoverage, ...]
+    conditions: tuple[str, ...]
+    insured_amount: Decimal
+    deductible: Decimal
+    currency: str
+    term: str
 
 
 @dataclass(frozen=True)

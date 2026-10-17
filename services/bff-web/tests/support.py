@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import UUID, uuid4
@@ -17,9 +18,11 @@ from bff_web.domain.auth import TokenSet, User
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    InsuranceProductDetail,
     IssuanceSaga,
     OfferSelection,
     OffersResult,
+    ProductCoverage,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -221,8 +224,29 @@ class StubQuoteGateway(QuoteGateway):
     def list_products(self) -> tuple[InsuranceProduct, ...]:
         return (
             InsuranceProduct(
-                "automotive", "Seguro Automotriz Total", "Protección para el vehículo", True
+                "automotive",
+                "Seguro Automotriz Total",
+                "Protección para el vehículo",
+                True,
+                ("Daños al vehículo", "Responsabilidad civil"),
             ),
+        )
+
+    def get_product(self, product_id: str) -> InsuranceProductDetail:
+        return InsuranceProductDetail(
+            product_id=product_id,
+            name="Seguro Automotriz Total",
+            description="Protección para el vehículo",
+            available=True,
+            coverages=(
+                ProductCoverage("Daños al vehículo", "Protección ante daños accidentales."),
+                ProductCoverage("Responsabilidad civil", "Respaldo frente a daños a terceros."),
+            ),
+            conditions=("El vehículo debe cumplir las condiciones de asegurabilidad.",),
+            insured_amount=Decimal("25000000"),
+            deductible=Decimal("500000"),
+            currency="COP",
+            term="Anual con renovación",
         )
 
     def create_request(

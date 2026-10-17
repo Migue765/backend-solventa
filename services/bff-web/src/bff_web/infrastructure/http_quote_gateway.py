@@ -11,6 +11,7 @@ from uuid import UUID
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
+    InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
     OfferUnavailableError,
     QuoteRequestConflictError,
@@ -19,11 +20,13 @@ from bff_web.domain.quote_errors import (
 )
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    InsuranceProductDetail,
     IssuanceSaga,
     Money,
     Offer,
     OfferSelection,
     OffersResult,
+    ProductCoverage,
     QuoteRequestDraft,
     QuoteRequestRecord,
     Subscription,
@@ -46,10 +49,36 @@ class HttpQuoteGateway(QuoteGateway):
                     name=item["nombre"],
                     description=item["descripcion"],
                     available=item["disponible"],
+                    main_coverages=tuple(item["coberturasPrincipales"]),
                 )
                 for item in payload["productos"]
             )
         except (KeyError, TypeError) as error:
+            raise QuoteServiceUnavailableError() from error
+
+    def get_product(self, product_id: str) -> InsuranceProductDetail:
+        try:
+            payload = self._request_json(f"/v1/productos-seguro/{product_id}")
+        except QuoteRequestNotFoundError as error:
+            raise InsuranceProductNotFoundError() from error
+        try:
+            relevant = payload["informacionRelevante"]
+            return InsuranceProductDetail(
+                product_id=payload["id"],
+                name=payload["nombre"],
+                description=payload["descripcion"],
+                available=payload["disponible"],
+                coverages=tuple(
+                    ProductCoverage(item["nombre"], item["descripcion"])
+                    for item in payload["coberturas"]
+                ),
+                conditions=tuple(payload["condiciones"]),
+                insured_amount=Decimal(relevant["sumaAsegurada"]),
+                deductible=Decimal(relevant["deducible"]),
+                currency=relevant["moneda"],
+                term=relevant["vigencia"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
             raise QuoteServiceUnavailableError() from error
 
     def list_travel_destinations(self) -> tuple[TravelDestination, ...]:

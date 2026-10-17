@@ -103,8 +103,40 @@ def test_lista_el_catalogo_de_seguros(client) -> None:
         "mortgage-life",
     ]
     assert all(product["disponible"] is True for product in products)
+    assert all(product["coberturasPrincipales"] for product in products)
     assert all(producto.suma_asegurada > 0 for producto in PRODUCTOS)
     assert all(producto.deducible >= 0 for producto in PRODUCTOS)
+
+
+def test_consulta_detalle_de_producto_sin_mezclar_coberturas(client) -> None:
+    viaje = client.get("/v1/productos-seguro/travel")
+    dispositivos = client.get("/v1/productos-seguro/device-protection")
+
+    assert viaje.status_code == 200
+    assert viaje.get_json()["id"] == "travel"
+    assert {cobertura["nombre"] for cobertura in viaje.get_json()["coberturas"]} == {
+        "Asistencia médica",
+        "Equipaje",
+        "Demoras y cancelaciones",
+    }
+    assert dispositivos.get_json()["id"] == "device-protection"
+    assert "Asistencia médica" not in {
+        cobertura["nombre"] for cobertura in dispositivos.get_json()["coberturas"]
+    }
+    assert viaje.get_json()["condiciones"]
+    assert viaje.get_json()["informacionRelevante"] == {
+        "sumaAsegurada": "200000000",
+        "deducible": "200000",
+        "moneda": "COP",
+        "vigencia": "Por la duración del viaje",
+    }
+
+
+def test_producto_inexistente_devuelve_no_encontrado(client) -> None:
+    response = client.get("/v1/productos-seguro/no-existe")
+
+    assert response.status_code == 404
+    assert response.get_json() == {"error": "no_encontrado"}
 
 
 def test_lista_destinos_de_viaje_soportados(client) -> None:

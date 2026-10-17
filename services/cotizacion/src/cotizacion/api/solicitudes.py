@@ -17,7 +17,7 @@ from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
-from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
 )
@@ -29,6 +29,14 @@ UUID_ADAPTER: TypeAdapter[UUID] = TypeAdapter(UUID)
 @bp.get("/productos-seguro")
 def listar_productos() -> Response:
     return jsonify(productos=[producto_a_json(producto) for producto in PRODUCTOS])
+
+
+@bp.get("/productos-seguro/<producto_id>")
+def consultar_producto(producto_id: str) -> tuple[Response, int] | Response:
+    producto = buscar_producto(producto_id)
+    if producto is None:
+        return jsonify(error="no_encontrado"), 404
+    return jsonify(producto_a_json(producto))
 
 
 @bp.get("/destinos-viaje")
