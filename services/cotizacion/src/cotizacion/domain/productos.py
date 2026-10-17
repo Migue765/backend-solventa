@@ -140,7 +140,7 @@ PRODUCTOS = (
     ProductoSeguro(
         producto_id="parametric",
         nombre="Seguro de Vuelos",
-        descripcion="Compensación automática ante retrasos o cancelaciones de vuelos.",
+        descripcion="Protección para retrasos, cancelaciones o pérdida de conexión.",
         disponible=True,
         producto_interno_id=UUID("99999999-9999-4999-8999-999999999999"),
         cobertura_id=UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
@@ -161,6 +161,16 @@ PRODUCTOS = (
             "La confirmación se basa en la información oficial de la aerolínea.",
         ),
         vigencia="Por vuelo",
+    ),
+    ProductoSeguro(
+        producto_id="parametric-weather",
+        nombre="Seguro Paramétrico Climático",
+        descripcion="Protección ante lluvia intensa o sequía.",
+        disponible=True,
+        producto_interno_id=UUID("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+        cobertura_id=UUID("12121212-1212-4212-8212-121212121212"),
+        suma_asegurada=Decimal("10000000"),
+        deducible=Decimal("0"),
     ),
     ProductoSeguro(
         producto_id="payment-protection",

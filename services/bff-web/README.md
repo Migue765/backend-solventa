@@ -37,6 +37,20 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 | `GET`    | `/v1/solicitudes-cotizacion/{id}` | Bearer | Consulta una solicitud                        |
 | `GET`    | `/ping`                           | No     | Comprueba disponibilidad                      |
 
+Las rutas `GET /v1/solicitudes-cotizacion/{id}/ofertas` y
+`GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion` también requieren Bearer.
+Comparan ofertas simuladas y consultan o guardan una selección idempotente.
+
+Las solicitudes aceptan exclusivamente `{productoId, datosProducto}`; los datos de identidad
+y contacto proceden del usuario autenticado, nunca del body. Se admiten `automotive`,
+`travel`, `life`, `device-protection`, `parametric`, `parametric-weather`,
+`payment-protection` y `mortgage-life`, con validación estricta por producto.
+Los campos y límites están definidos en el contrato OpenAPI y en
+`services/cotizacion/README.md`. `parametric.coverageType` es opcional y conserva la
+compatibilidad de registros anteriores; las fechas futuras se exigen al crear, no al leer.
+Las ofertas son simuladas y mantienen `{monto, moneda: "COP"}`: no hay integraciones
+meteorológicas, consultas a aerolíneas, emisión ni pagos reales.
+
 Los errores usan `application/problem+json` con `code` y `correlationId`. Si identidad o su JWKS
 no responden, el BFF contesta `503 servicio_no_disponible` (nunca `401`), para que el cliente no
 cierre una sesión válida por una caída. Un `429 demasiados_intentos` conserva `Retry-After`.
@@ -45,13 +59,16 @@ cierre una sesión válida por una caída. Un `429 demasiados_intentos` conserva
 ### Importes y periodicidad de ofertas
 
 Las ofertas y GET/PUT de selección transmiten `prima: {monto, moneda}` y
-`periodicidad: mensual | por_viaje | por_vuelo` calculadas y persistidas por cotización.
+`periodicidad: mensual | por_viaje | por_vuelo | por_periodo` calculadas y persistidas por cotización.
 El BFF no calcula precios ni transforma documentos de identidad en riesgo.
-`primaMensual` mantiene el importe solo para `mensual`; es `null` para viaje/vuelo.
+`primaMensual` mantiene el importe solo para `mensual`; es `null` para viaje/vuelo/período asegurado.
 Los consumidores deben leer `prima` y usar la periodicidad para la etiqueta del importe:
 **el contrato no es retrocompatible con clientes que asumen `primaMensual` no nulo**.
 El adaptador acepta respuestas antiguas como mensuales únicamente si faltan ambos campos nuevos.
 La selección sigue recibiendo `{ofertaId, version}` con `Idempotency-Key`.
+En clima, `por_periodo` identifica el importe completo de la ventana inclusiva
+`datosProducto.startDate` a `endDate`; la oferta muestra ese intervalo en `vigencia`.
+`vigenteHasta` sigue siendo el plazo de aceptación de la cotización, no la ventana de cobertura.
 
 ### Cómo usa los tokens el frontend
 
@@ -81,3 +98,61 @@ pytest
 IDENTIDAD_URL=http://localhost:5003 JWT_ISSUER=http://localhost:5003 \
   flask --app bff_web.app run --port 5001
 ```
+
+### Integración local en PowerShell
+
+Desde la raíz del backend, preparar un entorno local con los tres servicios:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".\services\identidad" -e ".\services\cotizacion" -e ".\services\bff-web"
+```
+
+Abrir tres consolas en esa misma raíz. Los puertos siguientes son locales de ejemplo
+y deben estar libres; no es necesario Redis para esta comprobación.
+
+Identidad (clave RSA nueva solo en memoria; no usar claves de producción):
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path services\identidad\src).Path
+$env:DATABASE_URL = "sqlite:///identidad-local.db"
+$env:DB_SCHEMA = ""
+$env:REDIS_URL = ""
+$env:JWT_ISSUER = "http://127.0.0.1:15003"
+$env:JWT_PRIVATE_KEY = & .\.venv\Scripts\python -c "from cryptography.hazmat.primitives.asymmetric import rsa; from cryptography.hazmat.primitives import serialization as s; print(rsa.generate_private_key(public_exponent=65537,key_size=2048).private_bytes(s.Encoding.PEM,s.PrivateFormat.PKCS8,s.NoEncryption()).decode())"
+.\.venv\Scripts\python -m alembic -c services\identidad\alembic.ini upgrade head
+.\.venv\Scripts\python -m flask --app identidad.app run --host 127.0.0.1 --port 15003
+```
+
+Cotización:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path services\cotizacion\src).Path
+$env:DATABASE_URL = "sqlite:///cotizacion-local.db"
+.\.venv\Scripts\python -m alembic -c services\cotizacion\alembic.ini upgrade head
+.\.venv\Scripts\python -m flask --app cotizacion.app run --host 127.0.0.1 --port 15000
+```
+
+BFF Web:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path services\bff-web\src).Path
+$env:IDENTIDAD_URL = "http://127.0.0.1:15003"
+$env:JWT_ISSUER = "http://127.0.0.1:15003"
+$env:QUOTE_SERVICE_URL = "http://127.0.0.1:15000"
+.\.venv\Scripts\python -m flask --app bff_web.app run --host 127.0.0.1 --port 15001
+```
+
+Comprobar `/ping` en cada puerto. El proxy de desarrollo web debe dirigir `/api` al BFF
+`http://127.0.0.1:15001`, eliminando el prefijo `/api`; el BFF atiende `/v1/...`.
+No se usa `AUTH_DEVELOPMENT_USERS_JSON`, `passwordHash` ni autenticación por cookie.
+
+Para una prueba sin credenciales compartidas, generar una contraseña aleatoria en el cliente
+sin imprimirla. Registrar con `POST /v1/usuarios` y `{nombre, correo, contrasena}`; iniciar sesión
+con `POST /v1/sesiones` y `{correo, contrasena}`. La respuesta es
+`{usuario, tokenType, accessToken, refreshToken, expiraEn, refreshExpiraEn}`.
+Enviar el `accessToken` como Bearer en las consultas y cotizaciones. `GET /v1/sesiones/actual`
+solo devuelve `{usuario, expiraEn}`; no recupera tokens. Renovar con
+`POST /v1/sesiones/renovar` y `{refreshToken}`. Cerrar con
+`DELETE /v1/sesiones/actual`, Bearer y `{refreshToken}` para revocarlo: responde `204`.
+No guardar contraseñas, claves privadas ni tokens en archivos versionados o logs.
