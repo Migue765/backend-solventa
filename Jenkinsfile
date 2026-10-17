@@ -15,10 +15,10 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
+        stage('Código') {
             steps { checkout scm }
         }
-        stage('Install tools and services') {
+        stage('Dependencias') {
             steps {
                 sh '''
                     set -eu
@@ -31,8 +31,30 @@ pipeline {
                 '''
             }
         }
-        stage('Quality, contracts and tests') {
-            steps { sh 'bash scripts/jenkins-quality.sh' }
+        stage('Formato y lint') {
+            steps {
+                sh '.venv-jenkins/bin/python -m ruff format --check .'
+                sh '.venv-jenkins/bin/python -m ruff check .'
+            }
+        }
+        stage('Tipos') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv-jenkins/bin/python -m mypy scripts tests
+                    for config in services/*/mypy.ini; do
+                        [ -f "$config" ] || continue
+                        service="$(dirname "$config")"
+                        .venv-jenkins/bin/python -m mypy --config-file "$config" "$service/src" "$service/tests"
+                    done
+                '''
+            }
+        }
+        stage('Contratos OpenAPI') {
+            steps { sh '.venv-jenkins/bin/python scripts/validate_openapi.py' }
+        }
+        stage('Pruebas y cobertura') {
+            steps { sh 'bash scripts/jenkins-tests.sh' }
         }
     }
 
@@ -43,7 +65,7 @@ pipeline {
                     junit testResults: 'reports/*.xml', allowEmptyResults: false
                 }
             }
-            archiveArtifacts artifacts: 'reports/*.xml', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'reports/*.xml,reports/coverage/**', allowEmptyArchive: true
             deleteDir()
         }
     }
