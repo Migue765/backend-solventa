@@ -28,11 +28,16 @@ tests/
 | GET    | `/ping`            | Health check                   |
 | POST   | `/v1/cotizaciones` | Crea y calcula una cotización  |
 | GET    | `/v1/productos-seguro` | Lista el catálogo de seguros |
+| GET    | `/v1/productos-seguro/{productoId}` | Consulta el detalle de un seguro |
 | GET    | `/v1/destinos-viaje` | Lista países de destino admitidos |
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
 | GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
 | GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
+
+El listado y el detalle incluyen coberturas, condiciones y vigencia para los ocho seguros,
+incluido `parametric-weather` (lluvia intensa o sequía, según el evento declarado).
+El detalle de un producto inexistente devuelve `404`.
 
 Ejemplo:
 

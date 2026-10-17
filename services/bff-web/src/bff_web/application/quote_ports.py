@@ -3,6 +3,7 @@ from uuid import UUID
 
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    InsuranceProductDetail,
     OfferSelection,
     OffersResult,
     QuoteRequestDraft,
@@ -14,6 +15,8 @@ from bff_web.domain.quotes import (
 
 class QuoteGateway(Protocol):
     def list_products(self) -> tuple[InsuranceProduct, ...]: ...
+
+    def get_product(self, product_id: str) -> InsuranceProductDetail: ...
 
     def list_travel_destinations(self) -> tuple[TravelDestination, ...]: ...
 

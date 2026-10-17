@@ -12,6 +12,7 @@ from bff_web.domain.auth import User
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
+    InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
     OfferUnavailableError,
     QuoteRequestConflictError,
@@ -20,6 +21,7 @@ from bff_web.domain.quote_errors import (
 )
 from bff_web.domain.quotes import (
     InsuranceProduct,
+    InsuranceProductDetail,
     Money,
     Offer,
     OfferSelection,
@@ -74,6 +76,24 @@ def list_products() -> Response:
     except QuoteServiceUnavailableError:
         return _unavailable()
     return jsonify(productos=[_product_json(product) for product in products])
+
+
+@bp.get("/productos-seguro/<product_id>")
+def get_product(product_id: str) -> Response:
+    if _authenticated_user_id() is None:
+        return _unauthorized()
+    try:
+        product = _gateway().get_product(product_id)
+    except InsuranceProductNotFoundError:
+        return problem_response(
+            404,
+            "seguro_no_encontrado",
+            "Seguro no encontrado",
+            "El seguro consultado no existe o ya no está disponible.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_product_detail_json(product))
 
 
 @bp.get("/destinos-viaje")
@@ -294,6 +314,28 @@ def _product_json(product: InsuranceProduct) -> dict[str, object]:
         "nombre": product.name,
         "descripcion": product.description,
         "disponible": product.available,
+        "coberturasPrincipales": list(product.main_coverages),
+    }
+
+
+def _product_detail_json(product: InsuranceProductDetail) -> dict[str, object]:
+    return {
+        "id": product.product_id,
+        "nombre": product.name,
+        "descripcion": product.description,
+        "disponible": product.available,
+        "coberturasPrincipales": [coverage.name for coverage in product.coverages],
+        "coberturas": [
+            {"nombre": coverage.name, "descripcion": coverage.description}
+            for coverage in product.coverages
+        ],
+        "condiciones": list(product.conditions),
+        "informacionRelevante": {
+            "sumaAsegurada": str(product.insured_amount),
+            "deducible": str(product.deductible),
+            "moneda": product.currency,
+            "vigencia": product.term,
+        },
     }
 
 
