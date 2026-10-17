@@ -12,7 +12,7 @@ if (source.repoOwner != 'Migue765' || source.repository != 'backend-solventa') {
     throw new IllegalStateException('Unexpected repository')
 }
 def checks = source.traits.find { it instanceof GitHubSCMSourceStatusChecksTrait }
-if (checks == null || checks.name != 'Solventa Backend Jenkins') {
+if (checks == null || !(checks.name in ['Solventa Backend Jenkins', 'CI / Validación (Jenkins)'])) {
     throw new IllegalStateException('Inspect existing check/protections before changing reporting')
 }
 checks.setSkipNotifications(true)

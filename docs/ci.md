@@ -4,10 +4,11 @@
 
 - **Cobertura** publica una tabla de líneas/ramas por servicio y scripts, con conteos JUnit
   actuales y sin un promedio que esconda diferencias. Su enlace abre Checks en GitHub.
-- **CI / Validación (Jenkins)** es el nuevo nombre de presentación; se conserva
-  **Solventa Backend Jenkins** mientras siga siendo el contexto obligatorio.
-- Actions se agrupa como **CI · Actions**, conservando `Calidad`. Las ejecuciones obsoletas
-  de ese workflow se cancelan al llegar nuevos commits al mismo PR.
+- **CI / Validación (Jenkins)** es el check principal obligatorio, publicado por el
+  controlador. El Jenkinsfile no publica un alias duplicado.
+- El workflow del PR define **CI · Actions**; GitHub puede mostrar todavía el nombre de la
+  rama predeterminada hasta integrarlo. Se conservan los jobs `Calidad` y `validate-branch`.
+  Las ejecuciones obsoletas de calidad se cancelan al llegar nuevos commits al mismo PR.
 - JUnit queda disponible en Jenkins, sin el check redundante `Tests / Declarative: Post Actions`.
   El workspace se limpia antes del checkout; el resumen solo cuenta los XML esperados.
 - Un reporte ausente o inválido se identifica como parcial, no como 0 %. Hace fallar un
@@ -17,32 +18,33 @@
 `python -m pytest tests/test_coverage_summary.py` valida el publicador sin red ni credenciales.
 Los porcentajes salen de los XML de esa ejecución, no de una línea base escrita a mano.
 
-### Migración pendiente con Migue
+### Configuración administrativa verificada
 
-**Operación 2026-10-17:** `skipNotifications=true` ya se aplicó en los tres proyectos del
-controlador, conservando checks obligatorios y copias privadas. La política y el scanner
-corregidos se instalaron, compilaron y recargaron mediante reinicio autorizado del servicio,
-esperando a que terminaran los builds y la cola. El generador fija el hash de la nueva plantilla web verificada y
-mantiene su rechazo ante plantillas distintas. Falta validar el último SHA con un build nuevo.
+**Operación 2026-10-17:** la App se renombró a **Solventa CI Backend** (`solventa-ci-backend`),
+conservando ID `5278678`, instalación `170401410` y credencial `solventa-backend-github-app`.
+El ruleset activo `24763930` sigue protegiendo `develop` y `main` con:
+
+- `Calidad` y `validate-branch` de Actions (`15368`).
+- `CI / Validación (Jenkins)` de la App `5278678`.
+- Una aprobación, descarte de aprobaciones obsoletas, conversaciones resueltas y actualización estricta.
+- Sin actores de bypass, force-push ni borrado de ramas protegidas.
+
+Se añadió el requisito nuevo antes de cambiar el publicador del controlador y retirar el
+anterior. El resultado global se publica automáticamente para todas las ramas del job,
+incluidas las que aún usan un Jenkinsfile antiguo. No se reinició Jenkins por este cambio.
+`Cobertura` sigue informativa: no se impone un mínimo ni un check que ramas antiguas no generan.
 
 Se confirmó un caso real en PR26 #3: Jenkins agrupó solicitudes 31bad12/4cb9782 y compiló
 la primera. El generador confiable ahora incorpora la política que difiere comentarios
 mientras ese PR está en cola o ejecutándose, sin consumirlos. Tests:
 `python -m pytest tests/test_jenkins_controller.py`. No atribuir el verde antiguo al SHA nuevo.
-La corrección requiere despliegue y recarga administrativa controlada del scanner, sin
-duplicar timers. El generador conserva sus verificaciones de plantilla y activación deshabilitada.
+La corrección ya se desplegó y recargó de forma controlada, sin duplicar timers. El generador
+conserva el hash de la plantilla verificada y la preparación inicialmente deshabilitada.
 
-1. Verificar `CI / Validación (Jenkins)` en el mismo SHA y publicado por la App `5278678`.
-2. Migue debe sustituir el contexto antiguo en el ruleset `24763930`, conservando la App
-   esperada, `Calidad`, `validate-branch`, revisión y demás restricciones. No desactivar el ruleset.
-3. Con la preparación integrada y la protección nueva verificada, retirar el check automático
-   antiguo del controlador; el publicador explícito del Jenkinsfile conserva el nuevo.
-4. `infra/jenkins/configure-reporting.groovy`, ejecutado por un administrador en el controlador,
-   quita solo `continuous-integration/jenkins/pr-merge` después de comprobar que no sea requerido.
-   No ejecutar desde código del PR ni reiniciar Jenkins.
-5. Migue puede renombrar su App visible a **Solventa CI Backend**, conservando ID, instalación
-   y credenciales. Después migrar `Calidad` a `CI / Calidad (Actions)` y `validate-branch`
-   a `Git / Flujo de ramas` de forma coordinada con el ruleset.
+`skipNotifications=true` suprime `continuous-integration/jenkins/pr-merge`; JUnit se conserva
+en Jenkins sin publicar un check adicional. El pipeline publica **Cobertura** y el controlador
+publica el resultado global. Los nombres obligatorios de Actions no cambian para no dejar
+ramas antiguas esperando jobs que no existen; cualquier migración futura debe ser coordinada.
 
 Integrar este PR no cambia automáticamente el controlador, la App ni las protecciones.
 
@@ -50,7 +52,7 @@ Integrar este PR no cambia automáticamente el controlador, la App ni las protec
 | --- | --- | --- |
 | Actions: `Calidad` | Cada PR y push a develop/main | Formato, lint, tipos, OpenAPI y pruebas |
 | Actions: `validate-branch` | PR a develop/main | Origen y destino según GitFlow |
-| Jenkins: `Solventa Backend Jenkins` | Comentario nuevo `/test-jenkins` de un colaborador | Mismas validaciones, JUnit y cobertura |
+| Jenkins: `CI / Validación (Jenkins)` | Comentario nuevo `/test-jenkins` de un colaborador | Mismas validaciones, JUnit y cobertura |
 
 Después de nuevos commits, solicitar Jenkins otra vez. La revisión humana es independiente
 de los checks; no se deben omitir para integrar un PR normal. Una publicación/despliegue

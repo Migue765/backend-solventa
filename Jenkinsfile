@@ -97,18 +97,7 @@ pipeline {
             }
         }
         cleanup {
-            script {
-                try {
-                    // Mantener el check antiguo obligatorio hasta migrar las protecciones.
-                    publishChecks name: 'CI / Validación (Jenkins)',
-                        conclusion: currentBuild.currentResult == 'SUCCESS' ? 'SUCCESS' : 'FAILURE',
-                        title: currentBuild.currentResult == 'SUCCESS' ? 'Formato, tipos, contratos y pruebas correctos' : 'Validación incompleta o fallida',
-                        summary: 'Validación solicitada con `/test-jenkins`. Cobertura por servicio y pruebas en **Cobertura**. El check anterior se conserva temporalmente por las protecciones.',
-                        detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks"
-                } finally {
-                    deleteDir()
-                }
-            }
+            deleteDir()
         }
     }
 }
