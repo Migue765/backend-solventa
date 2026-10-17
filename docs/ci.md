@@ -1,5 +1,38 @@
 # Comprobaciones del backend
 
+## Resultados visibles en GitHub
+
+- **Cobertura** publica una tabla de líneas/ramas por servicio y scripts, con conteos JUnit
+  actuales y sin un promedio que esconda diferencias. Su enlace abre Checks en GitHub.
+- **CI / Validación (Jenkins)** es el nuevo nombre de presentación; se conserva
+  **Solventa Backend Jenkins** mientras siga siendo el contexto obligatorio.
+- Actions se agrupa como **CI · Actions**, conservando `Calidad`. Las ejecuciones obsoletas
+  de ese workflow se cancelan al llegar nuevos commits al mismo PR.
+- JUnit queda disponible en Jenkins, sin el check redundante `Tests / Declarative: Post Actions`.
+  El workspace se limpia antes del checkout; el resumen solo cuenta los XML esperados.
+- Un reporte ausente o inválido se identifica como parcial, no como 0 %. Hace fallar un
+  pipeline que iba bien; si ya falló otra etapa, el check parcial queda neutral.
+  Una cobertura generada no certifica que las pruebas o el resto del pipeline hayan pasado.
+
+`python -m pytest tests/test_coverage_summary.py` valida el publicador sin red ni credenciales.
+Los porcentajes salen de los XML de esa ejecución, no de una línea base escrita a mano.
+
+### Migración pendiente con Migue
+
+1. Verificar `CI / Validación (Jenkins)` en el mismo SHA y publicado por la App `5278678`.
+2. Migue debe sustituir el contexto antiguo en el ruleset `24763930`, conservando la App
+   esperada, `Calidad`, `validate-branch`, revisión y demás restricciones. No desactivar el ruleset.
+3. Con la preparación integrada y la protección nueva verificada, retirar el check automático
+   antiguo del controlador; el publicador explícito del Jenkinsfile conserva el nuevo.
+4. `infra/jenkins/configure-reporting.groovy`, ejecutado por un administrador en el controlador,
+   quita solo `continuous-integration/jenkins/pr-merge` después de comprobar que no sea requerido.
+   No ejecutar desde código del PR ni reiniciar Jenkins.
+5. Migue puede renombrar su App visible a **Solventa CI Backend**, conservando ID, instalación
+   y credenciales. Después migrar `Calidad` a `CI / Calidad (Actions)` y `validate-branch`
+   a `Git / Flujo de ramas` de forma coordinada con el ruleset.
+
+Integrar este PR no cambia automáticamente el controlador, la App ni las protecciones.
+
 | Proceso | Cuándo | Qué comprueba |
 | --- | --- | --- |
 | Actions: `Calidad` | Cada PR y push a develop/main | Formato, lint, tipos, OpenAPI y pruebas |
