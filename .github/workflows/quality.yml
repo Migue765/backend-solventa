@@ -61,6 +61,7 @@ jobs:
           node-version: '22'
 
       - name: Probar automatización sin red
+        id: automation
         if: steps.policy.outputs.skip_tests != 'true'
         run: node --test .github/scripts/*.test.cjs
 
@@ -75,6 +76,7 @@ jobs:
             services/*/pyproject.toml
 
       - name: Instalar herramientas y servicios
+        id: dependencies
         if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
@@ -86,14 +88,17 @@ jobs:
           done
 
       - name: Comprobar formato
+        id: format
         if: steps.policy.outputs.skip_tests != 'true'
         run: python -m ruff format --check .
 
       - name: Ejecutar lint
+        id: lint
         if: steps.policy.outputs.skip_tests != 'true'
         run: python -m ruff check .
 
       - name: Comprobar tipos
+        id: types
         if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
@@ -108,18 +113,38 @@ jobs:
           done
 
       - name: Validar contratos OpenAPI
+        id: contracts
         if: steps.policy.outputs.skip_tests != 'true'
         run: python scripts/validate_openapi.py
 
       - name: Ejecutar pruebas
+        id: tests
         if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
-          python -m pytest tests
+          mkdir -p reports
+          python -m pytest tests --junitxml=reports/root.xml
           for project in services/*/pyproject.toml; do
             [[ -f "$project" ]] || continue
             service_directory="$(dirname "$project")"
             if find "$service_directory/tests" -type f -name "test_*.py" -print -quit | grep -q .; then
-              python -m pytest "$service_directory/tests"
+              service="$(basename "$service_directory")"
+              python -m pytest "$service_directory/tests" --junitxml="reports/$service.xml"
             fi
           done
+
+      - name: Conservar informes de pruebas
+        id: reports
+        if: always() && steps.policy.outputs.skip_tests != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: backend-test-reports
+          path: reports/*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publicar resumen de validación
+        if: always()
+        env:
+          CI_STEPS: ${{ toJSON(steps) }}
+        run: python -m scripts.ci_summary

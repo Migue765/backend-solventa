@@ -15,7 +15,7 @@
   pipeline que iba bien; si ya falló otra etapa, el check parcial queda neutral.
   Una cobertura generada no certifica que las pruebas o el resto del pipeline hayan pasado.
 
-`python -m pytest tests/test_coverage_summary.py` valida el publicador sin red ni credenciales.
+`python -m pytest tests/test_coverage_summary.py tests/test_ci_summary.py` valida los resúmenes sin red ni credenciales.
 Los porcentajes salen de los XML de esa ejecución, no de una línea base escrita a mano.
 
 ### Configuración administrativa verificada
@@ -32,7 +32,8 @@ El ruleset activo `24763930` sigue protegiendo `develop` y `main` con:
 Se añadió el requisito nuevo antes de cambiar el publicador del controlador y retirar el
 anterior. El resultado global se publica automáticamente para todas las ramas del job,
 incluidas las que aún usan un Jenkinsfile antiguo. No se reinició Jenkins por este cambio.
-`Cobertura` sigue informativa: no se impone un mínimo ni un check que ramas antiguas no generan.
+`Cobertura` sigue informativa con un objetivo recomendado del **80 % en líneas y ramas por módulo**.
+No añade un requisito de integración ni exige checks que las ramas antiguas no generan.
 
 Se confirmó un caso real en PR26 #3: Jenkins agrupó solicitudes 31bad12/4cb9782 y compiló
 la primera. El generador confiable ahora incorpora la política que difiere comentarios
@@ -60,6 +61,19 @@ es un proceso separado: compilar o pasar pruebas no demuestra que un servicio es
 
 ## Leer Jenkins
 
+### Resúmenes de resultados
+
+Actions presenta formato, lint, tipos, contratos y pruebas con el resultado real de cada
+paso, la revisión validada y JUnit por módulo. No mezcla resultados de servicios ni convierte
+reportes ausentes en cero fallos. Los XML se conservan como artefactos de la ejecución.
+Un backport verificado indica reutilización de evidencia sin inventar nuevas pruebas.
+
+Cobertura desglosa líneas y ramas por módulo, elementos cubiertos, pendientes y distancia
+al objetivo recomendado del 80 %. Los indicadores 🟢/🟠/⚪/🔴 llevan texto y distinguen
+objetivo alcanzado, mejora pendiente, métrica no aplicable e informe inválido. Los enlaces
+HTML/JUnit y la revisión compilada completan el detalle. No se añade un promedio global,
+otro check o un requisito de porcentaje para integrar.
+
 Etapas: Código → Dependencias → Formato y lint → Tipos → Contratos OpenAPI → Pruebas y cobertura.
 La etapa roja identifica el problema. Un fallo de una prueba conserva el resultado fallido;
 los reportes disponibles se archivan incluso cuando el pipeline no termina correctamente.
@@ -67,8 +81,8 @@ los reportes disponibles se archivan incluso cuando el pipeline no termina corre
 - **Tests**: reporte JUnit de raíz y de cada servicio implementado.
 - **Artifacts → reports/coverage/**: XML Cobertura y HTML por servicio; descargar el
   directorio HTML completo y abrir su `index.html` si Jenkins restringe su visualización.
-- La consola muestra líneas faltantes y cobertura por ejecución. No hay porcentaje mínimo
-  nuevo ni promedio entre servicios que oculte un módulo con poca cobertura.
+- La consola muestra líneas faltantes y cobertura por ejecución. El objetivo del 80 % es
+  una recomendación por módulo, sin promedios entre servicios que oculten diferencias.
 - Raíz mide `scripts`; cada servicio mide su `src`, con pruebas unitarias e integración
   existentes. Un servicio vacío no se presenta como probado. Cobertura no mide calidad
   de asserts, disponibilidad de AWS ni cumplimiento funcional completo.

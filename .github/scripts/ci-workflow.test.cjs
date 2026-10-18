@@ -19,7 +19,17 @@ test('solo candidatos verifican política desde base confiable; errores vuelven 
   assert.ok(steps[0].includes('ref: ${{ github.event.pull_request.base.sha }}'));
   for (const step of steps.slice(0, 2)) assert.ok(step.includes("startsWith(github.head_ref, 'backport/release-pr-')"));
   assert.ok(steps[1].includes("core.setOutput('skip_tests', 'false')"));
-  for (const step of steps.slice(2)) assert.ok(step.includes("steps.policy.outputs.skip_tests != 'true'"), step.split('\n')[0]);
+  for (const step of steps.slice(2)) {
+    if (step.startsWith('Publicar resumen de validación\n')) assert.ok(step.includes('if: always()'));
+    else assert.ok(step.includes("steps.policy.outputs.skip_tests != 'true'"), step.split('\n')[0]);
+  }
+});
+test('resumen con resultados JUnit por módulo sin repetir las pruebas', () => {
+  const ci = read('quality.yml');
+  assert.ok(ci.includes('python -m pytest tests --junitxml=reports/root.xml'));
+  assert.ok(ci.includes('--junitxml="reports/$service.xml"'));
+  assert.ok(ci.includes('CI_STEPS: ${{ toJSON(steps) }}'));
+  assert.ok(ci.includes('run: python -m scripts.ci_summary'));
 });
 test('backport automático desactivado por defecto, solo desde main y sin privilegios administrativos', () => {
   const automatic = read('automatic-backport.yml');
