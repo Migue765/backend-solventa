@@ -16,6 +16,15 @@ fi
 
 : "${CLUSTER_NAME:?}" "${NAMESPACE:?}" "${ECR_REPOSITORY_URL:?}" "${IMAGE_TAG:?}" "${AWS_REGION:?}"
 
+if [ "$NAMESPACE" = "hu11-perfilamiento" ]; then
+  echo "HU11 esta retirado: no se permite recrear ni actualizar sus workloads." >&2
+  exit 1
+fi
+if [ "$SERVICE_NAME" = "perfilamiento" ] && [ "$NAMESPACE" != "perfilamiento" ]; then
+  echo "Perfilamiento solo se despliega en el namespace productivo perfilamiento." >&2
+  exit 1
+fi
+
 export IMAGE="${ECR_REPOSITORY_URL}:${IMAGE_TAG}"
 # Los nombres de Job deben ser DNS-1123: minusculas, digitos y guiones.
 export MIGRATION_ID="$(printf '%s' "$IMAGE_TAG" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
