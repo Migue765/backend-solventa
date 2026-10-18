@@ -162,7 +162,7 @@ resource "aws_lb_listener_rule" "bff_web" {
 
 resource "aws_lb_listener_rule" "bff_web_consents" {
   listener_arn = aws_lb_listener.this.arn
-  priority     = 11
+  priority     = 12
 
   action {
     type             = "forward"
