@@ -14,12 +14,14 @@ from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
+    ErrorConsultaPerfil,
     OfertaNoDisponibleError,
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
+from cotizacion.infrastructure.perfil_http import ProveedorPerfilHttp
 from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
 from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
 from cotizacion.infrastructure.persistence.database import crear_sesiones
@@ -41,9 +43,17 @@ def create_app(config: Config | None = None) -> Flask:
 
     sesiones = crear_sesiones(config.database_url, config.db_pool_size, config.db_max_overflow)
     repositorio = RepositorioCotizacionesSqlAlchemy(sesiones)
+    perfil_http = (
+        ProveedorPerfilHttp(config.perfilamiento_url, config.internal_api_token)
+        if config.perfilamiento_habilitado
+        else None
+    )
+    proveedor_perfil = perfil_http or ProveedorPerfilSimulado(config.perfil_score_simulado)
+    if not config.perfilamiento_habilitado:
+        logger.warning("Perfilamiento remoto deshabilitado: se usa el perfil simulado local.")
     calculadora = CalculadoraCotizacion(
         reglas=ReglasConCache(RepositorioReglasSqlAlchemy(sesiones), config.reglas_cache_segundos),
-        perfiles=ProveedorPerfilSimulado(config.perfil_score_simulado),
+        perfiles=proveedor_perfil,
         tarificador=TarificadorPorRegla(),
         vigencia=timedelta(days=config.vigencia_dias),
     )
@@ -51,15 +61,17 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
     perfiles_riesgo = PerfilRiesgoSimulado()
     app.extensions["registrar_solicitud"] = RegistrarSolicitud(
-        repositorio, calculadora, perfiles_riesgo
+        repositorio, calculadora, perfiles_riesgo, generador_perfiles=perfil_http
     )
+    app.extensions["proveedor_perfil"] = perfil_http
     app.extensions["gestionar_ofertas"] = GestionarOfertas(
-        repositorio, repositorio, perfiles_riesgo
+        repositorio, repositorio, perfiles_riesgo, perfiles=perfil_http
     )
     app.extensions["procesar_suscripcion"] = ProcesarSuscripcion(
         repositorio,
         repositorio,
         repositorio,
+        perfiles=perfil_http,
     )
 
     app.register_blueprint(health.bp)
@@ -81,6 +93,11 @@ def create_app(config: Config | None = None) -> Flask:
             jsonify(error="regla_de_negocio", mensaje=str(error), correlationId=g.correlation_id),
             422,
         )
+
+    @app.errorhandler(ErrorConsultaPerfil)
+    def error_perfil(error: ErrorConsultaPerfil) -> tuple[Response, int]:
+        logger.warning("Perfilamiento: %s", error.codigo, extra={"correlationId": g.correlation_id})
+        return jsonify(error=error.codigo, correlationId=g.correlation_id), error.status
 
     @app.errorhandler(ConflictoIdempotenciaError)
     def conflicto_idempotencia(_: ConflictoIdempotenciaError):

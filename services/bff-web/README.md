@@ -76,20 +76,25 @@ El access token vive solo en memoria; el refresh token, en `sessionStorage`. Cua
 token está por vencer (`expiraEn`) o responde 401, el cliente llama a `/v1/sesiones/renovar` y
 reemplaza ambos tokens: el refresh anterior deja de servir.
 
-### Autorización temporal de perfilamiento
+### Consentimiento y perfilamiento
 
-Mientras no esté implementado el consentimiento real, la consulta autenticada
-`GET /v1/consentimientos/perfilamiento` devuelve siempre `autorizado: true`,
-`estado: autorizado` y `simulada: true` para el usuario del JWT. No consulta ni
-persiste una autorización real, no accede a Open Finance/Open Data y no implementa
-revocación. La vigencia simulada es de 30 días desde cada consulta; no se debe usar
-como evidencia de consentimiento. La autenticación sigue siendo obligatoria.
+`GET/PUT /v1/consentimientos/perfilamiento` consulta, autoriza o revoca el
+consentimiento real de Identidad. El cuerpo de PUT es `{autorizado, version}`:
+la version inicial es 0; una version desactualizada responde 409. No se autoriza
+automaticamente ni se acepta un cliente desde el formulario; siempre procede del JWT.
+La autorizacion dura 30 dias. `INTERNAL_API_TOKEN` autentica estas llamadas internas.
 
-La creación de cotizaciones no exige una autorización adicional. Al implementar el
-consentimiento real, se debe sustituir este mock y recuperar la validación de vigencia.
-Para que el cambio funcione en AWS, hay que desplegar `bff-web` y aplicar la regla
-de ALB `bff_web_consents` del módulo `api-gateway`. CORS debe exponer `Date` para
-que la web valide la vigencia con el reloj del servidor; modificar el código no actualiza AWS.
+`GET /v1/solicitudes-cotizacion/{id}/perfilamiento` recupera el mismo perfil
+persistido para el calculo, con vigencia maxima de 15 minutos y ambas fuentes
+Open Finance/Open Data rotuladas como simuladas. Revocar, renovar la autorizacion
+o vencer el perfil bloquea su reutilizacion, las ofertas y la seleccion.
+Una solicitud anterior sin evidencia devuelve `perfil_no_encontrado`; se debe crear
+una nueva despues de autorizar. No se inventan perfiles para solicitudes antiguas.
+
+En AWS deben desplegarse Identidad (migracion 0002), Perfilamiento, Cotizacion
+con `COTIZACION_PERFILAMIENTO_HABILITADO=true` y el BFF. La regla ALB
+`bff_web_consents` lleva la consulta de consentimiento al BFF y CORS expone `Date`
+para validar la vigencia con el reloj del servidor.
 
 ## Configuración
 

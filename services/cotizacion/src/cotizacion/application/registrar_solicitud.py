@@ -7,10 +7,15 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
-from cotizacion.application.ports import PerfilRiesgoGateway, SolicitudCotizacionRepository
+from cotizacion.application.ports import (
+    GeneradorPerfil,
+    PerfilRiesgoGateway,
+    SolicitudCotizacionRepository,
+)
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import ConflictoIdempotenciaError, ReglaDeNegocioError
+from cotizacion.domain.perfil_riesgo import perfil_desde_score
 from cotizacion.domain.productos import buscar_producto
 from cotizacion.domain.solicitud import SolicitudCotizacion
 
@@ -35,11 +40,13 @@ class RegistrarSolicitud:
         calculadora: CalculadoraCotizacion,
         perfiles_riesgo: PerfilRiesgoGateway,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
+        generador_perfiles: GeneradorPerfil | None = None,
     ) -> None:
         self._repositorio = repositorio
         self._calculadora = calculadora
         self._perfiles_riesgo = perfiles_riesgo
         self._reloj = reloj
+        self._generador_perfiles = generador_perfiles
 
     def ejecutar(self, comando: RegistrarSolicitudComando) -> SolicitudCotizacion:
         fingerprint = _fingerprint(comando)
@@ -71,15 +78,24 @@ class RegistrarSolicitud:
             producto_id=producto.producto_interno_id,
             coberturas=[cobertura],
         )
-        # El perfil de la solicitud es el perfil de riesgo vigente del propio cliente.
+        perfil_id = str(comando.cliente_id)
+        perfil_ofertas = None
+        if self._generador_perfiles is not None:
+            perfil_remoto = self._generador_perfiles.generar(
+                comando.cliente_id, cotizacion.cotizacion_id
+            )
+            perfil_id = perfil_remoto.perfil_id
+            perfil_ofertas = perfil_desde_score(perfil_remoto.score)
+            ahora = self._reloj()
         self._calculadora.calcular(
             cotizacion,
-            str(comando.cliente_id),
+            perfil_id,
             ahora,
             producto,
             comando.datos_producto,
             perfil_ofertas=(
-                self._perfiles_riesgo.consultar(comando.tipo_documento, comando.identificacion)
+                perfil_ofertas
+                or self._perfiles_riesgo.consultar(comando.tipo_documento, comando.identificacion)
                 if producto.producto_id == "parametric-weather"
                 else None
             ),

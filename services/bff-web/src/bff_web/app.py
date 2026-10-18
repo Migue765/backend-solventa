@@ -6,11 +6,14 @@ from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import consents, health, quotes, sessions, users
 from bff_web.application.ports import IdentityGateway, TokenVerifier
+from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.config import Config
 from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
+from bff_web.domain.profiling import ProfilingError
 from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
+from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_web.problems import problem_response
@@ -21,6 +24,7 @@ def create_app(
     quote_gateway: QuoteGateway | None = None,
     identity_gateway: IdentityGateway | None = None,
     token_verifier: TokenVerifier | None = None,
+    profiling_gateway: ProfilingGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -42,6 +46,12 @@ def create_app(
     app.extensions["quote_gateway"] = quote_gateway or HttpQuoteGateway(
         active_config.quote_service_url
     )
+    app.extensions["profiling_gateway"] = profiling_gateway or HttpProfilingGateway(
+        active_config.identity_url,
+        active_config.quote_service_url,
+        active_config.internal_api_token,
+    )
+    app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)

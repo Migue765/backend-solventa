@@ -6,8 +6,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from cotizacion.application.perfilamiento import validar_perfil
 from cotizacion.application.ports import (
     PerfilRiesgoGateway,
+    ProveedorPerfil,
     SeleccionOfertaRepository,
     SolicitudCotizacionRepository,
 )
@@ -31,6 +33,7 @@ from cotizacion.domain.ofertas import (
     ResultadoOfertas,
     SeleccionOferta,
 )
+from cotizacion.domain.perfil_riesgo import perfil_desde_score
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.domain.solicitud import SolicitudCotizacion
 
@@ -42,16 +45,19 @@ class GestionarOfertas:
         selecciones: SeleccionOfertaRepository,
         perfiles_riesgo: PerfilRiesgoGateway,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
+        perfiles: ProveedorPerfil | None = None,
     ) -> None:
         self._solicitudes = solicitudes
         self._selecciones = selecciones
         self._perfiles_riesgo = perfiles_riesgo
         self._reloj = reloj
+        self._perfiles = perfiles
 
     def listar(self, solicitud_id: str, cliente_id: UUID) -> ResultadoOfertas:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        perfil_remoto = validar_perfil(solicitud, self._perfiles) if self._perfiles else None
         seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         instantanea = solicitud.cotizacion.instantanea
         detalle = instantanea.contenido.get("tarificacion", {}) if instantanea else {}
@@ -64,8 +70,10 @@ class GestionarOfertas:
                 self._reloj(),
                 seleccion.oferta_id if seleccion else None,
             )
-        perfil_riesgo = self._perfiles_riesgo.consultar(
-            solicitud.tipo_documento, solicitud.identificacion
+        perfil_riesgo = (
+            perfil_desde_score(perfil_remoto.score)
+            if perfil_remoto
+            else self._perfiles_riesgo.consultar(solicitud.tipo_documento, solicitud.identificacion)
         )
         return _generar_ofertas(
             solicitud_id,
@@ -133,8 +141,11 @@ class GestionarOfertas:
         return seleccion
 
     def consultar_seleccion(self, solicitud_id: str, cliente_id: UUID) -> SeleccionOferta:
-        if self._solicitudes.obtener_solicitud(solicitud_id, cliente_id) is None:
+        solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
+        if solicitud is None:
             raise SolicitudNoEncontradaError()
+        if self._perfiles is not None:
+            validar_perfil(solicitud, self._perfiles)
         seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         if seleccion is None:
             raise SeleccionNoEncontradaError()

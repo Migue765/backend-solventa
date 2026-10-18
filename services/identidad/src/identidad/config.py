@@ -25,6 +25,7 @@ class Config:
     db_pool_size: int = 5
     db_max_overflow: int = 5
     password_iterations: int = DEFAULT_ITERATIONS
+    internal_api_token: str = ""
 
     def __post_init__(self) -> None:
         if not self.database_url.strip():
@@ -46,6 +47,7 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             database_url=_required("DATABASE_URL"),
             jwt_private_key=normalize_pem(_required("JWT_PRIVATE_KEY")),
             jwt_issuer=_required("JWT_ISSUER").rstrip("/"),

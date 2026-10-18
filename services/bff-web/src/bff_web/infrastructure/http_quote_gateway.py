@@ -10,6 +10,7 @@ from uuid import UUID
 
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.product_data import validate_product_data
+from bff_web.domain.profiling import PROFILING_ERRORS, ProfilingError
 from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
@@ -194,18 +195,23 @@ class HttpQuoteGateway(QuoteGateway):
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload: Any = json.load(response)
         except HTTPError as error:
+            if error.code in {403, 422, 503}:
+                try:
+                    problem = json.load(error)
+                except (ValueError, OSError) as parse_error:
+                    raise QuoteServiceUnavailableError() from parse_error
+                code = problem.get("error") if isinstance(problem, dict) else None
+                if isinstance(code, str) and PROFILING_ERRORS.get(code) == error.code:
+                    raise ProfilingError(code, error.code) from error
+                if error.code == 422 and code == "oferta_no_disponible":
+                    raise OfferUnavailableError() from error
+                if error.code == 422 and code in {"seguro_no_disponible", "regla_de_negocio"}:
+                    raise InsuranceProductUnavailableError() from error
+                raise QuoteServiceUnavailableError() from error
             if error.code == HTTPStatus.NOT_FOUND:
                 raise QuoteRequestNotFoundError() from error
             if error.code == HTTPStatus.CONFLICT:
                 raise QuoteRequestConflictError() from error
-            if error.code == HTTPStatus.UNPROCESSABLE_ENTITY:
-                try:
-                    payload = json.load(error)
-                except json.JSONDecodeError:
-                    raise QuoteServiceUnavailableError() from error
-                if payload.get("error") == "oferta_no_disponible":
-                    raise OfferUnavailableError() from error
-                raise InsuranceProductUnavailableError() from error
             raise QuoteServiceUnavailableError() from error
         except (URLError, TimeoutError, json.JSONDecodeError) as error:
             raise QuoteServiceUnavailableError() from error

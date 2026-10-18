@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 
@@ -27,3 +28,4 @@ class PerfilRiesgo:
     perfil_id: str
     score: Decimal
     modelo_version: str
+    evidencia: dict[str, Any] | None = None

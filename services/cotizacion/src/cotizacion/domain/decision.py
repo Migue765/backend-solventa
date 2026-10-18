@@ -43,6 +43,13 @@ def construir_instantanea(
     calculada_en: datetime,
     tarificacion: dict[str, Any] | None = None,
 ) -> InstantaneaDecision:
+    perfil_decision: dict[str, Any] = {
+        "perfilId": perfil.perfil_id,
+        "score": str(perfil.score),
+        "modeloVersion": perfil.modelo_version,
+    }
+    if perfil.evidencia is not None:
+        perfil_decision["evidencia"] = perfil.evidencia
     decision = {
         "entradas": {
             "moneda": cotizacion.moneda,
@@ -55,11 +62,7 @@ def construir_instantanea(
                 for c in cotizacion.coberturas
             ],
         },
-        "perfil": {
-            "perfilId": perfil.perfil_id,
-            "score": str(perfil.score),
-            "modeloVersion": perfil.modelo_version,
-        },
+        "perfil": perfil_decision,
         "regla": {
             "reglaId": str(regla.regla_id),
             "version": regla.version,

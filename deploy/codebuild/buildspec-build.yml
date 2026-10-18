@@ -22,6 +22,7 @@ phases:
       - ruff check "$SERVICE_DIR"
       - python -m pytest -q "$SERVICE_DIR/tests"
       - VERSION=$(python -c "import tomllib; print(tomllib.load(open('$SERVICE_DIR/pyproject.toml','rb'))['project']['version'])")
+      - if [ "$SERVICE_NAME" = "perfilamiento" ]; then VERSION="perfilamiento-$VERSION"; fi
       - export IMAGE_TAG="${VERSION}-$(printf '%s' "$COMMIT_ID" | cut -c1-7)"
       - echo "Imagen $ECR_REPOSITORY_URL:$IMAGE_TAG"
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%%/*}"

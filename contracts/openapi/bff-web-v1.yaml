@@ -18,15 +18,14 @@ paths:
   /v1/consentimientos/perfilamiento:
     get:
       tags: [Consentimientos]
-      summary: Consulta una autorización de perfilamiento simulada
+      summary: Consulta el consentimiento de perfilamiento persistido
       description: >-
-        Mock temporal: siempre autoriza al usuario del JWT para desbloquear las
-        cotizaciones. No registra consentimiento real ni consulta fuentes externas.
-        La vigencia simulada se calcula desde cada consulta. No admite revocación.
+        Consulta la ultima version del consentimiento del usuario del JWT.
+        No autoriza automaticamente. La autorizacion expira a los 30 dias.
       operationId: consultarConsentimientoPerfilamiento
       responses:
         "200":
-          description: Autorización simulada, siempre verdadera
+          description: Consentimiento vigente o revocado
           headers:
             Cache-Control:
               schema:
@@ -35,9 +34,75 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ConsentimientoPerfilamientoSimulado"
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+        "404":
+          description: No existe consentimiento (code consentimiento_ausente)
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+    put:
+      tags: [Consentimientos]
+      summary: Autoriza o revoca el perfilamiento con control de version
+      operationId: guardarConsentimientoPerfilamiento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [autorizado, version]
+              properties:
+                autorizado:
+                  type: boolean
+                version:
+                  type: integer
+                  minimum: 0
+                  description: Version actual; 0 si no existe consentimiento
+      responses:
+        "200":
+          description: Nueva version persistida junto con su evento de auditoria
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/perfilamiento:
+    get:
+      tags: [Cotizaciones]
+      summary: Consulta el mismo perfil usado para calcular la solicitud
+      operationId: consultarPerfilamientoSolicitud
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Perfil vigente con ambas fuentes simuladas e integras
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Perfilamiento"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Consentimiento ausente, revocado, vencido o con otra version
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "422":
+          description: Perfil vencido
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/usuarios:
@@ -497,7 +562,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
-    ConsentimientoPerfilamientoSimulado:
+    ConsentimientoPerfilamiento:
       type: object
       additionalProperties: false
       required:
@@ -505,12 +570,10 @@ components:
         - clienteId
         - version
         - estado
-        - autorizado
         - finalidad
         - alcances
         - efectivaEn
         - vigenteHasta
-        - simulada
       properties:
         consentimientoId:
           type: string
@@ -520,13 +583,10 @@ components:
           format: uuid
         version:
           type: integer
-          const: 1
+          minimum: 1
         estado:
           type: string
-          const: autorizado
-        autorizado:
-          type: boolean
-          const: true
+          enum: [autorizado, revocado]
         finalidad:
           type: string
           const: cotizacion
@@ -541,9 +601,68 @@ components:
         vigenteHasta:
           type: string
           format: date-time
-        simulada:
+    Perfilamiento:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId,
+                 consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      properties:
+        solicitudId:
+          type: string
+        perfilId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        modeloVersion:
+          type: string
+        score:
+          type: string
+          description: Indicador sintetico entre 0 y 1, no informacion financiera real
+        nivel:
+          type: string
+          enum: [A, B, C]
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+        calculadoEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        fallbackUsed:
           type: boolean
-          const: true
+          const: false
+        fuentes:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            properties:
+              nombre:
+                type: string
+                enum: [open_finance, open_data]
+              version:
+                type: string
+              consultadaEn:
+                type: string
+                format: date-time
+              vigenteHasta:
+                type: string
+                format: date-time
+              simulada:
+                type: boolean
+                const: true
+              indicadorRiesgo:
+                type: string
     Credenciales:
       type: object
       additionalProperties: false

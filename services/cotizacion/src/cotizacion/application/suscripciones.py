@@ -4,7 +4,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from cotizacion.application.perfilamiento import validar_perfil
 from cotizacion.application.ports import (
+    ProveedorPerfil,
     SeleccionOfertaRepository,
     SolicitudCotizacionRepository,
     SuscripcionRepository,
@@ -33,11 +35,13 @@ class ProcesarSuscripcion:
         selecciones: SeleccionOfertaRepository,
         suscripciones: SuscripcionRepository,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
+        perfiles: ProveedorPerfil | None = None,
     ) -> None:
         self._solicitudes = solicitudes
         self._selecciones = selecciones
         self._suscripciones = suscripciones
         self._reloj = reloj
+        self._perfiles = perfiles
 
     def iniciar(
         self,
@@ -48,6 +52,8 @@ class ProcesarSuscripcion:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
+        if self._perfiles is not None:
+            validar_perfil(solicitud, self._perfiles)
         seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         if seleccion is None:
             raise SeleccionNoEncontradaError()
