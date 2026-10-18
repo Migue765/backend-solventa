@@ -57,7 +57,7 @@ spec:
             - name: COTIZACION_PERFILAMIENTO_HABILITADO
               value: "true"
             - name: PERFILAMIENTO_SERVICE_URL
-              value: http://perfilamiento.hu11-perfilamiento.svc.cluster.local:8080
+              value: http://perfilamiento.perfilamiento.svc.cluster.local:8080
             - name: INTERNAL_API_TOKEN
               valueFrom:
                 secretKeyRef:
