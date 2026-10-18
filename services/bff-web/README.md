@@ -76,6 +76,26 @@ El access token vive solo en memoria; el refresh token, en `sessionStorage`. Cua
 token está por vencer (`expiraEn`) o responde 401, el cliente llama a `/v1/sesiones/renovar` y
 reemplaza ambos tokens: el refresh anterior deja de servir.
 
+### Consentimiento y perfilamiento
+
+`GET/PUT /v1/consentimientos/perfilamiento` consulta, autoriza o revoca el
+consentimiento real de Identidad. El cuerpo de PUT es `{autorizado, version}`:
+la version inicial es 0; una version desactualizada responde 409. No se autoriza
+automaticamente ni se acepta un cliente desde el formulario; siempre procede del JWT.
+La autorizacion dura 30 dias. `INTERNAL_API_TOKEN` autentica estas llamadas internas.
+
+`GET /v1/solicitudes-cotizacion/{id}/perfilamiento` recupera el mismo perfil
+persistido para el calculo, con vigencia maxima de 15 minutos y ambas fuentes
+Open Finance/Open Data rotuladas como simuladas. Revocar, renovar la autorizacion
+o vencer el perfil bloquea su reutilizacion, las ofertas y la seleccion.
+Una solicitud anterior sin evidencia devuelve `perfil_no_encontrado`; se debe crear
+una nueva despues de autorizar. No se inventan perfiles para solicitudes antiguas.
+
+En AWS deben desplegarse Identidad (migracion 0002), Perfilamiento, Cotizacion
+con `COTIZACION_PERFILAMIENTO_HABILITADO=true` y el BFF. La regla ALB
+`bff_web_consents` lleva la consulta de consentimiento al BFF y CORS expone `Date`
+para validar la vigencia con el reloj del servidor.
+
 ## Configuración
 
 | Variable                    | Default                 | Descripción                                          |

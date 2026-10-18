@@ -53,6 +53,11 @@ spec:
               value: http://cotizacion.cotizacion.svc.cluster.local:8080
             - name: IDENTIDAD_URL
               value: http://identidad.identidad.svc.cluster.local:8080
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: profiling-internal
+                  key: INTERNAL_API_TOKEN
             - name: JWT_ISSUER
               value: ${JWT_ISSUER}
             - name: JWT_AUDIENCE

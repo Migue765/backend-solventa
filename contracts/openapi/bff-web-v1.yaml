@@ -8,12 +8,103 @@ servers:
 tags:
   - name: Usuarios
   - name: Sesiones
+  - name: Consentimientos
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
   - name: Suscripciones
   - name: Dashboard
 paths:
+  /v1/consentimientos/perfilamiento:
+    get:
+      tags: [Consentimientos]
+      summary: Consulta el consentimiento de perfilamiento persistido
+      description: >-
+        Consulta la ultima version del consentimiento del usuario del JWT.
+        No autoriza automaticamente. La autorizacion expira a los 30 dias.
+      operationId: consultarConsentimientoPerfilamiento
+      responses:
+        "200":
+          description: Consentimiento vigente o revocado
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+        "404":
+          description: No existe consentimiento (code consentimiento_ausente)
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+    put:
+      tags: [Consentimientos]
+      summary: Autoriza o revoca el perfilamiento con control de version
+      operationId: guardarConsentimientoPerfilamiento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [autorizado, version]
+              properties:
+                autorizado:
+                  type: boolean
+                version:
+                  type: integer
+                  minimum: 0
+                  description: Version actual; 0 si no existe consentimiento
+      responses:
+        "200":
+          description: Nueva version persistida junto con su evento de auditoria
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamiento"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/perfilamiento:
+    get:
+      tags: [Cotizaciones]
+      summary: Consulta el mismo perfil usado para calcular la solicitud
+      operationId: consultarPerfilamientoSolicitud
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Perfil vigente con ambas fuentes simuladas e integras
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Perfilamiento"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Consentimiento ausente, revocado, vencido o con otra version
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "422":
+          description: Perfil vencido
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -471,6 +562,107 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    ConsentimientoPerfilamiento:
+      type: object
+      additionalProperties: false
+      required:
+        - consentimientoId
+        - clienteId
+        - version
+        - estado
+        - finalidad
+        - alcances
+        - efectivaEn
+        - vigenteHasta
+      properties:
+        consentimientoId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [autorizado, revocado]
+        finalidad:
+          type: string
+          const: cotizacion
+        alcances:
+          type: array
+          const: [open_finance, open_data]
+          items:
+            type: string
+        efectivaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+    Perfilamiento:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId,
+                 consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      properties:
+        solicitudId:
+          type: string
+        perfilId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        modeloVersion:
+          type: string
+        score:
+          type: string
+          description: Indicador sintetico entre 0 y 1, no informacion financiera real
+        nivel:
+          type: string
+          enum: [A, B, C]
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+        calculadoEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        fallbackUsed:
+          type: boolean
+          const: false
+        fuentes:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            properties:
+              nombre:
+                type: string
+                enum: [open_finance, open_data]
+              version:
+                type: string
+              consultadaEn:
+                type: string
+                format: date-time
+              vigenteHasta:
+                type: string
+                format: date-time
+              simulada:
+                type: boolean
+                const: true
+              indicadorRiesgo:
+                type: string
     Credenciales:
       type: object
       additionalProperties: false

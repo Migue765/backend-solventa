@@ -14,9 +14,12 @@ from cotizacion.api.schemas import (
     suscripcion_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.perfilamiento import validar_perfil
+from cotizacion.application.ports import ProveedorPerfil
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
+from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -90,6 +93,27 @@ def consultar_seleccion(solicitud_id: str) -> tuple[Response, int] | Response:
     return jsonify(
         seleccion_oferta_a_json(_ofertas().consultar_seleccion(solicitud_id, cliente_id))
     )
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/perfilamiento")
+def consultar_perfilamiento(solicitud_id: str) -> Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        raise ErrorConsultaPerfil("solicitud_invalida", 400)
+    solicitud = _repositorio().obtener_solicitud(solicitud_id, cliente_id)
+    if solicitud is None:
+        raise SolicitudNoEncontradaError()
+    proveedor = cast(ProveedorPerfil | None, current_app.extensions["proveedor_perfil"])
+    if proveedor is None:
+        raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+    perfil = validar_perfil(solicitud, proveedor)
+    assert perfil.evidencia is not None
+    datos = {
+        key: value
+        for key, value in perfil.evidencia.items()
+        if key not in {"clienteId", "referenciaId"}
+    }
+    return jsonify(solicitudId=solicitud_id, **datos)
 
 
 @bp.put("/solicitudes-cotizacion/<solicitud_id>/seleccion")

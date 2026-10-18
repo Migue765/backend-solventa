@@ -9,7 +9,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from identidad.api import health, oauth, users, wellknown
+from identidad.api import consents, health, oauth, users, wellknown
 from identidad.application.ports import LoginAttemptLimiter
 from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
@@ -17,6 +17,7 @@ from identidad.config import Config
 from identidad.infrastructure.jwt_issuer import RsaJwtIssuer
 from identidad.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
 from identidad.infrastructure.passwords import hash_password
+from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.infrastructure.persistence.database import create_sessions
 from identidad.infrastructure.persistence.refresh_token_repository import (
     SqlRefreshTokenRepository,
@@ -65,6 +66,8 @@ def create_app(
     )
 
     app.extensions["identidad_config"] = active_config
+    app.extensions["clock"] = active_clock
+    app.extensions["consent_repository"] = SqlConsentRepository(sessions)
     app.extensions["jwt_issuer"] = jwt_issuer
     app.extensions["token_service"] = TokenService(
         users=user_repository,
@@ -87,6 +90,7 @@ def create_app(
     app.register_blueprint(users.bp)
     app.register_blueprint(oauth.bp)
     app.register_blueprint(wellknown.bp)
+    app.register_blueprint(consents.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

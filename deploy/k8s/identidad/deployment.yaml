@@ -51,6 +51,11 @@ spec:
               value: "2"
             - name: DB_SCHEMA
               value: identidad
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: profiling-internal
+                  key: INTERNAL_API_TOKEN
             - name: ACCESS_TOKEN_MINUTES
               value: "60"
             - name: REFRESH_TOKEN_HOURS_WEB

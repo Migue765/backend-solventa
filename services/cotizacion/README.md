@@ -23,6 +23,15 @@ tests/
 
 ## Endpoints
 
+Con `COTIZACION_PERFILAMIENTO_HABILITADO=true`, `PERFILAMIENTO_SERVICE_URL` e
+`INTERNAL_API_TOKEN`, cada solicitud genera un perfil remoto autorizado, usa ese
+mismo perfil en el calculo y conserva su evidencia en la instantanea de decision.
+`GET /v1/solicitudes-cotizacion/{id}/perfilamiento?clienteId={uuid}` comprueba
+titularidad, referencia, integridad y vigencia. Ofertas, seleccion y nueva
+suscripcion revalidan el consentimiento y el perfil; no hay fallback si fallan.
+Las solicitudes antiguas sin evidencia necesitan una nueva cotizacion.
+Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
+
 | Método | Ruta               | Descripción                    |
 |--------|--------------------|--------------------------------|
 | GET    | `/ping`            | Health check                   |

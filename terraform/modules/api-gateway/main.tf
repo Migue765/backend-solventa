@@ -160,6 +160,24 @@ resource "aws_lb_listener_rule" "bff_web" {
   tags = var.tags
 }
 
+resource "aws_lb_listener_rule" "bff_web_consents" {
+  listener_arn = aws_lb_listener.this.arn
+  priority     = 12
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.bff_web.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/v1/consentimientos/perfilamiento"]
+    }
+  }
+
+  tags = var.tags
+}
+
 # ---------------------------------------------------------------------------
 # bff-movil: tercer target group tras el mismo ALB; todo /movil/* se desvia a el.
 # ---------------------------------------------------------------------------
@@ -259,7 +277,7 @@ resource "aws_apigatewayv2_api" "this" {
     allow_origins     = var.cors_allowed_origins
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     allow_headers     = ["authorization", "content-type", "idempotency-key", "x-correlation-id"]
-    expose_headers    = ["x-correlation-id", "retry-after"]
+    expose_headers    = ["x-correlation-id", "retry-after", "date"]
     max_age           = 3600
     allow_credentials = false
   }
