@@ -8,6 +8,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    SimulatedPayment,
     Subscription,
     TravelDestination,
 )
@@ -47,3 +48,9 @@ class QuoteGateway(Protocol):
     ) -> Subscription: ...
 
     def get_subscription(self, user_id: UUID, request_id: str) -> Subscription: ...
+
+    def confirm_simulated_payment(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID
+    ) -> SimulatedPayment: ...
+
+    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment: ...

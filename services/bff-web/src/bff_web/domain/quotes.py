@@ -131,3 +131,16 @@ class Subscription:
     updated_at: datetime
     decision: SubscriptionDecision
     saga: IssuanceSaga
+
+
+@dataclass(frozen=True)
+class SimulatedPayment:
+    payment_id: UUID
+    request_id: str
+    subscription_id: UUID
+    offer_id: UUID
+    offer_version: int
+    amount: Money
+    billing_period: str
+    confirmed_at: datetime
+    saga: IssuanceSaga

@@ -15,9 +15,11 @@ from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
     OfferUnavailableError,
+    PaymentNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
+    SimulatedPaymentNotFoundError,
 )
 from bff_web.domain.quotes import (
     InsuranceProduct,
@@ -30,6 +32,7 @@ from bff_web.domain.quotes import (
     ProductCoverage,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    SimulatedPayment,
     Subscription,
     SubscriptionDecision,
     TravelDestination,
@@ -172,6 +175,25 @@ class HttpQuoteGateway(QuoteGateway):
         payload = self._request_json(f"/v1/solicitudes-cotizacion/{request_id}/suscripcion?{query}")
         return _safe_subscription_from_json(payload)
 
+    def confirm_simulated_payment(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID
+    ) -> SimulatedPayment:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}",
+            method="POST",
+            headers={"Idempotency-Key": str(idempotency_key)},
+            body={},
+        )
+        return _safe_payment_from_json(payload)
+
+    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}"
+        )
+        return _safe_payment_from_json(payload)
+
     def _request_json(
         self,
         path: str,
@@ -195,12 +217,18 @@ class HttpQuoteGateway(QuoteGateway):
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload: Any = json.load(response)
         except HTTPError as error:
-            if error.code in {403, 422, 503}:
+            if error.code in {403, 404, 422, 503}:
                 try:
                     problem = json.load(error)
                 except (ValueError, OSError) as parse_error:
                     raise QuoteServiceUnavailableError() from parse_error
                 code = problem.get("error") if isinstance(problem, dict) else None
+                if error.code == 404:
+                    if code == "pago_no_encontrado":
+                        raise SimulatedPaymentNotFoundError() from error
+                    raise QuoteRequestNotFoundError() from error
+                if error.code == 422 and code == "pago_no_permitido":
+                    raise PaymentNotAllowedError() from error
                 if isinstance(code, str) and PROFILING_ERRORS.get(code) == error.code:
                     raise ProfilingError(code, error.code) from error
                 if error.code == 422 and code == "oferta_no_disponible":
@@ -240,6 +268,38 @@ def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:
         status=payload["estado"],
         created_at=datetime.fromisoformat(payload["creadaEn"].replace("Z", "+00:00")),
     )
+
+
+def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPayment:
+    try:
+        if (
+            payload["simulada"] is not True
+            or payload["estado"] != "confirmado"
+            or payload["referenciaInterna"] != f"SIM-{UUID(payload['id'])}"
+            or payload["periodicidad"] not in {"mensual", "por_viaje", "por_vuelo", "por_periodo"}
+            or payload["saga"]["estado"] != "pago_confirmado"
+        ):
+            raise ValueError("Respuesta de pago simulado invalida")
+        amount = Decimal(payload["importe"]["monto"])
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("Importe invalido")
+        return SimulatedPayment(
+            payment_id=UUID(payload["id"]),
+            request_id=payload["solicitudId"],
+            subscription_id=UUID(payload["suscripcionId"]),
+            offer_id=UUID(payload["ofertaId"]),
+            offer_version=payload["ofertaVersion"],
+            amount=Money(amount, payload["importe"]["moneda"]),
+            billing_period=payload["periodicidad"],
+            confirmed_at=_datetime(payload["confirmadaEn"]),
+            saga=IssuanceSaga(
+                status=payload["saga"]["estado"],
+                version=payload["saga"]["version"],
+                updated_at=_datetime(payload["saga"]["actualizadaEn"]),
+            ),
+        )
+    except (KeyError, TypeError, ValueError, ArithmeticError) as error:
+        raise QuoteServiceUnavailableError() from error
 
 
 def _safe_record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:

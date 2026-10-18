@@ -23,6 +23,7 @@ def test_downgrade_elimina_las_tablas(alembic_config, database_url):
     assert "suscripciones" not in tablas
     assert "decisiones_suscripcion" not in tablas
     assert "sagas_emision" not in tablas
+    assert "pagos_simulados" not in tablas
 
 
 def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
@@ -92,7 +93,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["clima_suscripciones"]
+    assert script.get_heads() == ["pagos_simulados"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
@@ -110,10 +111,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
 
     with create_engine(url).connect() as conexion:
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
-        assert (
-            conexion.scalar(text("select version_num from alembic_version"))
-            == "clima_suscripciones"
-        )
+        assert conexion.scalar(text("select version_num from alembic_version")) == "pagos_simulados"
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
     assert repositorio.obtener(cotizacion_id) == antes

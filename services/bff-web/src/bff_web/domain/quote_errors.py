@@ -20,3 +20,11 @@ class InsuranceProductNotFoundError(Exception):
 
 class OfferUnavailableError(Exception):
     """La oferta no existe, cambió o ya no está vigente."""
+
+
+class SimulatedPaymentNotFoundError(Exception):
+    """La solicitud del cliente todavía no tiene un pago simulado."""
+
+
+class PaymentNotAllowedError(Exception):
+    """La suscripción o la oferta no permite confirmar el pago."""

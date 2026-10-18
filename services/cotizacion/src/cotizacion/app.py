@@ -9,6 +9,7 @@ from cotizacion.api import cotizaciones, health, solicitudes
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
 from cotizacion.application.crear_cotizacion import CrearCotizacion
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
@@ -16,6 +17,8 @@ from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
     ErrorConsultaPerfil,
     OfertaNoDisponibleError,
+    PagoNoEncontradoError,
+    PagoNoPermitidoError,
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
@@ -28,6 +31,7 @@ from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
 )
+from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.persistence.repositorio_reglas import (
     ReglasConCache,
     RepositorioReglasSqlAlchemy,
@@ -58,6 +62,9 @@ def create_app(config: Config | None = None) -> Flask:
         vigencia=timedelta(days=config.vigencia_dias),
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
+    app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
+        RepositorioPagosSqlAlchemy(sesiones)
+    )
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
     perfiles_riesgo = PerfilRiesgoSimulado()
     app.extensions["registrar_solicitud"] = RegistrarSolicitud(
@@ -124,5 +131,13 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(OfertaNoDisponibleError)
     def oferta_no_disponible(_: OfertaNoDisponibleError):
         return jsonify(error="oferta_no_disponible"), 422
+
+    @app.errorhandler(PagoNoEncontradoError)
+    def pago_no_encontrado(_: PagoNoEncontradoError):
+        return jsonify(error="pago_no_encontrado"), 404
+
+    @app.errorhandler(PagoNoPermitidoError)
+    def pago_no_permitido(_: PagoNoPermitidoError):
+        return jsonify(error="pago_no_permitido"), 422
 
     return app
