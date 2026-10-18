@@ -8,12 +8,38 @@ servers:
 tags:
   - name: Usuarios
   - name: Sesiones
+  - name: Consentimientos
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
   - name: Suscripciones
   - name: Dashboard
 paths:
+  /v1/consentimientos/perfilamiento:
+    get:
+      tags: [Consentimientos]
+      summary: Consulta una autorización de perfilamiento simulada
+      description: >-
+        Mock temporal: siempre autoriza al usuario del JWT para desbloquear las
+        cotizaciones. No registra consentimiento real ni consulta fuentes externas.
+        La vigencia simulada se calcula desde cada consulta. No admite revocación.
+      operationId: consultarConsentimientoPerfilamiento
+      responses:
+        "200":
+          description: Autorización simulada, siempre verdadera
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsentimientoPerfilamientoSimulado"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -471,6 +497,53 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    ConsentimientoPerfilamientoSimulado:
+      type: object
+      additionalProperties: false
+      required:
+        - consentimientoId
+        - clienteId
+        - version
+        - estado
+        - autorizado
+        - finalidad
+        - alcances
+        - efectivaEn
+        - vigenteHasta
+        - simulada
+      properties:
+        consentimientoId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          const: 1
+        estado:
+          type: string
+          const: autorizado
+        autorizado:
+          type: boolean
+          const: true
+        finalidad:
+          type: string
+          const: cotizacion
+        alcances:
+          type: array
+          const: [open_finance, open_data]
+          items:
+            type: string
+        efectivaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        simulada:
+          type: boolean
+          const: true
     Credenciales:
       type: object
       additionalProperties: false

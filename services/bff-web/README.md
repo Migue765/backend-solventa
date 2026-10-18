@@ -76,6 +76,20 @@ El access token vive solo en memoria; el refresh token, en `sessionStorage`. Cua
 token está por vencer (`expiraEn`) o responde 401, el cliente llama a `/v1/sesiones/renovar` y
 reemplaza ambos tokens: el refresh anterior deja de servir.
 
+### Autorización temporal de perfilamiento
+
+Mientras no esté implementado el consentimiento real, la consulta autenticada
+`GET /v1/consentimientos/perfilamiento` devuelve siempre `autorizado: true`,
+`estado: autorizado` y `simulada: true` para el usuario del JWT. No consulta ni
+persiste una autorización real, no accede a Open Finance/Open Data y no implementa
+revocación. La vigencia simulada es de 30 días desde cada consulta; no se debe usar
+como evidencia de consentimiento. La autenticación sigue siendo obligatoria.
+
+La creación de cotizaciones no exige una autorización adicional. Al implementar el
+consentimiento real, se debe sustituir este mock y recuperar la validación de vigencia.
+Para que el cambio funcione en AWS, hay que desplegar `bff-web` y aplicar la regla
+de ALB `bff_web_consents` del módulo `api-gateway`; modificar el código no actualiza AWS.
+
 ## Configuración
 
 | Variable                    | Default                 | Descripción                                          |

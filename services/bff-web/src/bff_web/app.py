@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_web.api import health, quotes, sessions, users
+from bff_web.api import consents, health, quotes, sessions, users
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.config import Config
@@ -46,6 +46,7 @@ def create_app(
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
+    app.register_blueprint(consents.bp)
     app.register_blueprint(quotes.bp)
 
     @app.before_request
