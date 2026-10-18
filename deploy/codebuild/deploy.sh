@@ -20,6 +20,10 @@ if [ "$NAMESPACE" = "hu11-perfilamiento" ]; then
   echo "HU11 esta retirado: no se permite recrear ni actualizar sus workloads." >&2
   exit 1
 fi
+if [ "$NAMESPACE" = "calcular-cotizacion-preview" ]; then
+  echo "Preview aislado: no se permite desplegar en calcular-cotizacion-preview." >&2
+  exit 1
+fi
 if [ "$SERVICE_NAME" = "perfilamiento" ] && [ "$NAMESPACE" != "perfilamiento" ]; then
   echo "Perfilamiento solo se despliega en el namespace productivo perfilamiento." >&2
   exit 1

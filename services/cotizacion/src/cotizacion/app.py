@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 def create_app(config: Config | None = None) -> Flask:
     config = config or Config.desde_entorno()
     app = Flask(__name__)
+    app.extensions["cotizacion_config"] = config
 
     sesiones = crear_sesiones(config.database_url, config.db_pool_size, config.db_max_overflow)
     repositorio = RepositorioCotizacionesSqlAlchemy(sesiones)

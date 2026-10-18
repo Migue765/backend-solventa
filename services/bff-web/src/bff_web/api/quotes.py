@@ -74,6 +74,27 @@ class SimulatedPaymentPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+@bp.get("/clientes/me/dashboard")
+def get_dashboard() -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    if request.args or request.get_data():
+        return problem_response(
+            400,
+            "solicitud_invalida",
+            "Solicitud invalida",
+            "El cliente se obtiene exclusivamente de la sesion autenticada.",
+        )
+    try:
+        dashboard = _gateway().get_dashboard(user_id)
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(dashboard.model_dump(mode="json", by_alias=True))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.get("/productos-seguro")
 def list_products() -> Response:
     user_id = _authenticated_user_id()

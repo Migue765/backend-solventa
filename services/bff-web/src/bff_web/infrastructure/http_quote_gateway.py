@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
+from http.client import HTTPException
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -9,6 +10,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from bff_web.application.quote_ports import QuoteGateway
+from bff_web.domain.dashboard import Dashboard
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.profiling import PROFILING_ERRORS, ProfilingError
 from bff_web.domain.quote_errors import (
@@ -40,9 +42,32 @@ from bff_web.domain.quotes import (
 
 
 class HttpQuoteGateway(QuoteGateway):
-    def __init__(self, base_url: str, timeout_seconds: float = 5) -> None:
+    def __init__(
+        self, base_url: str, timeout_seconds: float = 5, internal_api_token: str = ""
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._internal_api_token = internal_api_token
+
+    def get_dashboard(self, user_id: UUID) -> Dashboard:
+        if not self._internal_api_token:
+            raise QuoteServiceUnavailableError()
+        query = urlencode({"clienteId": str(user_id)})
+        try:
+            payload = self._request_json(
+                f"/v1/dashboard?{query}",
+                headers={"Authorization": f"Bearer {self._internal_api_token}"},
+                map_domain_errors=False,
+            )
+            return Dashboard.model_validate(
+                {
+                    **payload,
+                    "polizas": {"disponibilidad": "no_implementado"},
+                    "notificaciones": {"disponibilidad": "no_implementado"},
+                }
+            )
+        except (OSError, HTTPException, ValueError, TypeError) as error:
+            raise QuoteServiceUnavailableError() from error
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
         payload = self._request_json("/v1/productos-seguro")
@@ -201,6 +226,7 @@ class HttpQuoteGateway(QuoteGateway):
         method: str = "GET",
         headers: dict[str, str] | None = None,
         body: dict[str, object] | None = None,
+        map_domain_errors: bool = True,
     ) -> dict[str, Any]:
         request_headers = {"Accept": "application/json", **(headers or {})}
         encoded_body = None
@@ -217,6 +243,8 @@ class HttpQuoteGateway(QuoteGateway):
             with urlopen(request, timeout=self._timeout_seconds) as response:
                 payload: Any = json.load(response)
         except HTTPError as error:
+            if not map_domain_errors:
+                raise QuoteServiceUnavailableError() from error
             if error.code in {403, 404, 422, 503}:
                 try:
                     problem = json.load(error)

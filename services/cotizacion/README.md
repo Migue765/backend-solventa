@@ -54,6 +54,27 @@ juntos; cualquier error posterior al `flush` revierte todos esos registros.
 Las pruebas de repositorio activan las claves foráneas de SQLite y comprueban tanto
 la recuperación persistida como el rollback completo ante una FK inválida en la saga.
 
+### Lectura interna del tablero
+
+`GET /v1/dashboard?clienteId=<uuid>` es una ruta interna para el BFF principal.
+Exige `Authorization: Bearer <INTERNAL_API_TOKEN>` con el secreto ya existente
+configurado en ambos servicios: sin credencial o con una incorrecta responde `401`, sin
+configuracion responde `503` y registra el error. Un JWT de cliente no sustituye
+la credencial de servicio. Un UUID ausente/invalido responde `400`.
+El canal publico es exclusivamente `GET /v1/clientes/me/dashboard` del BFF,
+que obtiene el identificador del JWT y rechaza parametros de suplantacion.
+
+Una consulta SQL de solo lectura filtra cotizaciones por cliente y une seleccion,
+suscripcion, saga y pago persistidos con el mismo ownership. Conserva importes,
+periodicidades, estados y fechas; no recalcula ofertas ni consulta perfilamiento,
+ni siquiera para registros historicos vencidos. Ordena cotizaciones de mas reciente
+a mas antigua, con ID como desempate. No suma importes ni convierte monedas.
+La consulta sin filas devuelve tres arrays vacios reales. Fallos SQL o integridad
+(por ejemplo suscripcion sin saga) se notifican como errores, nunca como vacio.
+La respuesta tiene `Cache-Control: no-store`; el BFF agrega la disponibilidad
+`no_implementado` de polizas y notificaciones y valida el contrato publico.
+No requiere migraciones, nuevos servicios ni cambios de infraestructura.
+
 ### Pago simulado
 
 El canal público es el BFF con JWT. Las rutas internas usan `clienteId` derivado

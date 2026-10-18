@@ -1,6 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
+from bff_web.domain.dashboard import Dashboard
 from bff_web.domain.quotes import (
     InsuranceProduct,
     InsuranceProductDetail,
@@ -15,6 +16,8 @@ from bff_web.domain.quotes import (
 
 
 class QuoteGateway(Protocol):
+    def get_dashboard(self, user_id: UUID) -> Dashboard: ...
+
     def list_products(self) -> tuple[InsuranceProduct, ...]: ...
 
     def get_product(self, product_id: str) -> InsuranceProductDetail: ...
