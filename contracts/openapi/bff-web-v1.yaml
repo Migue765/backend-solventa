@@ -6,12 +6,41 @@ info:
 servers:
   - url: /api
 tags:
+  - name: Usuarios
   - name: Sesiones
   - name: Productos
   - name: Cotizaciones
   - name: Ofertas
+  - name: Suscripciones
   - name: Dashboard
 paths:
+  /v1/usuarios:
+    post:
+      tags: [Usuarios]
+      summary: Registra un usuario cliente
+      operationId: registrarUsuario
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevoUsuario"
+      responses:
+        "201":
+          description: Usuario creado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioCreado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "429":
+          $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones:
     post:
       tags: [Sesiones]
@@ -26,16 +55,18 @@ paths:
               $ref: "#/components/schemas/Credenciales"
       responses:
         "200":
-          description: Sesión creada
+          description: >-
+            Sesión creada. El `accessToken` (JWT RS256, 1 hora) se envía como
+            `Authorization: Bearer` y el `refreshToken` se usa en `/v1/sesiones/renovar`.
           headers:
-            Set-Cookie:
-              description: Cookie de sesión HttpOnly, Secure y SameSite.
+            Cache-Control:
               schema:
                 type: string
+                example: no-store
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Sesion"
+                $ref: "#/components/schemas/SesionIniciada"
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
@@ -44,10 +75,38 @@ paths:
           $ref: "#/components/responses/DemasiadasSolicitudes"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/renovar:
+    post:
+      tags: [Sesiones]
+      summary: Renueva la sesión con el refresh token
+      description: El refresh token rota en cada uso; el anterior deja de ser válido.
+      operationId: renovarSesion
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Renovacion"
+      responses:
+        "200":
+          description: Nueva sesión con tokens rotados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SesionIniciada"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/RefreshInvalido"
+        "429":
+          $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones/actual:
     get:
       tags: [Sesiones]
-      summary: Consulta la sesión actual
+      summary: Consulta la sesión actual a partir del access token
       operationId: consultarSesion
       responses:
         "200":
@@ -58,15 +117,27 @@ paths:
                 $ref: "#/components/schemas/Sesion"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
     delete:
       tags: [Sesiones]
-      summary: Cierra la sesión actual
+      summary: Cierra la sesión y revoca el refresh token si se envía
       operationId: cerrarSesion
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CierreSesion"
       responses:
         "204":
           description: Sesión cerrada
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/productos-seguro:
     get:
       tags: [Productos]
@@ -85,6 +156,53 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ProductoSeguro"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/productos-seguro/{productoId}:
+    get:
+      tags: [Productos]
+      summary: Consulta coberturas y condiciones de un seguro
+      operationId: consultarProductoSeguro
+      parameters:
+        - name: productoId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        "200":
+          description: Detalle del seguro
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductoSeguroDetalle"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/destinos-viaje:
+    get:
+      tags: [Productos]
+      summary: Lista los países disponibles para el seguro de viaje
+      operationId: listarDestinosViaje
+      responses:
+        "200":
+          description: Catálogo de destinos asegurables
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [destinos]
+                properties:
+                  destinos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DestinoViaje"
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "503":
@@ -205,6 +323,50 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
+  /v1/solicitudes-cotizacion/{solicitudId}/suscripcion:
+    get:
+      tags: [Suscripciones]
+      summary: Consulta la suscripción asociada a una oferta aceptada
+      operationId: consultarSuscripcion
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Suscripción encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Suscripcion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    post:
+      tags: [Suscripciones]
+      summary: Procesa la suscripción de una oferta aceptada
+      operationId: iniciarSuscripcion
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Suscripción procesada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Suscripcion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes/me/dashboard:
     get:
       tags: [Dashboard]
@@ -223,10 +385,11 @@ paths:
           $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
-    cookieSesion:
-      type: apiKey
-      in: cookie
-      name: solventa_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT RS256 emitido por identidad (dura 1 hora).
   parameters:
     SolicitudId:
       name: solicitudId
@@ -255,8 +418,19 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problema"
+    RefreshInvalido:
+      description: El refresh token no existe, expiró o ya fue usado
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     NoAutorizado:
-      description: La sesión no existe o expiró
+      description: El access token falta, expiró o no es válido
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: Bearer
       content:
         application/problem+json:
           schema:
@@ -311,10 +485,35 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+    NuevoUsuario:
+      type: object
+      additionalProperties: false
+      required: [nombre, correo, contrasena]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        contrasena:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+    UsuarioCreado:
+      type: object
+      additionalProperties: false
+      required: [usuario]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/UsuarioSesion"
     UsuarioSesion:
       type: object
       additionalProperties: false
-      required: [id, nombre, correo, rol]
+      required: [id, nombre, correo, rol, tipoDocumento, identificacion, telefono]
       properties:
         id:
           type: string
@@ -329,6 +528,16 @@ components:
         rol:
           type: string
           enum: [cliente]
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        identificacion:
+          type: string
+          minLength: 5
+          maxLength: 16
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
     Sesion:
       type: object
       additionalProperties: false
@@ -339,10 +548,50 @@ components:
         expiraEn:
           type: string
           format: date-time
+          description: Vencimiento del access token.
+    SesionIniciada:
+      type: object
+      additionalProperties: false
+      required: [usuario, tokenType, accessToken, refreshToken, expiraEn, refreshExpiraEn]
+      properties:
+        usuario:
+          $ref: "#/components/schemas/UsuarioSesion"
+        tokenType:
+          type: string
+          enum: [Bearer]
+        accessToken:
+          type: string
+          description: JWT RS256 de vida corta (1 hora). Se guarda solo en memoria.
+        refreshToken:
+          type: string
+          description: Token opaco de un solo uso que rota en cada renovación.
+        expiraEn:
+          type: string
+          format: date-time
+          description: Vencimiento del access token (ahora + expires_in de identidad).
+        refreshExpiraEn:
+          type: string
+          format: date-time
+    Renovacion:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+          maxLength: 2048
+    CierreSesion:
+      type: object
+      additionalProperties: false
+      properties:
+        refreshToken:
+          type: string
+          maxLength: 2048
     ProductoSeguro:
       type: object
       additionalProperties: false
-      required: [id, nombre, descripcion, disponible]
+      required: [id, nombre, descripcion, disponible, coberturasPrincipales]
       properties:
         id:
           type: string
@@ -355,51 +604,332 @@ components:
           maxLength: 500
         disponible:
           type: boolean
+        coberturasPrincipales:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    ProductoSeguroDetalle:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - nombre
+        - descripcion
+        - disponible
+        - coberturasPrincipales
+        - coberturas
+        - condiciones
+        - informacionRelevante
+      properties:
+        id:
+          type: string
+          maxLength: 64
+        nombre:
+          type: string
+          maxLength: 120
+        descripcion:
+          type: string
+          maxLength: 500
+        disponible:
+          type: boolean
+        coberturasPrincipales:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaProducto"
+        condiciones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        informacionRelevante:
+          $ref: "#/components/schemas/InformacionProducto"
+    CoberturaProducto:
+      type: object
+      additionalProperties: false
+      required: [nombre, descripcion]
+      properties:
+        nombre:
+          type: string
+        descripcion:
+          type: string
+    InformacionProducto:
+      type: object
+      additionalProperties: false
+      required: [sumaAsegurada, deducible, moneda, vigencia]
+      properties:
+        sumaAsegurada:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,2})?$"
+        deducible:
+          type: string
+          pattern: "^[0-9]+(\\.[0-9]{1,2})?$"
+        moneda:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        vigencia:
+          type: string
+    DestinoViaje:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre]
+      properties:
+        codigo:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
     NuevaSolicitudCotizacion:
       type: object
       additionalProperties: false
       required:
         - productoId
-        - tipoCliente
-        - identificacion
-        - patenteVehiculo
-        - correo
-        - telefono
+        - datosProducto
       properties:
         productoId:
           type: string
-          maxLength: 64
+          enum:
+            - automotive
+            - travel
+            - life
+            - device-protection
+            - parametric
+            - parametric-weather
+            - payment-protection
+            - mortgage-life
+        datosProducto:
+          $ref: "#/components/schemas/DatosProducto"
+      oneOf:
+        - properties:
+            productoId:
+              const: automotive
+            datosProducto:
+              $ref: "#/components/schemas/DatosAutomotriz"
+        - properties:
+            productoId:
+              const: travel
+            datosProducto:
+              $ref: "#/components/schemas/DatosViaje"
+        - properties:
+            productoId:
+              const: life
+            datosProducto:
+              $ref: "#/components/schemas/DatosVida"
+        - properties:
+            productoId:
+              const: device-protection
+            datosProducto:
+              $ref: "#/components/schemas/DatosDispositivo"
+        - properties:
+            productoId:
+              const: parametric
+            datosProducto:
+              $ref: "#/components/schemas/DatosVuelo"
+        - properties:
+            productoId:
+              const: parametric-weather
+            datosProducto:
+              $ref: "#/components/schemas/DatosClima"
+        - properties:
+            productoId:
+              const: payment-protection
+            datosProducto:
+              $ref: "#/components/schemas/DatosProteccionPagos"
+        - properties:
+            productoId:
+              const: mortgage-life
+            datosProducto:
+              $ref: "#/components/schemas/DatosVidaHipotecaria"
+    DatosProducto:
+      description: >-
+        Datos específicos del producto, sin campos adicionales. Todas las fechas
+        usan YYYY-MM-DD y todos los importes son strings de enteros positivos COP.
+        Las validaciones temporales se aplican al crear, no al consultar registros históricos.
+      oneOf:
+        - $ref: "#/components/schemas/DatosAutomotriz"
+        - $ref: "#/components/schemas/DatosViaje"
+        - $ref: "#/components/schemas/DatosVida"
+        - $ref: "#/components/schemas/DatosDispositivo"
+        - $ref: "#/components/schemas/DatosVuelo"
+        - $ref: "#/components/schemas/DatosClima"
+        - $ref: "#/components/schemas/DatosProteccionPagos"
+        - $ref: "#/components/schemas/DatosVidaHipotecaria"
+    DatosAutomotriz:
+      type: object
+      additionalProperties: false
+      required: [vehiclePlate]
+      properties:
+        vehiclePlate:
+          type: string
+          pattern: "^[A-Z]{3}[0-9]{3}$"
+    DatosViaje:
+      type: object
+      additionalProperties: false
+      required: [destinationCountryCode, departureDate, returnDate]
+      description: >-
+        El país debe pertenecer a /v1/destinos-viaje y returnDate debe ser igual
+        o posterior a departureDate.
+      properties:
+        destinationCountryCode:
+          type: string
+          pattern: "^[A-Z]{2}$"
+        departureDate:
+          type: string
+          format: date
+        returnDate:
+          type: string
+          format: date
+    DatosVida:
+      type: object
+      additionalProperties: false
+      required: [birthDate]
+      properties:
+        birthDate:
+          type: string
+          format: date
+    DatosDispositivo:
+      type: object
+      additionalProperties: false
+      required: [deviceType, brandModel, purchaseValue]
+      properties:
+        deviceType:
+          type: string
+          pattern: "\\S"
+          maxLength: 40
+        brandModel:
+          type: string
+          pattern: "\\S"
+          maxLength: 80
+        purchaseValue:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+    DatosVuelo:
+      type: object
+      description: |
+        flightDate debe ser posterior a hoy al crear. Omitir coverageType conserva
+        la modalidad delay-cancellation sin añadir el campo al registro.
+        Las ofertas son simuladas: no consultan aerolíneas ni pagan siniestros.
+        La pérdida de conexión está sujeta a las condiciones del plan y no incluye
+        pérdidas por responsabilidad del pasajero.
+      additionalProperties: false
+      required: [airline, flightNumber, flightDate]
+      properties:
+        airline:
+          type: string
+          pattern: "\\S"
+          maxLength: 80
+        flightNumber:
+          type: string
+          pattern: "^[A-Za-z0-9]{2,10}$"
+        flightDate:
+          type: string
+          format: date
+        coverageType:
+          type: string
+          enum: [delay-cancellation, missed-connection, comprehensive]
+          default: delay-cancellation
+    DatosClima:
+      type: object
+      additionalProperties: false
+      required: [location, weatherEvent, startDate, endDate, insuredAmount]
+      description: >-
+        location contiene municipio y departamento en texto libre, sin catálogo externo.
+        Las fechas deben ser posteriores a hoy al crear; endDate >= startDate
+        y periodo máximo de 366 días inclusive. insuredAmount acepta de 1 a
+        1000000000 COP. El evento, disparador, umbral y compensación están sujetos
+        a condiciones del plan; no hay monitoreo meteorológico ni pagos reales.
+      properties:
+        location:
+          type: string
+          pattern: "\\S"
+          maxLength: 120
+        weatherEvent:
+          type: string
+          enum: [heavy-rain, drought]
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        insuredAmount:
+          type: string
+          pattern: "^(?:[1-9][0-9]{0,8}|1000000000)$"
+    DatosProteccionPagos:
+      type: object
+      additionalProperties: false
+      required: [creditType, monthlyPayment]
+      properties:
+        creditType:
+          type: string
+          pattern: "\\S"
+          maxLength: 60
+        monthlyPayment:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+    DatosVidaHipotecaria:
+      type: object
+      additionalProperties: false
+      required: [birthDate, mortgageBalance]
+      properties:
+        birthDate:
+          type: string
+          format: date
+        mortgageBalance:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+    SolicitudCotizacion:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - productoId
+        - tipoCliente
+        - tipoDocumento
+        - identificacion
+        - datosProducto
+        - correo
+        - telefono
+        - estado
+        - creadaEn
+      properties:
+        id:
+          type: string
+          pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
+        productoId:
+          type: string
         tipoCliente:
           type: string
           enum: [persona_natural]
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
         identificacion:
           type: string
-          pattern: "^[A-Za-z0-9.-]{6,20}$"
-        patenteVehiculo:
-          type: string
-          pattern: "^[A-Za-z0-9-]{5,8}$"
+          minLength: 5
+          maxLength: 16
+        datosProducto:
+          $ref: "#/components/schemas/DatosProducto"
         correo:
           type: string
           format: email
-          maxLength: 254
         telefono:
           type: string
-          pattern: "^\\+[1-9][0-9]{7,14}$"
-    SolicitudCotizacion:
-      allOf:
-        - $ref: "#/components/schemas/NuevaSolicitudCotizacion"
-        - type: object
-          required: [id, estado, creadaEn]
-          properties:
-            id:
-              type: string
-              pattern: "^AQT-[0-9]{4}-[A-Z0-9]{6,12}$"
-            estado:
-              type: string
-              enum: [recibida, procesando, calculada, sin_ofertas, fallida]
-            creadaEn:
-              type: string
-              format: date-time
+          pattern: "^\\+57[0-9]{10}$"
+        estado:
+          type: string
+          enum: [recibida, procesando, calculada, sin_ofertas, fallida]
+        creadaEn:
+          type: string
+          format: date-time
     Dinero:
       type: object
       additionalProperties: false
@@ -410,7 +940,8 @@ components:
           pattern: "^[0-9]+(\\.[0-9]{1,4})?$"
         moneda:
           type: string
-          enum: [UF, CLP]
+          pattern: "^[A-Z]{3}$"
+          example: COP
     Oferta:
       type: object
       additionalProperties: false
@@ -420,6 +951,8 @@ components:
         - nombre
         - descripcion
         - primaMensual
+        - prima
+        - periodicidad
         - coberturaPrincipal
         - deducible
         - vigencia
@@ -444,7 +977,19 @@ components:
           type: string
           maxLength: 500
         primaMensual:
+          description: Solo para periodicidad mensual; null para viaje, vuelo o período asegurado.
+          oneOf:
+            - $ref: "#/components/schemas/Dinero"
+            - type: "null"
+        prima:
           $ref: "#/components/schemas/Dinero"
+        periodicidad:
+          type: string
+          enum: [mensual, por_viaje, por_vuelo, por_periodo]
+          description: >-
+            por_periodo identifica la prima total del período asegurado entre
+            datosProducto.startDate y endDate, ambos inclusive. No define cuotas
+            ni renovación. vigenteHasta es el plazo de aceptación de la oferta.
         coberturaPrincipal:
           type: string
           maxLength: 250
@@ -475,7 +1020,7 @@ components:
           type: boolean
         estado:
           type: string
-          enum: [disponible, vencida, retirada]
+          enum: [disponible, aceptada, vencida, retirada]
         vigenteHasta:
           type: string
           format: date-time
@@ -513,17 +1058,97 @@ components:
       allOf:
         - $ref: "#/components/schemas/NuevaSeleccionOferta"
         - type: object
-          required: [solicitudId, nombreOferta, primaMensual, seleccionadaEn]
+          required: [solicitudId, nombreOferta, primaMensual, prima, periodicidad, seleccionadaEn]
           properties:
             solicitudId:
               type: string
             nombreOferta:
               type: string
             primaMensual:
+              description: Solo para periodicidad mensual; null para viaje, vuelo o período asegurado.
+              oneOf:
+                - $ref: "#/components/schemas/Dinero"
+                - type: "null"
+            prima:
               $ref: "#/components/schemas/Dinero"
+            periodicidad:
+              type: string
+              enum: [mensual, por_viaje, por_vuelo, por_periodo]
+              description: por_periodo conserva la prima total del período asegurado seleccionado.
             seleccionadaEn:
               type: string
               format: date-time
+    Suscripcion:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - solicitudId
+        - ofertaId
+        - ofertaVersion
+        - estado
+        - reglaVersion
+        - creadaEn
+        - actualizadaEn
+        - decision
+        - saga
+      properties:
+        id:
+          type: string
+          format: uuid
+        solicitudId:
+          type: string
+        ofertaId:
+          type: string
+          format: uuid
+        ofertaVersion:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [aprobada, revision, rechazada]
+        reglaVersion:
+          type: string
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        decision:
+          $ref: "#/components/schemas/DecisionSuscripcion"
+        saga:
+          $ref: "#/components/schemas/SagaEmision"
+    DecisionSuscripcion:
+      type: object
+      additionalProperties: false
+      required: [resultado, reglaVersion, hashDecision, decididaEn]
+      properties:
+        resultado:
+          type: string
+          enum: [aprobada, revision, rechazada]
+        reglaVersion:
+          type: string
+        hashDecision:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        decididaEn:
+          type: string
+          format: date-time
+    SagaEmision:
+      type: object
+      additionalProperties: false
+      required: [estado, version, actualizadaEn]
+      properties:
+        estado:
+          type: string
+          enum: [pago_pendiente, pago_confirmado, emitida, fallida]
+        version:
+          type: integer
+          minimum: 1
+        actualizadaEn:
+          type: string
+          format: date-time
     PolizaResumen:
       type: object
       additionalProperties: false
@@ -605,4 +1230,4 @@ components:
           items:
             $ref: "#/components/schemas/ErrorCampo"
 security:
-  - cookieSesion: []
+  - bearerAuth: []

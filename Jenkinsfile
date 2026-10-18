@@ -15,10 +15,13 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps { checkout scm }
+        stage('Código') {
+            steps {
+                deleteDir()
+                checkout scm
+            }
         }
-        stage('Install tools and services') {
+        stage('Dependencias') {
             steps {
                 sh '''
                     set -eu
@@ -31,19 +34,70 @@ pipeline {
                 '''
             }
         }
-        stage('Quality, contracts and tests') {
-            steps { sh 'bash scripts/jenkins-quality.sh' }
+        stage('Formato y lint') {
+            steps {
+                sh '.venv-jenkins/bin/python -m ruff format --check .'
+                sh '.venv-jenkins/bin/python -m ruff check .'
+            }
+        }
+        stage('Tipos') {
+            steps {
+                sh '''
+                    set -eu
+                    .venv-jenkins/bin/python -m mypy scripts tests
+                    for config in services/*/mypy.ini; do
+                        [ -f "$config" ] || continue
+                        service="$(dirname "$config")"
+                        .venv-jenkins/bin/python -m mypy --config-file "$config" "$service/src" "$service/tests"
+                    done
+                '''
+            }
+        }
+        stage('Contratos OpenAPI') {
+            steps { sh '.venv-jenkins/bin/python scripts/validate_openapi.py' }
+        }
+        stage('Pruebas y cobertura') {
+            steps {
+                publishChecks name: 'Cobertura', status: 'IN_PROGRESS', conclusion: 'NONE', title: 'Analizando cobertura por servicio', summary: 'Objetivo recomendado: 80 % en líneas y ramas por módulo.', detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks"
+                sh 'bash scripts/jenkins-tests.sh'
+            }
         }
     }
 
     post {
         always {
             script {
-                if (fileExists('reports/root.xml')) {
-                    junit testResults: 'reports/*.xml', allowEmptyResults: false
+                try {
+                    if (fileExists('reports/root.xml')) {
+                        junit testResults: 'reports/*.xml', allowEmptyResults: false, skipPublishingChecks: true
+                    }
+                    def result = sh(returnStatus: true, script: '''
+                        set -- --coverage 'Scripts=reports/coverage/root.xml' --tests reports/root.xml
+                        for project in services/*/pyproject.toml; do
+                            [ -f "$project" ] || continue
+                            service="$(basename "$(dirname "$project")")"
+                            if find "services/$service/tests" -type f -name 'test_*.py' -print -quit | grep -q .; then
+                                set -- "$@" --coverage "$service=reports/coverage/$service.xml" --tests "reports/$service.xml"
+                            fi
+                        done
+                        python3 scripts/coverage_summary.py "$@" --scope 'Scripts y servicios implementados. Cada módulo se mide por separado; sin promedio simple ni dependencias externas.'
+                    ''')
+                    def summary = readFile(file: 'reports/coverage-summary.md', encoding: 'UTF-8')
+                    def revision = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    summary += "\n**Revisión compilada:** [`${revision}`](https://github.com/Migue765/backend-solventa/commit/${revision}).\n"
+                    summary += "\n[Informes de cobertura por módulo](${env.BUILD_URL}artifact/reports/coverage/) · [Pruebas JUnit](${env.BUILD_URL}testReport/)\n"
+                    publishChecks name: 'Cobertura', title: summary.readLines()[0], summary: summary,
+                        detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks",
+                        conclusion: result == 0 ? 'SUCCESS' : (currentBuild.currentResult == 'SUCCESS' ? 'FAILURE' : 'NEUTRAL')
+                    if (result != 0 && currentBuild.currentResult == 'SUCCESS') {
+                        error('Faltan reportes válidos de cobertura o pruebas')
+                    }
+                } finally {
+                    archiveArtifacts artifacts: 'reports/*.xml,reports/coverage-summary.md,reports/coverage/**', allowEmptyArchive: true
                 }
             }
-            archiveArtifacts artifacts: 'reports/*.xml', allowEmptyArchive: true
+        }
+        cleanup {
             deleteDir()
         }
     }

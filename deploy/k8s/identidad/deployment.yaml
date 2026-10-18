@@ -1,0 +1,107 @@
+# Variables: IMAGE (ej. <identidad_ecr_repository_url>:<tag>), AWS_REGION, JWT_ISSUER, JWT_AUDIENCE
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identidad
+  namespace: identidad
+  labels:
+    app.kubernetes.io/name: identidad
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: identidad
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: identidad
+    spec:
+      serviceAccountName: identidad
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: identidad
+      containers:
+        - name: identidad
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: ${AWS_REGION}
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: GUNICORN_THREADS
+              value: "2"
+            - name: DB_SCHEMA
+              value: identidad
+            - name: ACCESS_TOKEN_MINUTES
+              value: "60"
+            - name: REFRESH_TOKEN_HOURS_WEB
+              value: "8"
+            - name: REFRESH_TOKEN_DAYS_MOVIL
+              value: "30"
+            - name: JWT_ISSUER
+              value: ${JWT_ISSUER}
+            - name: JWT_AUDIENCE
+              value: ${JWT_AUDIENCE}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config # secreto externo, ver README
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: REDIS_URL
+            - name: JWT_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: JWT_PRIVATE_KEY
+          # El hash PBKDF2 (600.000 iteraciones) consume ~1 CPU durante cada login: el limite es mayor
+          # que el de los demas servicios para no estrangular la autenticacion.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 384Mi
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

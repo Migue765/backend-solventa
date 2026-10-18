@@ -42,8 +42,9 @@ class CotizacionModel(Base):
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     solicitud_id: Mapped[str | None] = mapped_column(String(32), unique=True)
     tipo_cliente: Mapped[str | None] = mapped_column(String(30))
+    tipo_documento: Mapped[str | None] = mapped_column(String(20))
     identificacion: Mapped[str | None] = mapped_column(String(20))
-    patente_vehiculo: Mapped[str | None] = mapped_column(String(8))
+    datos_producto: Mapped[dict[str, str] | None] = mapped_column(JSON)
     correo: Mapped[str | None] = mapped_column(String(254))
     telefono: Mapped[str | None] = mapped_column(String(16))
     idempotency_key: Mapped[UUID | None]
@@ -55,6 +56,7 @@ class CotizacionModel(Base):
         lazy="selectin",
         order_by="CoberturaCotizadaModel.orden",
     )
+    instantanea: Mapped["InstantaneaDecisionModel | None"] = relationship(lazy="selectin")
 
 
 class CoberturaCotizadaModel(Base):
@@ -70,6 +72,27 @@ class CoberturaCotizadaModel(Base):
     orden: Mapped[int] = mapped_column(Integer)
 
     cotizacion: Mapped[CotizacionModel] = relationship(back_populates="coberturas")
+
+
+class SeleccionOfertaModel(Base):
+    __tablename__ = "selecciones_oferta"
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    oferta_id: Mapped[UUID]
+    version: Mapped[int] = mapped_column(Integer)
+    nombre_oferta: Mapped[str] = mapped_column(String(120))
+    prima_mensual: Mapped[Decimal] = mapped_column(MONTO)
+    periodicidad: Mapped[str] = mapped_column(
+        String(20), default="mensual", server_default="mensual"
+    )
+    moneda: Mapped[str] = mapped_column(String(3))
+    seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
 
 
 class ReglaTarifaModel(Base):
@@ -117,3 +140,57 @@ class OutboxEventoModel(Base):
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     publicado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     intentos: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SuscripcionModel(Base):
+    __tablename__ = "suscripciones"
+    __table_args__ = (
+        UniqueConstraint(
+            "cliente_id",
+            "idempotency_key",
+            name="uq_suscripciones_cliente_idempotencia",
+        ),
+    )
+
+    suscripcion_id: Mapped[UUID] = mapped_column(primary_key=True)
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    oferta_id: Mapped[UUID]
+    oferta_version: Mapped[int] = mapped_column(Integer)
+    estado: Mapped[str] = mapped_column(String(30))
+    regla_version: Mapped[str] = mapped_column(String(40))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+
+
+class DecisionSuscripcionModel(Base):
+    __tablename__ = "decisiones_suscripcion"
+
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    regla_version: Mapped[str] = mapped_column(String(40))
+    resultado: Mapped[str] = mapped_column(String(30))
+    datos_evaluados: Mapped[dict[str, Any]] = mapped_column(JSON)
+    hash_decision: Mapped[str] = mapped_column(String(64), index=True)
+    decidida_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SagaEmisionModel(Base):
+    __tablename__ = "sagas_emision"
+
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    estado: Mapped[str] = mapped_column(String(30))
+    version: Mapped[int] = mapped_column(Integer)
+    actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ultimo_error: Mapped[str | None] = mapped_column(String(500))

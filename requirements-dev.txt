@@ -1,6 +1,7 @@
 mypy==1.18.2
 openapi-spec-validator==0.7.2
 pytest==8.4.2
+pytest-cov==7.0.0
 PyYAML==6.0.3
 ruff==0.14.1
 types-PyYAML==6.0.12.20260906

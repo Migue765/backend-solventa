@@ -12,3 +12,11 @@ class QuoteRequestConflictError(Exception):
 
 class InsuranceProductUnavailableError(Exception):
     """El seguro no está disponible para cotizar."""
+
+
+class InsuranceProductNotFoundError(Exception):
+    """El seguro consultado no existe."""
+
+
+class OfferUnavailableError(Exception):
+    """La oferta no existe, cambió o ya no está vigente."""

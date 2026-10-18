@@ -8,9 +8,19 @@ from werkzeug.exceptions import HTTPException
 from cotizacion.api import cotizaciones, health, solicitudes
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
 from cotizacion.application.crear_cotizacion import CrearCotizacion
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
+from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
-from cotizacion.domain.errors import ConflictoIdempotenciaError, ReglaDeNegocioError
+from cotizacion.domain.errors import (
+    ConflictoIdempotenciaError,
+    OfertaNoDisponibleError,
+    ReglaDeNegocioError,
+    SeleccionNoEncontradaError,
+    SolicitudNoEncontradaError,
+    SuscripcionNoEncontradaError,
+)
+from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
 from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
@@ -39,7 +49,18 @@ def create_app(config: Config | None = None) -> Flask:
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
-    app.extensions["registrar_solicitud"] = RegistrarSolicitud(repositorio, calculadora)
+    perfiles_riesgo = PerfilRiesgoSimulado()
+    app.extensions["registrar_solicitud"] = RegistrarSolicitud(
+        repositorio, calculadora, perfiles_riesgo
+    )
+    app.extensions["gestionar_ofertas"] = GestionarOfertas(
+        repositorio, repositorio, perfiles_riesgo
+    )
+    app.extensions["procesar_suscripcion"] = ProcesarSuscripcion(
+        repositorio,
+        repositorio,
+        repositorio,
+    )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(cotizaciones.bp)
@@ -74,5 +95,17 @@ def create_app(config: Config | None = None) -> Flask:
             ), codigo
         logger.exception("Error inesperado", extra={"correlationId": g.get("correlation_id")})
         return jsonify(error="error_interno", correlationId=g.get("correlation_id")), 500
+
+    @app.errorhandler(SolicitudNoEncontradaError)
+    @app.errorhandler(SeleccionNoEncontradaError)
+    @app.errorhandler(SuscripcionNoEncontradaError)
+    def no_encontrado(
+        _: SolicitudNoEncontradaError | SeleccionNoEncontradaError | SuscripcionNoEncontradaError,
+    ):
+        return jsonify(error="no_encontrado"), 404
+
+    @app.errorhandler(OfertaNoDisponibleError)
+    def oferta_no_disponible(_: OfertaNoDisponibleError):
+        return jsonify(error="oferta_no_disponible"), 422
 
     return app

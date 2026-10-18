@@ -13,6 +13,8 @@ jobs:
   backport:
     if: >-
       github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (vars.BACKPORT_AUTOMATION_ENABLED != 'true' || startsWith(github.head_ref, 'hotfix/')) &&
       (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
     runs-on: ubuntu-latest
     steps:

@@ -60,16 +60,16 @@ def test_crear_cotizacion_la_persiste(client, database_url):
     datos = respuesta.get_json()
     assert datos["clienteId"] == cuerpo["clienteId"]
     assert datos["estado"] == "CALCULADA"
-    # (2.000.000 - 200.000) * 0,015 * (1 + 0,5 * 0,10)
-    assert datos["primaEstimada"] == {"monto": "28350.00", "moneda": "COP"}
-    assert datos["decision"]["reglaVersion"] == "tarifa-2026.1"
+    # 2.000.000 * 0,0015 * (1 + 0,5 * 0,20); sin descontar deducible.
+    assert datos["primaEstimada"] == {"monto": "3300.00", "moneda": "COP"}
+    assert datos["decision"]["reglaVersion"] == "academico-v1"
     assert datos["decision"]["perfilId"] == "perfil-1"
 
     guardada = RepositorioCotizacionesSqlAlchemy(crear_sesiones(database_url)).obtener(
         UUID(datos["cotizacionId"])
     )
     assert guardada is not None
-    assert guardada.prima_estimada.monto == Decimal("28350.00")
+    assert guardada.prima_estimada.monto == Decimal("3300.00")
 
 
 def test_cuerpo_que_no_es_json(client):
@@ -155,10 +155,10 @@ def test_un_calculo_exitoso_deja_trazabilidad(client, database_url):
         evento = sesion.scalar(select(OutboxEventoModel))
 
     assert instantanea is not None
-    assert instantanea.regla_version == "tarifa-2026.1"
+    assert instantanea.regla_version == "academico-v1"
     assert instantanea.perfil_modelo_version == "perfil-simulado-1"
     assert instantanea.hash_decision == datos["decision"]["hashDecision"]
-    assert instantanea.contenido["regla"]["version"] == "tarifa-2026.1"
+    assert instantanea.contenido["regla"]["version"] == "academico-v1"
     assert evento.tipo == "InstantaneaDecisionRegistrada"
     assert evento.payload["hashDecision"] == instantanea.hash_decision
     assert evento.publicado_en is None

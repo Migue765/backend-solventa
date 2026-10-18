@@ -21,6 +21,7 @@ class CoberturaCotizada:
     suma_asegurada: Dinero
     deducible: Dinero
     prima: Dinero | None = None
+    deducible_descuenta_base: bool = True
 
     def __post_init__(self) -> None:
         if self.suma_asegurada.monto <= 0:
@@ -29,7 +30,7 @@ class CoberturaCotizada:
             raise ReglaDeNegocioError(
                 "El deducible y la suma asegurada deben estar en la misma moneda."
             )
-        if self.deducible.monto > self.suma_asegurada.monto:
+        if self.deducible_descuenta_base and self.deducible.monto > self.suma_asegurada.monto:
             raise ReglaDeNegocioError("El deducible no puede superar la suma asegurada.")
 
 

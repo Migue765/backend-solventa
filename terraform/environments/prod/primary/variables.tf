@@ -165,6 +165,24 @@ variable "service_account_name" {
   default     = "cotizacion"
 }
 
+variable "bff_web_namespace" {
+  description = "Namespace Kubernetes del servicio bff-web."
+  type        = string
+  default     = "bff-web"
+}
+
+variable "bff_web_service_account_name" {
+  description = "ServiceAccount Kubernetes del servicio bff-web."
+  type        = string
+  default     = "bff-web"
+}
+
+variable "redis_node_type" {
+  description = "Tipo de nodo de ElastiCache Redis (limitador de intentos de identidad)."
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
 variable "alb_controller_chart_version" {
   description = "Version del chart aws-load-balancer-controller."
   type        = string
@@ -193,4 +211,61 @@ variable "require_manual_approval" {
   description = "Exige aprobacion manual entre el build y el despliegue."
   type        = bool
   default     = false
+}
+
+variable "bff_web_release_tag_patterns" {
+  description = "Tags de GitHub que disparan el pipeline de bff-web. Deben ser disjuntos de los de cotizacion (v*)."
+  type        = list(string)
+  default     = ["bff-web-v*"]
+}
+
+variable "bff_movil_namespace" {
+  description = "Namespace Kubernetes del servicio bff-movil."
+  type        = string
+  default     = "bff-movil"
+}
+
+variable "bff_movil_service_account_name" {
+  description = "ServiceAccount Kubernetes del servicio bff-movil."
+  type        = string
+  default     = "bff-movil"
+}
+
+variable "bff_movil_release_tag_patterns" {
+  description = "Tags de GitHub que disparan el pipeline de bff-movil. Disjuntos de v* (cotizacion) y bff-web-v*."
+  type        = list(string)
+  default     = ["bff-movil-v*"]
+}
+
+variable "identidad_namespace" {
+  description = "Namespace Kubernetes del servicio identidad."
+  type        = string
+  default     = "identidad"
+}
+
+variable "identidad_service_account_name" {
+  description = "ServiceAccount Kubernetes del servicio identidad."
+  type        = string
+  default     = "identidad"
+}
+
+variable "identidad_release_tag_patterns" {
+  description = "Tags de GitHub que disparan el pipeline de identidad. Disjuntos de v*, bff-web-v* y bff-movil-v*."
+  type        = list(string)
+  default     = ["identidad-v*"]
+}
+
+variable "jwt_audience" {
+  description = "Audiencia (claim aud) de los access tokens; el authorizer del API Gateway la exige."
+  type        = string
+  default     = "solventa-api"
+}
+
+variable "cors_allowed_origins" {
+  description = "Origenes de navegador autorizados por CORS en el API Gateway (frontend web)."
+  type        = list(string)
+  default = [
+    "https://jazmincorandes.github.io",
+    "http://localhost:4200",
+  ]
 }
