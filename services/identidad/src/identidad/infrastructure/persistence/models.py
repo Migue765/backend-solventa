@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -31,3 +31,20 @@ class RefreshTokenModel(Base):
     expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revocado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reemplazado_por: Mapped[str | None] = mapped_column(String(64))
+
+
+class ConsentModel(Base):
+    __tablename__ = "consentimientos_perfilamiento"
+
+    cliente_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"), primary_key=True)
+    version: Mapped[int] = mapped_column(primary_key=True)
+    contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
+class ConsentEventModel(Base):
+    __tablename__ = "outbox_consentimientos"
+
+    evento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    tipo: Mapped[str] = mapped_column(String(60))
+    contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+    publicado: Mapped[bool] = mapped_column(default=False)

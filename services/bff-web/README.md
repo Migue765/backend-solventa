@@ -41,6 +41,34 @@ Las rutas `GET /v1/solicitudes-cotizacion/{id}/ofertas` y
 `GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion` también requieren Bearer.
 Comparan ofertas simuladas y consultan o guardan una selección idempotente.
 
+### Pago exclusivamente simulado
+
+`GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
+POST exige `Idempotency-Key` UUID y cuerpo ausente o `{}`. El BFF no acepta importe,
+moneda, cliente, tarjeta ni referencia bancaria; cotización toma el importe y la
+periodicidad exactos de la selección aprobada persistida. Para mostrar el importe
+antes de confirmar se consulta GET selección y se contrasta oferta/versión con
+GET suscripción. No hay proveedor ni cobro real, firma o emisión de póliza.
+
+Ambos métodos devuelven `200` con `id`, `solicitudId`, `suscripcionId`, `ofertaId`,
+`ofertaVersion`, `estado: confirmado`, `simulada: true`,
+`referenciaInterna: SIM-<UUID>`, `importe: {monto, moneda}`, `periodicidad`,
+`confirmadaEn` y la instantánea `saga: {estado: pago_confirmado, version, actualizadaEn}`.
+GET suscripción refleja la transición persistida. Repetir POST devuelve el mismo
+pago sin duplicar eventos, incluso tras vencer la oferta o avanzar posteriormente
+la saga. La clave de creación no puede reutilizarse en otra solicitud (`409`).
+
+GET sin pago devuelve **404 `pago_no_encontrado` solo después de comprobar ownership**;
+404 `solicitud_no_encontrada` significa ajena/inexistente y no debe habilitar pago.
+POST sin suscripción devuelve 404; suscripción no aprobada, selección inválida,
+cotización vencida o saga no pendiente devuelven 422 `pago_no_permitido`.
+400 `solicitud_invalida`, 401 `sesion_invalida` y 503 `servicio_no_disponible`
+conservan el manejo normal del canal. No convertir fallos de transporte en pago aprobado.
+
+La ruta principal `/v1/solicitudes-cotizacion*` ya enruta al BFF. CORS existente
+permite Pages, GET/POST y `authorization`, `content-type`, `idempotency-key`;
+no se requiere otro API Gateway, microservicio ni cambio de infraestructura.
+
 Las solicitudes aceptan exclusivamente `{productoId, datosProducto}`; los datos de identidad
 y contacto proceden del usuario autenticado, nunca del body. Se admiten `automotive`,
 `travel`, `life`, `device-protection`, `parametric`, `parametric-weather`,
@@ -75,6 +103,26 @@ En clima, `por_periodo` identifica el importe completo de la ventana inclusiva
 El access token vive solo en memoria; el refresh token, en `sessionStorage`. Cuando el access
 token está por vencer (`expiraEn`) o responde 401, el cliente llama a `/v1/sesiones/renovar` y
 reemplaza ambos tokens: el refresh anterior deja de servir.
+
+### Consentimiento y perfilamiento
+
+`GET/PUT /v1/consentimientos/perfilamiento` consulta, autoriza o revoca el
+consentimiento real de Identidad. El cuerpo de PUT es `{autorizado, version}`:
+la version inicial es 0; una version desactualizada responde 409. No se autoriza
+automaticamente ni se acepta un cliente desde el formulario; siempre procede del JWT.
+La autorizacion dura 30 dias. `INTERNAL_API_TOKEN` autentica estas llamadas internas.
+
+`GET /v1/solicitudes-cotizacion/{id}/perfilamiento` recupera el mismo perfil
+persistido para el calculo, con vigencia maxima de 15 minutos y ambas fuentes
+Open Finance/Open Data rotuladas como simuladas. Revocar, renovar la autorizacion
+o vencer el perfil bloquea su reutilizacion, las ofertas y la seleccion.
+Una solicitud anterior sin evidencia devuelve `perfil_no_encontrado`; se debe crear
+una nueva despues de autorizar. No se inventan perfiles para solicitudes antiguas.
+
+En AWS deben desplegarse Identidad (migracion 0002), Perfilamiento, Cotizacion
+con `COTIZACION_PERFILAMIENTO_HABILITADO=true` y el BFF. La regla ALB
+`bff_web_consents` lleva la consulta de consentimiento al BFF y CORS expone `Date`
+para validar la vigencia con el reloj del servidor.
 
 ## Configuración
 

@@ -10,6 +10,7 @@ class Config:
     jwks_url: str | None = None
     identity_timeout_seconds: float = 5
     quote_service_url: str = "http://localhost:5000"
+    internal_api_token: str = ""
 
     def __post_init__(self) -> None:
         if not self.identity_url.strip():
@@ -26,6 +27,7 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             identity_url=_required("IDENTIDAD_URL").rstrip("/"),
             jwt_issuer=_required("JWT_ISSUER"),
             jwt_audience=os.getenv("JWT_AUDIENCE", "solventa-api"),

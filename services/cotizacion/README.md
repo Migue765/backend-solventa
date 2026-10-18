@@ -23,6 +23,15 @@ tests/
 
 ## Endpoints
 
+Con `COTIZACION_PERFILAMIENTO_HABILITADO=true`, `PERFILAMIENTO_SERVICE_URL` e
+`INTERNAL_API_TOKEN`, cada solicitud genera un perfil remoto autorizado, usa ese
+mismo perfil en el calculo y conserva su evidencia en la instantanea de decision.
+`GET /v1/solicitudes-cotizacion/{id}/perfilamiento?clienteId={uuid}` comprueba
+titularidad, referencia, integridad y vigencia. Ofertas, seleccion y nueva
+suscripcion revalidan el consentimiento y el perfil; no hay fallback si fallan.
+Las solicitudes antiguas sin evidencia necesitan una nueva cotizacion.
+Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
+
 | Método | Ruta               | Descripción                    |
 |--------|--------------------|--------------------------------|
 | GET    | `/ping`            | Health check                   |
@@ -34,6 +43,37 @@ tests/
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
 | GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
 | GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
+| GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
+| GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
+
+### Pago simulado
+
+El canal público es el BFF con JWT. Las rutas internas usan `clienteId` derivado
+del sujeto autenticado, nunca datos del formulario. POST admite cuerpo ausente o
+`{}` y exige `Idempotency-Key` UUID. No recibe importes, tarjetas ni datos bancarios.
+Solo una suscripción aprobada, con selección coincidente y cotización vigente,
+puede pasar de `pago_pendiente` a `pago_confirmado`. Se conserva importe, moneda y
+periodicidad de esa selección (`mensual`, `por_viaje`, `por_vuelo`, `por_periodo`).
+
+La migración aditiva `pagos_simulados` crea una tabla independiente. Pago, avance
+de saga (versión +1), fecha de suscripción y outbox `PagoSimuladoConfirmado` se
+confirman en una transacción. Unicidad por solicitud/suscripción y por cliente/clave,
+más actualización condicional de saga, impiden duplicados en concurrencia.
+No se conecta ninguna pasarela ni se realiza cobro, firma o emisión.
+
+POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
+`referenciaInterna: SIM-<UUID>` e `importe: {monto, moneda}`. La referencia es
+interna, no bancaria. El reintento recupera el mismo registro incluso con una
+nueva clave o después de vencer la oferta/avanzar la saga; no vuelve a modificarla.
+Solo la clave de creación queda asociada al registro y usarla en otra solicitud
+del mismo cliente devuelve `409 conflicto_idempotencia`. El objeto `saga` del pago
+es la instantánea de confirmación; GET suscripción informa cualquier estado posterior.
+
+GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin pago;
+una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuelve
+404; una no aprobada, selección inválida, oferta vencida o saga no pendiente devuelve
+`422 pago_no_permitido`. Un fallo de persistencia revierte todo y nunca se informa éxito.
+El contrato público y códigos del BFF están en `contracts/openapi/bff-web-v1.yaml`.
 
 El listado y el detalle incluyen coberturas, condiciones y vigencia para los ocho seguros,
 incluido `parametric-weather` (lluvia intensa o sequía, según el evento declarado).

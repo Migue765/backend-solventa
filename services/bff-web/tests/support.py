@@ -16,6 +16,7 @@ import jwt
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import TokenSet, User
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
+from bff_web.domain.quote_errors import SimulatedPaymentNotFoundError
 from bff_web.domain.quotes import (
     InsuranceProduct,
     InsuranceProductDetail,
@@ -25,6 +26,7 @@ from bff_web.domain.quotes import (
     ProductCoverage,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    SimulatedPayment,
     Subscription,
     SubscriptionDecision,
     TravelDestination,
@@ -310,6 +312,15 @@ class StubQuoteGateway(QuoteGateway):
         self.user_ids.append(user_id)
         assert self.subscription is not None
         return self.subscription
+
+    def confirm_simulated_payment(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID
+    ) -> SimulatedPayment:
+        raise NotImplementedError
+
+    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment:
+        self.user_ids.append(user_id)
+        raise SimulatedPaymentNotFoundError
 
 
 def bearer(value: str) -> dict[str, str]:

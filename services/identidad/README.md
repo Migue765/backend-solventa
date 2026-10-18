@@ -76,6 +76,16 @@ El servicio no arranca si falta alguna de las obligatorias.
 
 ## Base de datos
 
+La migracion `0002` agrega `consentimientos_perfilamiento` y
+`outbox_consentimientos`: cada autorizacion/revocacion guarda una nueva version
+y su evento en la misma transaccion. La autorizacion dura 30 dias; las lecturas
+no renuevan la vigencia. El endpoint interno
+`GET/PUT /v1/clientes/{uuid}/consentimiento-perfilamiento` exige
+`Authorization: Bearer <INTERNAL_API_TOKEN>` y PUT recibe `{autorizado, version}`.
+No existe autorizacion automatica. Los clientes publicos pasan por el BFF con
+JWT; este determina el UUID. La outbox se persiste; no se incluye un consumidor
+de eventos, y la revocacion se aplica mediante consulta autoritativa antes de usar perfiles.
+
 Tablas `usuarios` y `refresh_tokens`. Con `DB_SCHEMA` el motor fija `search_path` a ese esquema y
 la migración lo crea (`CREATE SCHEMA IF NOT EXISTS`); la versión se guarda en
 `alembic_version_identidad` dentro del mismo esquema.

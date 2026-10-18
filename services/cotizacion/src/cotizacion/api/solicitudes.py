@@ -3,10 +3,13 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import TypeAdapter, ValidationError
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from cotizacion.api.schemas import (
+    ConfirmarPagoSimuladoRequest,
     RegistrarSolicitudRequest,
     SeleccionarOfertaRequest,
+    pago_simulado_a_json,
     producto_a_json,
     resultado_ofertas_a_json,
     seleccion_oferta_a_json,
@@ -14,9 +17,13 @@ from cotizacion.api.schemas import (
     suscripcion_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.pagos import ProcesarPagoSimulado
+from cotizacion.application.perfilamiento import validar_perfil
+from cotizacion.application.ports import ProveedorPerfil
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
+from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -92,6 +99,27 @@ def consultar_seleccion(solicitud_id: str) -> tuple[Response, int] | Response:
     )
 
 
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/perfilamiento")
+def consultar_perfilamiento(solicitud_id: str) -> Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        raise ErrorConsultaPerfil("solicitud_invalida", 400)
+    solicitud = _repositorio().obtener_solicitud(solicitud_id, cliente_id)
+    if solicitud is None:
+        raise SolicitudNoEncontradaError()
+    proveedor = cast(ProveedorPerfil | None, current_app.extensions["proveedor_perfil"])
+    if proveedor is None:
+        raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+    perfil = validar_perfil(solicitud, proveedor)
+    assert perfil.evidencia is not None
+    datos = {
+        key: value
+        for key, value in perfil.evidencia.items()
+        if key not in {"clienteId", "referenciaId"}
+    }
+    return jsonify(solicitudId=solicitud_id, **datos)
+
+
 @bp.put("/solicitudes-cotizacion/<solicitud_id>/seleccion")
 def seleccionar_oferta(solicitud_id: str) -> tuple[Response, int] | Response:
     cliente_id = _cliente_id()
@@ -131,6 +159,34 @@ def consultar_suscripcion(solicitud_id: str) -> tuple[Response, int] | Response:
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
     return jsonify(suscripcion_a_json(_suscripciones().consultar(solicitud_id, cliente_id)))
+
+
+@bp.post("/solicitudes-cotizacion/<solicitud_id>/pago-simulado")
+def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+        ConfirmarPagoSimuladoRequest.model_validate(
+            request.get_json(silent=False) if request.get_data() else {}
+        )
+    except (ValidationError, TypeError, BadRequest, UnsupportedMediaType):
+        return jsonify(error="solicitud_invalida"), 400
+    pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
+    return jsonify(pago_simulado_a_json(pago))
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/pago-simulado")
+def consultar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(pago_simulado_a_json(_pagos().consultar(solicitud_id, cliente_id)))
+
+
+def _pagos() -> ProcesarPagoSimulado:
+    return cast(ProcesarPagoSimulado, current_app.extensions["procesar_pago_simulado"])
 
 
 def _registrar() -> RegistrarSolicitud:

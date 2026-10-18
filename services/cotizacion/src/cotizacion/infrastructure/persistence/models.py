@@ -194,3 +194,25 @@ class SagaEmisionModel(Base):
     version: Mapped[int] = mapped_column(Integer)
     actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ultimo_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class PagoSimuladoModel(Base):
+    __tablename__ = "pagos_simulados"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_pagos_simulados_idempotencia"),
+    )
+
+    pago_id: Mapped[UUID] = mapped_column(primary_key=True)
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="RESTRICT"), unique=True
+    )
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[UUID]
+    oferta_id: Mapped[UUID]
+    oferta_version: Mapped[int] = mapped_column(Integer)
+    monto: Mapped[Decimal] = mapped_column(MONTO)
+    moneda: Mapped[str] = mapped_column(String(3))
+    periodicidad: Mapped[str] = mapped_column(String(20))
+    confirmada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    saga_version: Mapped[int] = mapped_column(Integer)
