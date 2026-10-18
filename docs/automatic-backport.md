@@ -27,6 +27,11 @@ vigente y estos checks exitosos del head aprobado:
 - validate-branch: App 15368.
 - CI / Validación (Jenkins): App 5278678.
 
+Las ediciones del PR pueden producir varias suites de GitFlow para el mismo SHA. Se evalúa
+el check de ID más reciente de cada nombre y App esperados; un éxito antiguo no permite
+ignorar un fallo o una ejecución pendiente posterior. IDs duplicados o evidencia de otro
+SHA se rechazan.
+
 La App crea `backport/release-pr-<número>` con el merge SHA exacto y asigna JUANES545,
 conservando otros asignados. Antes de integrar valida autor, identidad numérica real del bot mediante
 Users API, repositorio, base/head actuales, rama y ancestry. Solo se omiten pruebas del
