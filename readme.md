@@ -6,6 +6,8 @@ Contiene la estructura prevista para microservicios Python, contratos compartido
 
 ## Comprobaciones y cobertura
 
+[📊 Cobertura de código](https://github.com/Migue765/backend-solventa/wiki/Cobertura-de-codigo)
+
 En cada [pull request](https://github.com/Migue765/backend-solventa/pulls), abre **Checks → Cobertura**
 para ver líneas, ramas, pruebas y revisión compilada. El reporte corresponde a ese commit;
 no es un porcentaje fijo de la portada. En backend muestra scripts y cada servicio por separado.
