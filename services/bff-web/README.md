@@ -88,7 +88,8 @@ como evidencia de consentimiento. La autenticación sigue siendo obligatoria.
 La creación de cotizaciones no exige una autorización adicional. Al implementar el
 consentimiento real, se debe sustituir este mock y recuperar la validación de vigencia.
 Para que el cambio funcione en AWS, hay que desplegar `bff-web` y aplicar la regla
-de ALB `bff_web_consents` del módulo `api-gateway`; modificar el código no actualiza AWS.
+de ALB `bff_web_consents` del módulo `api-gateway`. CORS debe exponer `Date` para
+que la web valide la vigencia con el reloj del servidor; modificar el código no actualiza AWS.
 
 ## Configuración
 
