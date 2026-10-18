@@ -205,9 +205,19 @@ def test_ready_requires_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("namespace", "service"), [("hu11-perfilamiento", "cotizacion"), ("default", "perfilamiento")]
+    ("namespace", "service", "message"),
+    [
+        ("hu11-perfilamiento", "cotizacion", "HU11 esta retirado"),
+        ("default", "perfilamiento", "solo se despliega"),
+        ("calcular-cotizacion-preview", "cotizacion", "Preview aislado"),
+        ("calcular-cotizacion-preview", "bff-web", "Preview aislado"),
+        ("calcular-cotizacion-preview", "identidad", "Preview aislado"),
+        ("calcular-cotizacion-preview", "perfilamiento", "Preview aislado"),
+    ],
 )
-def test_cd_rejects_legacy_namespace_before_aws_calls(namespace: str, service: str) -> None:
+def test_cd_rejects_legacy_namespace_before_aws_calls(
+    namespace: str, service: str, message: str
+) -> None:
     import os
     import shutil
 
@@ -215,7 +225,15 @@ def test_cd_rejects_legacy_namespace_before_aws_calls(namespace: str, service: s
     if bash is None:
         pytest.skip("bash no disponible")
     result = subprocess.run(
-        [bash, "deploy/codebuild/deploy.sh"],
+        [
+            bash,
+            "-c",
+            "aws() { echo UNEXPECTED_AWS >&2; return 97; }; "
+            'kubectl() { echo UNEXPECTED_KUBECTL >&2; return 98; }; source "$1"',
+            "test-cd-guard",
+            "deploy/codebuild/deploy.sh",
+        ],
+        cwd=migration.ROOT,
         env={
             **os.environ,
             "CLUSTER_NAME": "test",
@@ -231,4 +249,6 @@ def test_cd_rejects_legacy_namespace_before_aws_calls(namespace: str, service: s
         check=False,
     )
     assert result.returncode == 1
-    assert "no se permite" in result.stderr or "solo se despliega" in result.stderr
+    assert message in result.stderr
+    assert "UNEXPECTED_AWS" not in result.stdout + result.stderr
+    assert "UNEXPECTED_KUBECTL" not in result.stdout + result.stderr
