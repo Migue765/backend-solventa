@@ -6,7 +6,7 @@
   actuales y sin un promedio que esconda diferencias. Su enlace abre Checks en GitHub.
 - **CI / Validación (Jenkins)** es el check principal obligatorio, publicado por el
   controlador. El Jenkinsfile no publica un alias duplicado.
-- El workflow del PR define **CI · Actions**; GitHub puede mostrar todavía el nombre de la
+- El workflow del PR define **CI · Validación**; GitHub puede mostrar todavía el nombre de la
   rama predeterminada hasta integrarlo. Se conservan los jobs `Calidad` y `validate-branch`.
   Las ejecuciones obsoletas de calidad se cancelan al llegar nuevos commits al mismo PR.
 - JUnit queda disponible en Jenkins, sin el check redundante `Tests / Declarative: Post Actions`.
@@ -75,3 +75,14 @@ los reportes disponibles se archivan incluso cuando el pipeline no termina corre
 
 El agente compartido tiene un ejecutor: web/Android/backend pueden esperar en cola.
 No enviar otro comentario si ya existe una ejecución para el mismo commit.
+
+## Preparación de backport verificado y separación de CD
+
+Calidad incorpora pruebas de automatización sin otro check; solo los candidatos a backport
+consultan la política de la base confiable. Validate-branch, Jenkins y cobertura conservan
+sus nombres y requisitos. La excepción de la App está desactivada hasta configurarla con
+Migue según el [procedimiento de activación](automatic-backport.md).
+
+El CD continúa fuera de Actions mediante el CodePipeline/CodeBuild definido en el repo,
+disparado por tags de servicio. Este ajuste no ejecuta Terraform, no crea otro workflow
+de despliegue ni modifica imágenes, migraciones, aprobaciones o permisos AWS.

@@ -1,4 +1,4 @@
-name: CI · Actions
+name: CI · Validación
 
 on:
   pull_request:
@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+  checks: read
 
 concurrency:
   group: quality-${{ github.event.pull_request.number || github.ref }}
@@ -19,10 +21,51 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - name: Obtener política confiable del backport
+        if: github.event_name == 'pull_request' && vars.BACKPORT_AUTOMATION_ENABLED == 'true' && startsWith(github.head_ref, 'backport/release-pr-')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Verificar excepción de sincronización exacta
+        id: policy
+        if: github.event_name == 'pull_request' && vars.BACKPORT_AUTOMATION_ENABLED == 'true' && startsWith(github.head_ref, 'backport/release-pr-')
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        env:
+          APP_ID: ${{ vars.BACKPORT_APP_ID }}
+          APP_SLUG: ${{ vars.BACKPORT_APP_SLUG }}
+        with:
+          script: |
+            core.setOutput('skip_tests', 'false');
+            try {
+              const { verifyPull } = require('./.github/scripts/verified-backport.cjs');
+              const pull = (await github.rest.pulls.get({ ...context.repo, pull_number: context.issue.number })).data;
+              await verifyPull({ github, repo: context.repo, pull, appId: Number(process.env.APP_ID), appSlug: process.env.APP_SLUG });
+              core.setOutput('skip_tests', 'true');
+              core.info('Sincronización exacta: se reutiliza la evidencia de la entrega.');
+            } catch {
+              core.warning('Excepción no verificada; se ejecuta CI normal.');
+            }
+
       - name: Obtener código
+        if: steps.policy.outputs.skip_tests != 'true'
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configurar Node.js para las pruebas de automatización
+        if: steps.policy.outputs.skip_tests != 'true'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+
+      - name: Probar automatización sin red
+        if: steps.policy.outputs.skip_tests != 'true'
+        run: node --test .github/scripts/*.test.cjs
 
       - name: Configurar Python
+        if: steps.policy.outputs.skip_tests != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -32,6 +75,7 @@ jobs:
             services/*/pyproject.toml
 
       - name: Instalar herramientas y servicios
+        if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
           python -m pip install --disable-pip-version-check -r requirements-dev.txt
@@ -42,12 +86,15 @@ jobs:
           done
 
       - name: Comprobar formato
+        if: steps.policy.outputs.skip_tests != 'true'
         run: python -m ruff format --check .
 
       - name: Ejecutar lint
+        if: steps.policy.outputs.skip_tests != 'true'
         run: python -m ruff check .
 
       - name: Comprobar tipos
+        if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
           python -m mypy scripts tests
@@ -61,9 +108,11 @@ jobs:
           done
 
       - name: Validar contratos OpenAPI
+        if: steps.policy.outputs.skip_tests != 'true'
         run: python scripts/validate_openapi.py
 
       - name: Ejecutar pruebas
+        if: steps.policy.outputs.skip_tests != 'true'
         shell: bash
         run: |
           python -m pytest tests
