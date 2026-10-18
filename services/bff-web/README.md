@@ -41,6 +41,32 @@ Las rutas `GET /v1/solicitudes-cotizacion/{id}/ofertas` y
 `GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion` también requieren Bearer.
 Comparan ofertas simuladas y consultan o guardan una selección idempotente.
 
+### Tablero real del cliente
+
+`GET /v1/clientes/me/dashboard` requiere JWT y no acepta query ni cuerpo: el cliente
+procede exclusivamente del principal autenticado. El gateway consulta
+`GET /v1/dashboard?clienteId=<principal>` en Cotizacion, autenticado con el
+`INTERNAL_API_TOKEN` existente en ambos servicios. Sin esa configuracion o si falla
+Cotizacion, la base o la validacion del contrato, el BFF devuelve `503`, no un resumen vacio.
+Credenciales JWT invalidas devuelven `401`; parametros o cuerpo devuelven `400`.
+La respuesta satisfactoria tiene `Cache-Control: no-store`.
+
+El contrato devuelve arrays reales `cotizaciones`, `suscripciones` y `pagos`.
+Los importes son strings decimales de dos posiciones y las fechas incluyen zona horaria.
+Cada cotizacion conserva ID, solicitud (null en registros antiguos), producto, estado,
+fechas, prima estimada y seleccion opcional. La prima estimada no tiene periodicidad
+persistida y **no es una prima mensual**. Seleccion y pago conservan su periodicidad
+exacta (`mensual`, `por_viaje`, `por_vuelo`, `por_periodo`), sin recalculos ni totales
+que mezclen monedas o periodicidades. Suscripcion conserva su estado y saga actuales;
+el pago se identifica siempre como `simulada: true`, nunca como un cobro real.
+
+`polizas` y `notificaciones` son `{disponibilidad: "no_implementado"}`, no arrays vacios.
+No se generan notificaciones desde eventos ni se equipara pago/saga a poliza emitida.
+Una coleccion vacia de los tres dominios disponibles si representa una consulta sin
+registros. La lectura historica no renueva ni exige perfiles de riesgo vigentes y
+no modifica suscripciones, pagos o transacciones. No ofrece reanudacion con datos parciales.
+El detalle de campos y tipos esta en `contracts/openapi/bff-web-v1.yaml`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.

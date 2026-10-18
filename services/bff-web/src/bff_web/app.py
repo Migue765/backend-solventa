@@ -44,7 +44,8 @@ def create_app(
         client_id=CHANNEL,
     )
     app.extensions["quote_gateway"] = quote_gateway or HttpQuoteGateway(
-        active_config.quote_service_url
+        active_config.quote_service_url,
+        internal_api_token=active_config.internal_api_token,
     )
     app.extensions["profiling_gateway"] = profiling_gateway or HttpProfilingGateway(
         active_config.identity_url,

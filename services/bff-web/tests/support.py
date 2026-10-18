@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import jwt
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import TokenSet, User
+from bff_web.domain.dashboard import Dashboard
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
 from bff_web.domain.quote_errors import SimulatedPaymentNotFoundError
 from bff_web.domain.quotes import (
@@ -222,6 +223,9 @@ class StubQuoteGateway(QuoteGateway):
         self.record: QuoteRequestRecord | None = None
         self.subscription: Subscription | None = None
         self.user_ids: list[UUID] = []
+
+    def get_dashboard(self, user_id: UUID) -> Dashboard:
+        raise NotImplementedError
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
         return (

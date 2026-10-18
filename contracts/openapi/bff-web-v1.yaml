@@ -532,6 +532,12 @@ paths:
       tags: [Dashboard]
       summary: Consulta el resumen del cliente autenticado
       operationId: consultarDashboard
+      description: |
+        Lee exclusivamente registros persistidos del cliente derivado del JWT.
+        No admite query ni cuerpo. Una coleccion vacia es una consulta real sin registros;
+        polizas y notificaciones indican explicitamente que no estan implementadas.
+        No recalcula primas, no renueva perfiles y no agrega importes de monedas
+        o periodicidades distintas. Los pagos son exclusivamente simulados.
       responses:
         "200":
           description: Resumen del cliente
@@ -539,6 +545,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Dashboard"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "503":
@@ -1493,20 +1501,173 @@ components:
     Dashboard:
       type: object
       additionalProperties: false
-      required: [polizas, notificaciones]
+      required: [cotizaciones, suscripciones, pagos, polizas, notificaciones]
       properties:
-        proximoViaje:
-          type:
-            - string
-            - "null"
+        cotizaciones:
+          type: array
+          items:
+            $ref: "#/components/schemas/CotizacionDashboard"
+        suscripciones:
+          type: array
+          items:
+            $ref: "#/components/schemas/SuscripcionDashboard"
+        pagos:
+          type: array
+          items:
+            $ref: "#/components/schemas/PagoDashboard"
         polizas:
-          type: array
-          items:
-            $ref: "#/components/schemas/PolizaResumen"
+          $ref: "#/components/schemas/DominioNoImplementado"
         notificaciones:
-          type: array
-          items:
-            $ref: "#/components/schemas/Notificacion"
+          $ref: "#/components/schemas/DominioNoImplementado"
+    DominioNoImplementado:
+      type: object
+      additionalProperties: false
+      required: [disponibilidad]
+      properties:
+        disponibilidad:
+          type: string
+          const: no_implementado
+    DineroDashboard:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda]
+      properties:
+        monto:
+          type: string
+          pattern: "^[0-9]+\\.[0-9]{2}$"
+          description: Importe persistido, no negativo y sin conversiones.
+        moneda:
+          type: string
+          pattern: "^[A-Z]{3}$"
+    PeriodicidadDashboard:
+      type: string
+      enum: [mensual, por_viaje, por_vuelo, por_periodo]
+    SeleccionDashboard:
+      type: object
+      additionalProperties: false
+      required: [ofertaId, nombreOferta, prima, periodicidad, seleccionadaEn]
+      properties:
+        ofertaId:
+          type: string
+          format: uuid
+        nombreOferta:
+          type: string
+          minLength: 1
+        prima:
+          $ref: "#/components/schemas/DineroDashboard"
+        periodicidad:
+          $ref: "#/components/schemas/PeriodicidadDashboard"
+        seleccionadaEn:
+          type: string
+          format: date-time
+    CotizacionDashboard:
+      type: object
+      additionalProperties: false
+      required: [id, solicitudId, productoId, estado, creadaEn, validaHasta, primaEstimada, seleccion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        solicitudId:
+          type: [string, "null"]
+          description: Null para cotizaciones previas al flujo de solicitudes.
+        productoId:
+          type: string
+          minLength: 1
+          description: Slug del catalogo actual o UUID original para productos historicos desconocidos.
+        estado:
+          type: string
+          minLength: 1
+          description: Estado persistido, actualmente PENDIENTE o CALCULADA.
+        creadaEn:
+          type: string
+          format: date-time
+        validaHasta:
+          type: string
+          format: date-time
+        primaEstimada:
+          $ref: "#/components/schemas/DineroDashboard"
+          description: No tiene periodicidad persistida; no presentar como prima mensual.
+        seleccion:
+          oneOf:
+            - $ref: "#/components/schemas/SeleccionDashboard"
+            - type: "null"
+    SuscripcionDashboard:
+      type: object
+      additionalProperties: false
+      required: [id, solicitudId, cotizacionId, ofertaId, estado, creadaEn, actualizadaEn, saga]
+      properties:
+        id:
+          type: string
+          format: uuid
+        solicitudId:
+          type: string
+          minLength: 1
+        cotizacionId:
+          type: string
+          format: uuid
+        ofertaId:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          minLength: 1
+          description: Estado persistido, actualmente aprobada, revision o rechazada.
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        saga:
+          $ref: "#/components/schemas/SagaDashboard"
+    SagaDashboard:
+      type: object
+      additionalProperties: false
+      required: [estado, version, actualizadaEn]
+      properties:
+        estado:
+          type: string
+          minLength: 1
+          description: Estado persistido de la saga; emitida no acredita una poliza disponible.
+        version:
+          type: integer
+          minimum: 1
+        actualizadaEn:
+          type: string
+          format: date-time
+    PagoDashboard:
+      type: object
+      additionalProperties: false
+      required: [id, solicitudId, suscripcionId, estado, simulada, importe, periodicidad, confirmadaEn]
+      properties:
+        id:
+          type: string
+          format: uuid
+        solicitudId:
+          type: string
+          minLength: 1
+        suscripcionId:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          const: confirmado
+        simulada:
+          type: boolean
+          const: true
+        importe:
+          $ref: "#/components/schemas/DineroDashboard"
+          description: Importe positivo persistido del pago simulado.
+          properties:
+            monto:
+              type: string
+              pattern: "^(?=.*[1-9])[0-9]+\\.[0-9]{2}$"
+        periodicidad:
+          $ref: "#/components/schemas/PeriodicidadDashboard"
+        confirmadaEn:
+          type: string
+          format: date-time
     ErrorCampo:
       type: object
       additionalProperties: false
