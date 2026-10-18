@@ -1,12 +1,51 @@
 import json
 from datetime import UTC, datetime
+from email.message import Message
 from io import BytesIO
 from unittest.mock import patch
+from urllib.error import HTTPError
 from uuid import uuid4
 
 import pytest
+from bff_web.domain.quote_errors import (
+    PaymentNotAllowedError,
+    QuoteRequestConflictError,
+    QuoteRequestNotFoundError,
+    QuoteServiceUnavailableError,
+    SimulatedPaymentNotFoundError,
+)
 from bff_web.domain.quotes import QuoteRequestDraft
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "expected"),
+    [
+        (404, "pago_no_encontrado", SimulatedPaymentNotFoundError),
+        (404, "no_encontrado", QuoteRequestNotFoundError),
+        (422, "pago_no_permitido", PaymentNotAllowedError),
+        (409, "conflicto_idempotencia", QuoteRequestConflictError),
+        (503, "no_disponible", QuoteServiceUnavailableError),
+    ],
+)
+def test_maps_payment_errors(status: int, code: str, expected: type[Exception]) -> None:
+    error = HTTPError(
+        "http://cotizacion", status, code, Message(), BytesIO(json.dumps({"error": code}).encode())
+    )
+    with patch("bff_web.infrastructure.http_quote_gateway.urlopen", side_effect=error):
+        with pytest.raises(expected):
+            HttpQuoteGateway("http://cotizacion").get_simulated_payment(uuid4(), "AQT-test")
+
+
+@pytest.mark.parametrize("simulada", [False, None, "true"])
+def test_never_turns_unmarked_gateway_response_into_simulated_success(simulada: object) -> None:
+    response = {"simulada": simulada, "estado": "confirmado"}
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(response).encode()),
+    ):
+        with pytest.raises(QuoteServiceUnavailableError):
+            HttpQuoteGateway("http://cotizacion").get_simulated_payment(uuid4(), "AQT-test")
 
 
 def test_reads_the_supported_travel_destinations() -> None:

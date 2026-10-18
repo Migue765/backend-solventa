@@ -3,10 +3,13 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import TypeAdapter, ValidationError
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from cotizacion.api.schemas import (
+    ConfirmarPagoSimuladoRequest,
     RegistrarSolicitudRequest,
     SeleccionarOfertaRequest,
+    pago_simulado_a_json,
     producto_a_json,
     resultado_ofertas_a_json,
     seleccion_oferta_a_json,
@@ -14,6 +17,7 @@ from cotizacion.api.schemas import (
     suscripcion_a_json,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.perfilamiento import validar_perfil
 from cotizacion.application.ports import ProveedorPerfil
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
@@ -155,6 +159,34 @@ def consultar_suscripcion(solicitud_id: str) -> tuple[Response, int] | Response:
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
     return jsonify(suscripcion_a_json(_suscripciones().consultar(solicitud_id, cliente_id)))
+
+
+@bp.post("/solicitudes-cotizacion/<solicitud_id>/pago-simulado")
+def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+        ConfirmarPagoSimuladoRequest.model_validate(
+            request.get_json(silent=False) if request.get_data() else {}
+        )
+    except (ValidationError, TypeError, BadRequest, UnsupportedMediaType):
+        return jsonify(error="solicitud_invalida"), 400
+    pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
+    return jsonify(pago_simulado_a_json(pago))
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/pago-simulado")
+def consultar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    return jsonify(pago_simulado_a_json(_pagos().consultar(solicitud_id, cliente_id)))
+
+
+def _pagos() -> ProcesarPagoSimulado:
+    return cast(ProcesarPagoSimulado, current_app.extensions["procesar_pago_simulado"])
 
 
 def _registrar() -> RegistrarSolicitud:

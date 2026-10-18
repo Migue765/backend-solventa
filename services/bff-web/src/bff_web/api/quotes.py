@@ -5,6 +5,7 @@ from uuid import UUID
 from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api.security import authenticate, invalid_session_response
 from bff_web.application.quote_ports import QuoteGateway
@@ -15,9 +16,11 @@ from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
     OfferUnavailableError,
+    PaymentNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
+    SimulatedPaymentNotFoundError,
 )
 from bff_web.domain.quotes import (
     InsuranceProduct,
@@ -28,6 +31,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    SimulatedPayment,
     Subscription,
     TravelDestination,
 )
@@ -64,6 +68,10 @@ class OfferSelectionPayload(BaseModel):
 
     offer_id: UUID = Field(alias="ofertaId")
     version: int = Field(ge=1)
+
+
+class SimulatedPaymentPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 @bp.get("/productos-seguro")
@@ -290,6 +298,88 @@ def get_subscription(request_id: str) -> Response:
     except QuoteServiceUnavailableError:
         return _unavailable()
     return jsonify(_subscription_json(subscription))
+
+
+@bp.post("/solicitudes-cotizacion/<request_id>/pago-simulado")
+def confirm_simulated_payment(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        idempotency_key = UUID(request.headers["Idempotency-Key"])
+        SimulatedPaymentPayload.model_validate(
+            request.get_json(silent=False) if request.get_data() else {}
+        )
+    except (KeyError, ValueError, TypeError, ValidationError, BadRequest, UnsupportedMediaType):
+        return problem_response(
+            400,
+            "solicitud_invalida",
+            "Solicitud inválida",
+            "Envía solo un objeto vacío y una clave de idempotencia UUID válida.",
+        )
+    try:
+        payment = _gateway().confirm_simulated_payment(user_id, request_id, idempotency_key)
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de solicitud",
+            "La clave de idempotencia ya fue utilizada para otra solicitud.",
+        )
+    except PaymentNotAllowedError:
+        return problem_response(
+            422,
+            "pago_no_permitido",
+            "Pago simulado no permitido",
+            "Se requiere una suscripción aprobada, oferta vigente y pago pendiente.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_payment_json(payment))
+
+
+@bp.get("/solicitudes-cotizacion/<request_id>/pago-simulado")
+def get_simulated_payment(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        payment = _gateway().get_simulated_payment(user_id, request_id)
+    except SimulatedPaymentNotFoundError:
+        return problem_response(
+            404,
+            "pago_no_encontrado",
+            "Pago simulado no encontrado",
+            "Esta solicitud todavía no tiene un pago simulado confirmado.",
+        )
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    return jsonify(_payment_json(payment))
+
+
+def _payment_json(payment: SimulatedPayment) -> dict[str, object]:
+    return {
+        "id": str(payment.payment_id),
+        "solicitudId": payment.request_id,
+        "suscripcionId": str(payment.subscription_id),
+        "ofertaId": str(payment.offer_id),
+        "ofertaVersion": payment.offer_version,
+        "estado": "confirmado",
+        "simulada": True,
+        "referenciaInterna": f"SIM-{payment.payment_id}",
+        "importe": _money_json(payment.amount),
+        "periodicidad": payment.billing_period,
+        "confirmadaEn": _date_json(payment.confirmed_at),
+        "saga": {
+            "estado": payment.saga.status,
+            "version": payment.saga.version,
+            "actualizadaEn": _date_json(payment.saga.updated_at),
+        },
+    }
 
 
 def _authenticated_user_id() -> UUID | None:

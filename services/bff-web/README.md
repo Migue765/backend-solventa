@@ -41,6 +41,34 @@ Las rutas `GET /v1/solicitudes-cotizacion/{id}/ofertas` y
 `GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion` también requieren Bearer.
 Comparan ofertas simuladas y consultan o guardan una selección idempotente.
 
+### Pago exclusivamente simulado
+
+`GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
+POST exige `Idempotency-Key` UUID y cuerpo ausente o `{}`. El BFF no acepta importe,
+moneda, cliente, tarjeta ni referencia bancaria; cotización toma el importe y la
+periodicidad exactos de la selección aprobada persistida. Para mostrar el importe
+antes de confirmar se consulta GET selección y se contrasta oferta/versión con
+GET suscripción. No hay proveedor ni cobro real, firma o emisión de póliza.
+
+Ambos métodos devuelven `200` con `id`, `solicitudId`, `suscripcionId`, `ofertaId`,
+`ofertaVersion`, `estado: confirmado`, `simulada: true`,
+`referenciaInterna: SIM-<UUID>`, `importe: {monto, moneda}`, `periodicidad`,
+`confirmadaEn` y la instantánea `saga: {estado: pago_confirmado, version, actualizadaEn}`.
+GET suscripción refleja la transición persistida. Repetir POST devuelve el mismo
+pago sin duplicar eventos, incluso tras vencer la oferta o avanzar posteriormente
+la saga. La clave de creación no puede reutilizarse en otra solicitud (`409`).
+
+GET sin pago devuelve **404 `pago_no_encontrado` solo después de comprobar ownership**;
+404 `solicitud_no_encontrada` significa ajena/inexistente y no debe habilitar pago.
+POST sin suscripción devuelve 404; suscripción no aprobada, selección inválida,
+cotización vencida o saga no pendiente devuelven 422 `pago_no_permitido`.
+400 `solicitud_invalida`, 401 `sesion_invalida` y 503 `servicio_no_disponible`
+conservan el manejo normal del canal. No convertir fallos de transporte en pago aprobado.
+
+La ruta principal `/v1/solicitudes-cotizacion*` ya enruta al BFF. CORS existente
+permite Pages, GET/POST y `authorization`, `content-type`, `idempotency-key`;
+no se requiere otro API Gateway, microservicio ni cambio de infraestructura.
+
 Las solicitudes aceptan exclusivamente `{productoId, datosProducto}`; los datos de identidad
 y contacto proceden del usuario autenticado, nunca del body. Se admiten `automotive`,
 `travel`, `life`, `device-protection`, `parametric`, `parametric-weather`,

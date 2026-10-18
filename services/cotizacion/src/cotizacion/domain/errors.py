@@ -27,3 +27,11 @@ class SeleccionNoEncontradaError(Exception):
 
 class SuscripcionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una suscripción."""
+
+
+class PagoNoEncontradoError(Exception):
+    """La solicitud todavía no tiene un pago simulado."""
+
+
+class PagoNoPermitidoError(Exception):
+    """La suscripción, selección o saga no permite confirmar un pago."""
