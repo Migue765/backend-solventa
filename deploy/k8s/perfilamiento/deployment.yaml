@@ -2,22 +2,23 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: perfilamiento
-  namespace: hu11-perfilamiento
+  namespace: perfilamiento
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: hu11-perfilamiento
+      app.kubernetes.io/name: perfilamiento
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
-        app: hu11-perfilamiento
+        app.kubernetes.io/name: perfilamiento
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -28,15 +29,17 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: SERVICE_APP
+              value: perfilamiento.app:create_app()
             - name: INTERNAL_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: hu11-runtime
+                  name: perfilamiento-runtime
                   key: INTERNAL_API_TOKEN
             - name: PERFILAMIENTO_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: hu11-runtime
+                  name: perfilamiento-runtime
                   key: PERFILAMIENTO_DATABASE_URL
             - name: IDENTIDAD_SERVICE_URL
               value: http://identidad.identidad.svc.cluster.local:8080
