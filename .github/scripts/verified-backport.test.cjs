@@ -14,7 +14,7 @@ function fixture(t) {
   const pull = { number: 7, state: 'open', draft: false, mergeable: true, html_url: 'https://github.com/' + full + '/pull/7',
     head: { ref: 'backport/release-pr-6', sha: RELEASE, repo: { full_name: full } },
     base: { ref: 'develop', sha: BASE, repo: { full_name: full } }, user: { id: 3, type: 'Bot', login: 'backport-app[bot]' } };
-  const issue = { user: { id: 3 }, performed_via_github_app: { id: 99 } };
+  const bot = { id: 3, type: 'Bot', login: 'backport-app[bot]' };
   const checks = [['Calidad', 15368], ['validate-branch', 15368], ['CI / Validación (Jenkins)', 5278678]].map(([name, id]) =>
     ({ name, app: { id }, head_sha: HEAD, status: 'completed', conclusion: 'success' }));
   const reviews = [{ user: { id: 2, type: 'User' }, state: 'APPROVED', commit_id: HEAD }];
@@ -26,7 +26,8 @@ function fixture(t) {
     }, list: () => {}, listReviews: () => {},
     create: async input => { state.calls.push(['create-pr', input]); return { data: pull }; },
     merge: async input => { state.calls.push(['merge', input]); return { data: { merged: true, sha: 'd'.repeat(40) } }; } },
-    issues: { get: async () => ({ data: issue }), addAssignees: async input => { state.calls.push(['assign', input]); } },
+    users: { getByUsername: async () => ({ data: bot }) },
+    issues: { addAssignees: async input => { state.calls.push(['assign', input]); } },
     checks: { listForRef: () => {} },
     git: { getRef: async ({ ref }) => ({ data: { object: { sha: ref === 'heads/develop' ? state.develop : RELEASE } } }),
       createRef: async input => { state.calls.push(['create-ref', input]); },
@@ -35,19 +36,19 @@ function fixture(t) {
       basehead === `${RELEASE}...${BASE}` ? { ahead_by: 0, behind_by: 1, status: 'behind' } :
       { ahead_by: 1, behind_by: state.diverged ? 1 : 0, status: state.diverged ? 'diverged' : 'ahead' } }) },
   }, paginate: async method => method === github.rest.checks.listForRef ? checks : method === github.rest.pulls.listReviews ? reviews : state.existing };
-  return { github, repo, pull, issue, source, checks, reviews, state, appId: 99, appSlug: 'backport-app',
+  return { github, repo, pull, bot, source, checks, reviews, state, appId: 99, appSlug: 'backport-app',
     sourceId: 6, context: { repo }, core: { info: () => {} } };
 }
 
-test('la App se verifica mediante Issues API; el payload de PR no incluye performed_via_github_app', async t => {
+test('la App se verifica mediante la identidad real del bot, sin campos opcionales del PR', async t => {
   const f = fixture(t); assert.equal('performed_via_github_app' in f.pull, false); await verifyPull(f);
 });
 
 for (const [name, mutate] of [
   ['autor humano', f => { f.pull.user.type = 'User'; }],
-  ['otra App', f => { f.issue.performed_via_github_app.id = 100; }],
-  ['App sin confirmar', f => { delete f.issue.performed_via_github_app; }],
-  ['autor de issue distinto', f => { f.issue.user.id = 4; }],
+  ['otra App', f => { f.bot.id = 100; }],
+  ['App sin confirmar', f => { f.bot.type = 'User'; }],
+  ['slug de bot distinto', f => { f.bot.login = 'other-app[bot]'; }],
   ['fork', f => { f.pull.head.repo.full_name = 'other/repo'; }],
   ['destino incorrecto', f => { f.pull.base.ref = 'main'; }],
   ['commits adicionales', f => { f.pull.head.sha = HEAD; }],

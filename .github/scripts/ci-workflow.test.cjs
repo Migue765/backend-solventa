@@ -27,6 +27,8 @@ test('backport automático desactivado por defecto, solo desde main y sin privil
   assert.ok(automatic.includes("github.ref == 'refs/heads/main'"));
   assert.ok(automatic.includes('ref: main'));
   assert.ok(automatic.includes('repositories: ${{ github.event.repository.name }}'));
+  assert.ok(automatic.includes('APP_SLUG: ${{ steps.app.outputs.app-slug }}'));
+  assert.ok(automatic.includes('process.env.APP_SLUG !== process.env.EXPECTED_APP_SLUG'));
   assert.doesNotMatch(automatic, /pull_request_target|administration:|permission-administration/);
 });
 test('hotfix conserva el flujo manual previo aunque se active el automático de releases', () => {

@@ -43,8 +43,8 @@ async function verifyPull({ github, repo, pull, appId, appSlug }) {
   if (!Number.isSafeInteger(number) || !number || pull.state !== 'open' || pull.draft || pull.base?.ref !== 'develop' ||
       pull.head.repo?.full_name !== full || pull.base.repo?.full_name !== full || pull.user?.type !== 'Bot' ||
       pull.user.login !== `${appSlug}[bot]` || !Number.isSafeInteger(pull.user.id)) throw new Error('El PR no pertenece a la App dedicada');
-  const issue = (await github.rest.issues.get({ ...repo, issue_number: pull.number })).data;
-  if (issue.user?.id !== pull.user.id || issue.performed_via_github_app?.id !== appId) throw new Error('La API no confirma la App autora del PR');
+  const bot = (await github.rest.users.getByUsername({ username: `${appSlug}[bot]` })).data;
+  if (bot.id !== pull.user.id || bot.type !== 'Bot' || bot.login !== pull.user.login) throw new Error('La API no confirma la App autora del PR');
   const source = await verifySource({ github, repo, number });
   const branch = (await github.rest.git.getRef({ ...repo, ref: `heads/${pull.head.ref}` })).data.object.sha;
   const develop = (await github.rest.git.getRef({ ...repo, ref: 'heads/develop' })).data.object.sha;

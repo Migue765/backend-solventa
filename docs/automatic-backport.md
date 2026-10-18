@@ -28,8 +28,8 @@ vigente y estos checks exitosos del head aprobado:
 - CI / Validación (Jenkins): App 5278678.
 
 La App crea `backport/release-pr-<número>` con el merge SHA exacto y asigna JUANES545,
-conservando otros asignados. Antes de integrar valida autor, App ID obtenido mediante
-Issues API, repositorio, base/head actuales, rama y ancestry. Solo se omiten pruebas del
+conservando otros asignados. Antes de integrar valida autor, identidad numérica real del bot mediante
+Users API, repositorio, base/head actuales, rama y ancestry. Solo se omiten pruebas del
 PR después de validar evidencia desde la base confiable; cualquier rechazo vuelve a CI
 normal. No solicita Jenkins ni otra aprobación para el backport exacto.
 
@@ -69,6 +69,9 @@ automáticamente una integración completada.
 
 La excepción de GitHub se concede por App, no por nombre de rama. El workflow confiable
 de main limita su uso a sincronizaciones exactas; proteger la clave y revisar esa política.
+El token se crea para el App ID y su clave; el slug autenticado debe coincidir con el
+configurado. Users API confirma login, tipo Bot e ID del autor. No se depende de
+`performed_via_github_app`, ausente en PRs y potencialmente nulo en Issues API.
 
 ## Recuperación
 
