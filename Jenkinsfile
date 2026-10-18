@@ -58,7 +58,7 @@ pipeline {
         }
         stage('Pruebas y cobertura') {
             steps {
-                publishChecks name: 'Cobertura', status: 'IN_PROGRESS', conclusion: 'NONE', title: 'Generando cobertura por servicio', summary: 'Scripts y servicios implementados; sin promedio entre módulos.', detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks"
+                publishChecks name: 'Cobertura', status: 'IN_PROGRESS', conclusion: 'NONE', title: 'Analizando cobertura por servicio', summary: 'Objetivo recomendado: 80 % en líneas y ramas por módulo.', detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks"
                 sh 'bash scripts/jenkins-tests.sh'
             }
         }
@@ -84,7 +84,8 @@ pipeline {
                     ''')
                     def summary = readFile(file: 'reports/coverage-summary.md', encoding: 'UTF-8')
                     def revision = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
-                    summary += "\nRevisión compilada (puede incluir merge con destino): `${revision}`.\n"
+                    summary += "\n**Revisión compilada:** [`${revision}`](https://github.com/Migue765/backend-solventa/commit/${revision}).\n"
+                    summary += "\n[Informes de cobertura por módulo](${env.BUILD_URL}artifact/reports/coverage/) · [Pruebas JUnit](${env.BUILD_URL}testReport/)\n"
                     publishChecks name: 'Cobertura', title: summary.readLines()[0], summary: summary,
                         detailsURL: "https://github.com/Migue765/backend-solventa/pull/${env.CHANGE_ID}/checks",
                         conclusion: result == 0 ? 'SUCCESS' : (currentBuild.currentResult == 'SUCCESS' ? 'FAILURE' : 'NEUTRAL')
