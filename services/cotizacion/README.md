@@ -46,6 +46,14 @@ Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
 
+### Persistencia de suscripción
+
+La suscripción se inserta antes de su decisión y saga mediante `flush`, sin confirmar
+la transacción. Suscripción, decisión, saga y outbox `SuscripcionAprobada` se confirman
+juntos; cualquier error posterior al `flush` revierte todos esos registros.
+Las pruebas de repositorio activan las claves foráneas de SQLite y comprueban tanto
+la recuperación persistida como el rollback completo ante una FK inválida en la saga.
+
 ### Pago simulado
 
 El canal público es el BFF con JWT. Las rutas internas usan `clienteId` derivado

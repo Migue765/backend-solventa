@@ -130,22 +130,25 @@ class RepositorioCotizacionesSqlAlchemy:
 
     def guardar_suscripcion(self, suscripcion: Suscripcion) -> None:
         with self._sesiones.begin() as sesion:
+            sesion.add(
+                SuscripcionModel(
+                    suscripcion_id=suscripcion.suscripcion_id,
+                    solicitud_id=suscripcion.solicitud_id,
+                    cotizacion_id=suscripcion.cotizacion_id,
+                    cliente_id=suscripcion.cliente_id,
+                    oferta_id=suscripcion.oferta_id,
+                    oferta_version=suscripcion.oferta_version,
+                    estado=suscripcion.estado.value,
+                    regla_version=suscripcion.regla_version,
+                    creada_en=suscripcion.creada_en,
+                    actualizada_en=suscripcion.actualizada_en,
+                    idempotency_key=suscripcion.idempotency_key,
+                    request_fingerprint=suscripcion.request_fingerprint,
+                )
+            )
+            sesion.flush()
             sesion.add_all(
                 [
-                    SuscripcionModel(
-                        suscripcion_id=suscripcion.suscripcion_id,
-                        solicitud_id=suscripcion.solicitud_id,
-                        cotizacion_id=suscripcion.cotizacion_id,
-                        cliente_id=suscripcion.cliente_id,
-                        oferta_id=suscripcion.oferta_id,
-                        oferta_version=suscripcion.oferta_version,
-                        estado=suscripcion.estado.value,
-                        regla_version=suscripcion.regla_version,
-                        creada_en=suscripcion.creada_en,
-                        actualizada_en=suscripcion.actualizada_en,
-                        idempotency_key=suscripcion.idempotency_key,
-                        request_fingerprint=suscripcion.request_fingerprint,
-                    ),
                     DecisionSuscripcionModel(
                         suscripcion_id=suscripcion.decision.suscripcion_id,
                         regla_version=suscripcion.decision.regla_version,
