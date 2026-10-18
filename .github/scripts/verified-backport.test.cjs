@@ -15,8 +15,8 @@ function fixture(t) {
     head: { ref: 'backport/release-pr-6', sha: RELEASE, repo: { full_name: full } },
     base: { ref: 'develop', sha: BASE, repo: { full_name: full } }, user: { id: 3, type: 'Bot', login: 'backport-app[bot]' } };
   const bot = { id: 3, type: 'Bot', login: 'backport-app[bot]' };
-  const checks = [['Calidad', 15368], ['validate-branch', 15368], ['CI / Validación (Jenkins)', 5278678]].map(([name, id]) =>
-    ({ name, app: { id }, head_sha: HEAD, status: 'completed', conclusion: 'success' }));
+  const checks = [['Calidad', 15368], ['validate-branch', 15368], ['CI / Validación (Jenkins)', 5278678]].map(([name, id], index) =>
+    ({ id: 100 + index, name, app: { id }, head_sha: HEAD, status: 'completed', conclusion: 'success' }));
   const reviews = [{ user: { id: 2, type: 'User' }, state: 'APPROVED', commit_id: HEAD }];
   const state = { calls: [], existing: [pull], develop: BASE, diverged: false, tree: HEAD, reads: 0, unknownReads: 0 };
   const github = { rest: {
@@ -103,3 +103,21 @@ test('un error de permisos no se interpreta como ausencia de la rama', async t =
 test('una carrera de base se informa y nunca se revierte a ciegas', async t => {
   const f = fixture(t); f.state.tree = BASE; await assert.rejects(automaticBackport(f), /cambió durante/);
 });
+
+test('suites repetidas del mismo SHA se resuelven por el check más reciente', async t => {
+  const f = fixture(t);
+  f.checks.push({ ...f.checks[1], id: 200 });
+  await verifyPull(f);
+});
+test('un fallo antiguo no invalida un éxito posterior del mismo check', async t => {
+  const f = fixture(t);
+  f.checks.push({ ...f.checks[1], id: 99, conclusion: 'failure' });
+  await verifyPull(f);
+});
+for (const change of [{ conclusion: 'failure' }, { status: 'in_progress', conclusion: null }]) {
+  test(`un éxito antiguo no oculta el check reciente ${change.status || change.conclusion}`, async t => {
+    const f = fixture(t);
+    f.checks.push({ ...f.checks[1], id: 200, ...change });
+    await assert.rejects(verifyPull(f));
+  });
+}
