@@ -3,12 +3,13 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, raiseload, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.decision import InstantaneaDecision
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
+from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import (
     DecisionSuscripcion,
@@ -23,6 +24,7 @@ from cotizacion.infrastructure.persistence.models import (
     DecisionSuscripcionModel,
     InstantaneaDecisionModel,
     OutboxEventoModel,
+    PagoSimuladoModel,
     SagaEmisionModel,
     SeleccionOfertaModel,
     SuscripcionModel,
@@ -45,6 +47,105 @@ class RepositorioCotizacionesSqlAlchemy:
         with self._sesiones() as sesion:
             modelo = sesion.get(CotizacionModel, cotizacion_id)
             return _a_dominio(modelo) if modelo else None
+
+    def consultar_dashboard(self, cliente_id: UUID) -> dict[str, object]:
+        # Una sola consulta mantiene coherente la proyeccion incluso durante un pago.
+        consulta = (
+            select(
+                CotizacionModel,
+                SeleccionOfertaModel,
+                SuscripcionModel,
+                SagaEmisionModel,
+                PagoSimuladoModel,
+            )
+            .outerjoin(
+                SeleccionOfertaModel,
+                SeleccionOfertaModel.cotizacion_id == CotizacionModel.cotizacion_id,
+            )
+            .outerjoin(
+                SuscripcionModel,
+                (SuscripcionModel.cotizacion_id == CotizacionModel.cotizacion_id)
+                & (SuscripcionModel.cliente_id == cliente_id),
+            )
+            .outerjoin(
+                SagaEmisionModel,
+                SagaEmisionModel.suscripcion_id == SuscripcionModel.suscripcion_id,
+            )
+            .outerjoin(
+                PagoSimuladoModel,
+                (PagoSimuladoModel.suscripcion_id == SuscripcionModel.suscripcion_id)
+                & (PagoSimuladoModel.cliente_id == cliente_id),
+            )
+            .where(CotizacionModel.cliente_id == cliente_id)
+            .options(raiseload(CotizacionModel.coberturas), raiseload(CotizacionModel.instantanea))
+            .order_by(CotizacionModel.creada_en.desc(), CotizacionModel.cotizacion_id)
+        )
+        cotizaciones: list[dict[str, object]] = []
+        suscripciones: list[dict[str, object]] = []
+        pagos: list[dict[str, object]] = []
+        with self._sesiones() as sesion:
+            for cotizacion, seleccion, suscripcion, saga, pago in sesion.execute(consulta):
+                cotizaciones.append(
+                    {
+                        "id": str(cotizacion.cotizacion_id),
+                        "solicitudId": cotizacion.solicitud_id,
+                        "productoId": _producto_id_dashboard(cotizacion.producto_id),
+                        "estado": cotizacion.estado,
+                        "creadaEn": _fecha_dashboard(cotizacion.creada_en),
+                        "validaHasta": _fecha_dashboard(cotizacion.valida_hasta),
+                        "primaEstimada": {
+                            "monto": str(cotizacion.prima_estimada),
+                            "moneda": cotizacion.moneda,
+                        },
+                        "seleccion": (
+                            {
+                                "ofertaId": str(seleccion.oferta_id),
+                                "nombreOferta": seleccion.nombre_oferta,
+                                "prima": {
+                                    "monto": str(seleccion.prima_mensual),
+                                    "moneda": seleccion.moneda,
+                                },
+                                "periodicidad": seleccion.periodicidad,
+                                "seleccionadaEn": _fecha_dashboard(seleccion.seleccionada_en),
+                            }
+                            if seleccion is not None
+                            else None
+                        ),
+                    }
+                )
+                if suscripcion is not None:
+                    if saga is None:
+                        raise ValueError("Suscripcion persistida sin saga")
+                    suscripciones.append(
+                        {
+                            "id": str(suscripcion.suscripcion_id),
+                            "solicitudId": suscripcion.solicitud_id,
+                            "cotizacionId": str(suscripcion.cotizacion_id),
+                            "ofertaId": str(suscripcion.oferta_id),
+                            "estado": suscripcion.estado,
+                            "creadaEn": _fecha_dashboard(suscripcion.creada_en),
+                            "actualizadaEn": _fecha_dashboard(suscripcion.actualizada_en),
+                            "saga": {
+                                "estado": saga.estado,
+                                "version": saga.version,
+                                "actualizadaEn": _fecha_dashboard(saga.actualizada_en),
+                            },
+                        }
+                    )
+                if pago is not None:
+                    pagos.append(
+                        {
+                            "id": str(pago.pago_id),
+                            "solicitudId": pago.solicitud_id,
+                            "suscripcionId": str(pago.suscripcion_id),
+                            "estado": "confirmado",
+                            "simulada": True,
+                            "importe": {"monto": str(pago.monto), "moneda": pago.moneda},
+                            "periodicidad": pago.periodicidad,
+                            "confirmadaEn": _fecha_dashboard(pago.confirmada_en),
+                        }
+                    )
+        return {"cotizaciones": cotizaciones, "suscripciones": suscripciones, "pagos": pagos}
 
     def guardar_solicitud(self, solicitud: SolicitudCotizacion) -> None:
         modelo = _a_modelo(solicitud.cotizacion)
@@ -351,6 +452,19 @@ def _instantanea_a_dominio(modelo: InstantaneaDecisionModel | None) -> Instantan
             modelo.creada_en if modelo.creada_en.tzinfo else modelo.creada_en.replace(tzinfo=UTC)
         ),
     )
+
+
+def _fecha_dashboard(fecha: datetime) -> str:
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=UTC)
+    return fecha.isoformat().replace("+00:00", "Z")
+
+
+def _producto_id_dashboard(producto_id: UUID) -> str:
+    for producto in PRODUCTOS:
+        if producto.producto_interno_id == producto_id:
+            return producto.producto_id
+    return str(producto_id)
 
 
 def _solicitud_a_dominio(modelo: CotizacionModel) -> SolicitudCotizacion:

@@ -79,3 +79,61 @@ Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.
   del pod.
 - Las credenciales de la base se copiaron al Secret `cotizacion-db`. RDS rota el secreto gestionado, asi
   que ese Secret quedara desactualizado: pendiente leerlo en runtime con el rol IRSA o usar External Secrets.
+
+## Consolidacion y retirada acotada de duplicados
+
+Este procedimiento no ejecuta la retirada: requiere validacion del flujo principal,
+aceptacion de sus resultados y orden final expresa del coordinador. Un pod Ready o
+`/ping` no bastan. Comprobar desde la aplicacion autenticada el recorrido de cotizacion,
+seleccion, suscripcion, pago simulado y tablero con persistencia y aislamiento entre
+clientes; verificar tambien consentimiento/perfilamiento cuando corresponda.
+Los pagos simulados no acreditan emision de polizas.
+
+Antes de retirar, registrar imagenes/digests, inventario, dependencias y resultados
+del recorrido. Revisar pipelines y otros controladores externos al repositorio:
+no debe quedar ningun automatismo o consumidor que recree o dependa de los duplicados.
+El guard de `deploy/codebuild/deploy.sh` rechaza `hu11-perfilamiento` y
+`calcular-cotizacion-preview` antes de llamar a AWS o Kubernetes, pero no es una
+politica de admision ni reemplaza esa comprobacion.
+
+### Los cuatro workloads HU11
+
+Seguir el [runbook de perfilamiento](perfilamiento/README.md) y usar el helper
+existente, desde la raiz del repositorio, solo despues de la aceptacion final:
+
+```powershell
+python scripts\migrate_perfilamiento.py retire --acceptance-confirmed
+```
+
+Su alcance sigue siendo exclusivamente los Deployments `bff-web`, `cotizacion`,
+`identidad` y `perfilamiento` del namespace `hu11-perfilamiento`, con sus comprobaciones
+de destino productivo, referencias y controladores. No ampliar el helper de cuatro
+a cinco workloads ni incluir el preview en esta operacion.
+
+### Preview: un unico Deployment, en una operacion separada
+
+La allowlist exacta es `deployment/calcular-cotizacion` dentro del namespace
+`calcular-cotizacion-preview`, no el namespace completo ni otros Deployments.
+Su SQLite esta en `emptyDir` y **no esta vacio**: el inventario confirmado contiene
+15 cotizaciones, 13 selecciones y 3 usuarios. Reiniciar, escalar a cero o eliminar
+el pod/Deployment pierde ese almacenamiento; no usar esas acciones como ensayo.
+Antes de cualquier retirada se necesita autorizacion de descarte o un backup
+verificado y restaurable. El usuario ya autorizo descartar los datos efimeros
+exclusivamente de este preview al retirarlo despues de validar; esa autorizacion
+no permite borrar datos de otros entornos ni adelantar la orden final del coordinador.
+No copiar ni migrar esos usuarios demo a produccion.
+
+Revisar el inventario final antes de ejecutar. Si cambian el nombre, los controladores
+o las dependencias esperadas, detenerse y revisar el alcance. Con la aceptacion y
+orden final registradas, la unica eliminacion autorizada para este preview es:
+
+```powershell
+kubectl --context arn:aws:eks:us-east-2:976083331509:cluster/solventa-prod-eks -n calcular-cotizacion-preview delete deployment/calcular-cotizacion --wait=true
+```
+
+En ambas retiradas conservar namespaces, Secrets, Services, TargetGroupBindings,
+rutas publicas/internas, PostgreSQL y capacidad del cluster. No ejecutar Terraform,
+cambios de rutas, `delete namespace`, eliminaciones globales ni limpiezas adicionales.
+Registrar el resultado y repetir el recorrido principal aceptado; verificar que los
+Deployments retirados no reaparezcan. El helper y el guard no autorizan despliegues
+desde una feature: integrar cambios mediante las PR y pipelines principales habituales.

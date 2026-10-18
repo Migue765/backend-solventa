@@ -1,3 +1,4 @@
+import hmac
 from typing import cast
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from cotizacion.application.perfilamiento import validar_perfil
 from cotizacion.application.ports import ProveedorPerfil
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
+from cotizacion.config import Config
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
 from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
@@ -31,6 +33,25 @@ from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
 
 bp = Blueprint("solicitudes", __name__, url_prefix="/v1")
 UUID_ADAPTER: TypeAdapter[UUID] = TypeAdapter(UUID)
+
+
+@bp.get("/dashboard")
+def consultar_dashboard() -> tuple[Response, int] | Response:
+    config = cast(Config, current_app.extensions["cotizacion_config"])
+    if not config.internal_api_token:
+        current_app.logger.error("Dashboard requiere INTERNAL_API_TOKEN.")
+        return jsonify(error="servicio_no_disponible"), 503
+    if not hmac.compare_digest(
+        request.headers.get("Authorization", "").encode(),
+        f"Bearer {config.internal_api_token}".encode(),
+    ):
+        return jsonify(error="no_autorizado"), 401
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    response = jsonify(_repositorio().consultar_dashboard(cliente_id))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.get("/productos-seguro")
