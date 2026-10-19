@@ -21,7 +21,11 @@ warn_unused_ignores = true
 exclude = ["services/.*/migrations/"]
 
 [[tool.mypy.overrides]]
-module = ["test_profiling_flow", "test_dashboard_flow"]
+module = [
+    "test_profiling_flow", "test_dashboard_flow", "test_policies_flow",
+    "tests.test_dashboard_flow", "tests.test_policies_flow",
+    "tests.test_profiling_flow",
+]
 disable_error_code = ["import-untyped"]
 
 [tool.pytest.ini_options]
@@ -31,5 +35,6 @@ pythonpath = [
     "services/identidad/src",
     "services/cotizacion/src",
     "services/perfilamiento/src",
+    "services/polizas/src",
 ]
 addopts = "--import-mode=importlib"

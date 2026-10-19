@@ -11,6 +11,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -216,3 +217,4 @@ class PagoSimuladoModel(Base):
     periodicidad: Mapped[str] = mapped_column(String(20))
     confirmada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     saga_version: Mapped[int] = mapped_column(Integer)
+    emision_solicitada: Mapped[bool] = mapped_column(default=False, server_default=false())

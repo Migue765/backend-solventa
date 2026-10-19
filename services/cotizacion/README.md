@@ -71,9 +71,11 @@ ni siquiera para registros historicos vencidos. Ordena cotizaciones de mas recie
 a mas antigua, con ID como desempate. No suma importes ni convierte monedas.
 La consulta sin filas devuelve tres arrays vacios reales. Fallos SQL o integridad
 (por ejemplo suscripcion sin saga) se notifican como errores, nunca como vacio.
-La respuesta tiene `Cache-Control: no-store`; el BFF agrega la disponibilidad
-`no_implementado` de polizas y notificaciones y valida el contrato publico.
-No requiere migraciones, nuevos servicios ni cambios de infraestructura.
+La respuesta tiene `Cache-Control: no-store`. Con `POLIZAS_SERVICE_URL` habilitado,
+se agrega el array de polizas persistidas consultando el servicio por HTTP y
+propagando cliente y correlacion; su indisponibilidad responde `503`, no vacio.
+El BFF valida el contrato publico. Sin habilitarlo conserva el marcador legado;
+notificaciones sigue `no_implementado`.
 
 ### Pago simulado
 
@@ -88,7 +90,15 @@ La migración aditiva `pagos_simulados` crea una tabla independiente. Pago, avan
 de saga (versión +1), fecha de suscripción y outbox `PagoSimuladoConfirmado` se
 confirman en una transacción. Unicidad por solicitud/suscripción y por cliente/clave,
 más actualización condicional de saga, impiden duplicados en concurrencia.
-No se conecta ninguna pasarela ni se realiza cobro, firma o emisión.
+No se conecta ninguna pasarela ni se realiza cobro, firma o emision real.
+La integracion nueva con Polizas emite registros academicos despues del pago
+si se configura `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`. La migracion
+`emision_polizas` excluye los pagos anteriores; no hay emision retroactiva.
+Un fallo de emision devuelve `503` conservando el pago: repetir POST completa
+la emision idempotente y avanza la saga a `emitida` version 3. GET pago conserva
+la instantanea de confirmacion version 2, sin efectos de escritura.
+Consultar [Polizas](../polizas/README.md) para reglas de vigencia, persistencia,
+contrato y activacion principal.
 
 POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
 `referenciaInterna: SIM-<UUID>` e `importe: {monto, moneda}`. La referencia es
@@ -180,7 +190,7 @@ Sus tres planes y el factor de riesgo de comparación se guardan al crear en
 guardados aunque cambien después el perfil o las reglas. La cotización base sigue
 aplicando la regla climática `tarifa-2026.1`, sin cambiar su importe ni fórmula.
 El disparador, umbral y compensación quedan sujetos a las condiciones del plan.
-No se implementan emisión, monitoreo meteorológico, consultas a aerolíneas, siniestros
+No se implementan emision real, monitoreo meteorológico, consultas a aerolíneas, siniestros
 ni pagos automáticos o reales.
 
 ## Tarificación

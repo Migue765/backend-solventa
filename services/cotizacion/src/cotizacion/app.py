@@ -21,6 +21,7 @@ from cotizacion.domain.errors import (
     PagoNoPermitidoError,
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
+    ServicioPolizasNoDisponibleError,
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
@@ -36,6 +37,7 @@ from cotizacion.infrastructure.persistence.repositorio_reglas import (
     ReglasConCache,
     RepositorioReglasSqlAlchemy,
 )
+from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cotizacion.infrastructure.tarificador_por_regla import TarificadorPorRegla
 
 logger = logging.getLogger(__name__)
@@ -63,9 +65,12 @@ def create_app(config: Config | None = None) -> Flask:
         vigencia=timedelta(days=config.vigencia_dias),
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
-    app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
-        RepositorioPagosSqlAlchemy(sesiones)
+    pagos = RepositorioPagosSqlAlchemy(sesiones, emitir_polizas=bool(config.polizas_url))
+    app.extensions["repositorio_pagos"] = pagos
+    app.extensions["polizas"] = (
+        PolizasHttp(config.polizas_url, config.internal_api_token) if config.polizas_url else None
     )
+    app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(pagos)
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
     perfiles_riesgo = PerfilRiesgoSimulado()
     app.extensions["registrar_solicitud"] = RegistrarSolicitud(
@@ -140,5 +145,12 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(PagoNoPermitidoError)
     def pago_no_permitido(_: PagoNoPermitidoError):
         return jsonify(error="pago_no_permitido"), 422
+
+    @app.errorhandler(ServicioPolizasNoDisponibleError)
+    def polizas_no_disponible(_: ServicioPolizasNoDisponibleError) -> tuple[Response, int]:
+        logger.exception(
+            "Servicio de polizas no disponible", extra={"correlationId": g.correlation_id}
+        )
+        return jsonify(error="servicio_no_disponible", correlationId=g.correlation_id), 503
 
     return app
