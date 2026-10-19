@@ -14,8 +14,11 @@ class Config:
     perfilamiento_url: str = "http://localhost:5003"
     internal_api_token: str = ""
     perfilamiento_habilitado: bool = False
+    polizas_url: str = ""
 
     def __post_init__(self) -> None:
+        if self.polizas_url and not self.internal_api_token.strip():
+            raise ValueError("Polizas requiere INTERNAL_API_TOKEN.")
         if self.perfilamiento_habilitado and (
             not self.internal_api_token.strip() or not self.perfilamiento_url.strip()
         ):
@@ -29,6 +32,7 @@ class Config:
         if habilitado not in {"true", "false"}:
             raise ValueError("COTIZACION_PERFILAMIENTO_HABILITADO debe ser true o false.")
         return cls(
+            polizas_url=os.getenv("POLIZAS_SERVICE_URL", "").strip().rstrip("/"),
             perfilamiento_habilitado=habilitado == "true",
             perfilamiento_url=os.getenv("PERFILAMIENTO_SERVICE_URL", cls.perfilamiento_url),
             internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),

@@ -62,7 +62,7 @@ class HttpQuoteGateway(QuoteGateway):
             return Dashboard.model_validate(
                 {
                     **payload,
-                    "polizas": {"disponibilidad": "no_implementado"},
+                    "polizas": payload.get("polizas", {"disponibilidad": "no_implementado"}),
                     "notificaciones": {"disponibilidad": "no_implementado"},
                 }
             )

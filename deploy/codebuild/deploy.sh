@@ -28,6 +28,10 @@ if [ "$SERVICE_NAME" = "perfilamiento" ] && [ "$NAMESPACE" != "perfilamiento" ];
   echo "Perfilamiento solo se despliega en el namespace productivo perfilamiento." >&2
   exit 1
 fi
+if [ "$SERVICE_NAME" = "polizas" ] && [ "$NAMESPACE" != "polizas" ]; then
+  echo "Polizas solo se despliega en el namespace productivo polizas." >&2
+  exit 1
+fi
 
 export IMAGE="${ECR_REPOSITORY_URL}:${IMAGE_TAG}"
 # Los nombres de Job deben ser DNS-1123: minusculas, digitos y guiones.
@@ -51,11 +55,18 @@ else
 fi
 
 echo "== Rollout =="
-kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
+if [ "$SERVICE_NAME" = "polizas" ]; then
+  kubectl apply -f "${K8S_DIR}/service.yaml"
+  envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
+else
+  kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
+fi
 if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s; then
   echo "El rollout fallo; revirtiendo a ${previous:-la revision anterior}." >&2
-  kubectl -n "$NAMESPACE" rollout undo deployment/"$SERVICE_NAME"
-  kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s || true
+  if [ -n "$previous" ]; then
+    kubectl -n "$NAMESPACE" rollout undo deployment/"$SERVICE_NAME"
+    kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s || true
+  fi
   exit 1
 fi
 

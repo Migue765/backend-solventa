@@ -2,7 +2,7 @@ import hmac
 from typing import cast
 from uuid import UUID
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import TypeAdapter, ValidationError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -30,6 +30,8 @@ from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
 )
+from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
+from cotizacion.infrastructure.polizas_http import PolizasHttp
 
 bp = Blueprint("solicitudes", __name__, url_prefix="/v1")
 UUID_ADAPTER: TypeAdapter[UUID] = TypeAdapter(UUID)
@@ -49,7 +51,11 @@ def consultar_dashboard() -> tuple[Response, int] | Response:
     cliente_id = _cliente_id()
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
-    response = jsonify(_repositorio().consultar_dashboard(cliente_id))
+    dashboard = _repositorio().consultar_dashboard(cliente_id)
+    polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
+    if polizas is not None:
+        dashboard["polizas"] = polizas.listar(cliente_id, g.correlation_id)
+    response = jsonify(dashboard)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -195,6 +201,13 @@ def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
     except (ValidationError, TypeError, BadRequest, UnsupportedMediaType):
         return jsonify(error="solicitud_invalida"), 400
     pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
+    polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
+    if polizas is not None:
+        repositorio = cast(RepositorioPagosSqlAlchemy, current_app.extensions["repositorio_pagos"])
+        evidencia = repositorio.evidencia_emision(pago)
+        if evidencia is not None:
+            poliza_id = polizas.emitir(evidencia, g.correlation_id)
+            repositorio.marcar_emitida(pago, poliza_id)
     return jsonify(pago_simulado_a_json(pago))
 
 
