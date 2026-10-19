@@ -35,3 +35,7 @@ class PagoNoEncontradoError(Exception):
 
 class PagoNoPermitidoError(Exception):
     """La suscripción, selección o saga no permite confirmar un pago."""
+
+
+class ServicioPolizasNoDisponibleError(Exception):
+    """No se pudo emitir o consultar la poliza; el pago persistido permite reintentar."""

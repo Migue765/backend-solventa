@@ -60,10 +60,17 @@ exacta (`mensual`, `por_viaje`, `por_vuelo`, `por_periodo`), sin recalculos ni t
 que mezclen monedas o periodicidades. Suscripcion conserva su estado y saga actuales;
 el pago se identifica siempre como `simulada: true`, nunca como un cobro real.
 
-`polizas` y `notificaciones` son `{disponibilidad: "no_implementado"}`, no arrays vacios.
-No se generan notificaciones desde eventos ni se equipara pago/saga a poliza emitida.
-Una coleccion vacia de los tres dominios disponibles si representa una consulta sin
-registros. La lectura historica no renueva ni exige perfiles de riesgo vigentes y
+Con `POLIZAS_SERVICE_URL` habilitado en Cotizacion, `polizas` es un array de
+emisiones academicas persistidas por el nuevo servicio: `{id,suscripcionId,tipo,
+fechaInicio,fechaFin,estado,simulada:true}`. Fechas `YYYY-MM-DD` inclusivas;
+estado `programada`, `vigente` o `vencida` respecto del dia UTC. No acredita
+cobertura real ni convierte pagos historicos en polizas. El BFF valida el contrato,
+no calcula vigencias ni deriva polizas a partir de la saga.
+Sin habilitar Polizas se conserva `{disponibilidad:"no_implementado"}`, nunca una
+lista vacia artificial; el consumidor debe informar indisponibilidad.
+`notificaciones` conserva ese marcador y no se genera desde eventos.
+Una coleccion vacia disponible si representa una consulta sin registros.
+La lectura historica no renueva ni exige perfiles de riesgo vigentes y
 no modifica suscripciones, pagos o transacciones. No ofrece reanudacion con datos parciales.
 El detalle de campos y tipos esta en `contracts/openapi/bff-web-v1.yaml`.
 
@@ -74,7 +81,12 @@ POST exige `Idempotency-Key` UUID y cuerpo ausente o `{}`. El BFF no acepta impo
 moneda, cliente, tarjeta ni referencia bancaria; cotización toma el importe y la
 periodicidad exactos de la selección aprobada persistida. Para mostrar el importe
 antes de confirmar se consulta GET selección y se contrasta oferta/versión con
-GET suscripción. No hay proveedor ni cobro real, firma o emisión de póliza.
+GET suscripción. No hay proveedor ni cobro real, firma o cobertura real.
+Con Polizas habilitado, un pago nuevo genera una emision academica idempotente
+antes de responder. Si esa emision falla, POST devuelve `503` aunque el pago
+simulado ya este persistido: repetir POST en la misma solicitud completa el flujo
+sin duplicarlo. GET pago es solo lectura y no emite.
+Las reglas autorizadas y el despliegue estan en `services/polizas/README.md`.
 
 Ambos métodos devuelven `200` con `id`, `solicitudId`, `suscripcionId`, `ofertaId`,
 `ofertaVersion`, `estado: confirmado`, `simulada: true`,
@@ -103,7 +115,7 @@ Los campos y límites están definidos en el contrato OpenAPI y en
 `services/cotizacion/README.md`. `parametric.coverageType` es opcional y conserva la
 compatibilidad de registros anteriores; las fechas futuras se exigen al crear, no al leer.
 Las ofertas son simuladas y mantienen `{monto, moneda: "COP"}`: no hay integraciones
-meteorológicas, consultas a aerolíneas, emisión ni pagos reales.
+meteorológicas, consultas a aerolíneas, emisión real ni pagos reales.
 
 Los errores usan `application/problem+json` con `code` y `correlationId`. Si identidad o su JWKS
 no responden, el BFF contesta `503 servicio_no_disponible` (nunca `401`), para que el cliente no

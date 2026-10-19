@@ -535,7 +535,9 @@ paths:
       description: |
         Lee exclusivamente registros persistidos del cliente derivado del JWT.
         No admite query ni cuerpo. Una coleccion vacia es una consulta real sin registros;
-        polizas y notificaciones indican explicitamente que no estan implementadas.
+        polizas contiene emisiones academicas persistidas, no cobertura real.
+        Si la emision no esta habilitada conserva el marcador legado no_implementado;
+        el consumidor no debe presentarlo como lista vacia. Notificaciones no esta implementado.
         No recalcula primas, no renueva perfiles y no agrega importes de monedas
         o periodicidades distintas. Los pagos son exclusivamente simulados.
       responses:
@@ -1516,9 +1518,43 @@ components:
           items:
             $ref: "#/components/schemas/PagoDashboard"
         polizas:
-          $ref: "#/components/schemas/DominioNoImplementado"
+          oneOf:
+            - type: array
+              items:
+                $ref: "#/components/schemas/PolizaDashboard"
+            - $ref: "#/components/schemas/DominioNoImplementado"
         notificaciones:
           $ref: "#/components/schemas/DominioNoImplementado"
+    PolizaDashboard:
+      type: object
+      additionalProperties: false
+      required: [id, suscripcionId, tipo, fechaInicio, fechaFin, estado, simulada]
+      description: |
+        Emision academica posterior a un pago simulado nuevo. No acredita cobertura real.
+        Fechas inclusivas; estado calculado respecto del dia UTC. Los pagos anteriores
+        a habilitar la emision no se convierten retroactivamente en polizas.
+      properties:
+        id:
+          type: string
+          format: uuid
+        suscripcionId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+          enum: [automotive, travel, life, device-protection, parametric, parametric-weather, payment-protection, mortgage-life]
+        fechaInicio:
+          type: string
+          format: date
+        fechaFin:
+          type: string
+          format: date
+        estado:
+          type: string
+          enum: [programada, vigente, vencida]
+        simulada:
+          type: boolean
+          const: true
     DominioNoImplementado:
       type: object
       additionalProperties: false
@@ -1629,7 +1665,7 @@ components:
         estado:
           type: string
           minLength: 1
-          description: Estado persistido de la saga; emitida no acredita una poliza disponible.
+          description: Estado persistido de la saga; solo la coleccion polizas acredita un registro de emision academica.
         version:
           type: integer
           minimum: 1

@@ -10,10 +10,12 @@ from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
     PagoNoEncontradoError,
     PagoNoPermitidoError,
+    ServicioPolizasNoDisponibleError,
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
 from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
@@ -26,8 +28,71 @@ from cotizacion.infrastructure.persistence.models import (
 
 
 class RepositorioPagosSqlAlchemy:
-    def __init__(self, sesiones: sessionmaker[Session]) -> None:
+    def __init__(self, sesiones: sessionmaker[Session], emitir_polizas: bool = False) -> None:
         self._sesiones = sesiones
+        self._emitir_polizas = emitir_polizas
+
+    def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.get(PagoSimuladoModel, pago.pago_id)
+            if modelo is None:
+                raise ServicioPolizasNoDisponibleError()
+            if not modelo.emision_solicitada:
+                return None
+            solicitud = self._solicitud(sesion, modelo.solicitud_id, modelo.cliente_id)
+            tipo = next(
+                p.producto_id for p in PRODUCTOS if p.producto_interno_id == solicitud.producto_id
+            )
+            datos = solicitud.datos_producto or {}
+            fechas: dict[str, object] | None = None
+            if tipo == "travel":
+                fechas = {"inicio": datos["departureDate"], "fin": datos["returnDate"]}
+            elif tipo == "parametric":
+                fechas = {"inicio": datos["flightDate"], "fin": datos["flightDate"]}
+            elif tipo == "parametric-weather":
+                fechas = {"inicio": datos["startDate"], "fin": datos["endDate"]}
+            return {
+                "clienteId": str(modelo.cliente_id),
+                "suscripcionId": str(modelo.suscripcion_id),
+                "pagoId": str(modelo.pago_id),
+                "tipo": tipo,
+                "confirmadaEn": _utc(modelo.confirmada_en).isoformat(),
+                "simulada": True,
+                "fechasContratadas": fechas,
+            }
+
+    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None:
+        with self._sesiones.begin() as sesion:
+            ahora = datetime.now(UTC)
+            actualizada = sesion.scalar(
+                update(SagaEmisionModel)
+                .where(
+                    SagaEmisionModel.suscripcion_id == pago.suscripcion_id,
+                    SagaEmisionModel.estado == "pago_confirmado",
+                    SagaEmisionModel.version == pago.saga_version,
+                )
+                .values(
+                    estado="emitida",
+                    version=SagaEmisionModel.version + 1,
+                    actualizada_en=ahora,
+                )
+                .returning(SagaEmisionModel.suscripcion_id)
+            )
+            if actualizada is None:
+                saga = sesion.get(SagaEmisionModel, pago.suscripcion_id)
+                if saga is not None and saga.estado == "emitida":
+                    return
+                raise ServicioPolizasNoDisponibleError()
+            sesion.add(
+                OutboxEventoModel(
+                    evento_id=uuid4(),
+                    tipo="PolizaAcademicaEmitida",
+                    agregado_id=pago.suscripcion_id,
+                    payload={"polizaId": str(poliza_id), "simulada": True},
+                    creado_en=ahora,
+                    intentos=0,
+                )
+            )
 
     def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> PagoSimulado:
         with self._sesiones() as sesion:
@@ -85,6 +150,7 @@ class RepositorioPagosSqlAlchemy:
                     periodicidad=seleccion.periodicidad,
                     confirmada_en=ahora,
                     saga_version=saga.version + 1,
+                    emision_solicitada=self._emitir_polizas,
                 )
                 sesion.add(pago)
                 # La unicidad serializa pagos rivales; el CAS protege la transición de saga.

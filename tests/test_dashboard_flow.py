@@ -122,11 +122,19 @@ def runtime(
 
 
 def create_paid_request(
-    client: FlaskClient, token: str, product: str
+    client: FlaskClient, token: str, product: str, payment_status: int = 200
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     start = date.today() + timedelta(days=30)
     product_data = {
         "automotive": {"vehiclePlate": "ABC123"},
+        "life": {"birthDate": "1990-01-01"},
+        "device-protection": {
+            "deviceType": "phone",
+            "brandModel": "Test",
+            "purchaseValue": "3000000",
+        },
+        "payment-protection": {"creditType": "libre", "monthlyPayment": "500000"},
+        "mortgage-life": {"birthDate": "1990-01-01", "mortgageBalance": "100000000"},
         "travel": {
             "destinationCountryCode": "ES",
             "departureDate": start.isoformat(),
@@ -173,7 +181,7 @@ def create_paid_request(
         headers={**bearer(token), "Idempotency-Key": str(uuid4())},
         json={},
     )
-    assert response.status_code == 200, response.get_json()
+    assert response.status_code == payment_status, response.get_json()
     return selection, subscription, response.get_json()
 
 
