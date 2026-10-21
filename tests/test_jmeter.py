@@ -3,9 +3,18 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.jmeter.plans import PRODUCTS, main_plan, persistence_plan
 from tests.jmeter.results import evaluate, percentile
+
+
+def test_jmeter_workflow_is_manual_with_performance_disabled_by_default() -> None:
+    path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "jmeter.yml"
+    workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert inputs["performance"]["default"] == "false"
 
 
 def write_jtl(path: Path, rows: list[tuple[str, str, int]]) -> Path:

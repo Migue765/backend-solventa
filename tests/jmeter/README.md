@@ -124,9 +124,13 @@ Los logs de motor quedan locales para diagnostico y **no** se publican como arte
 en evidencia compartida. Las claves y credenciales solo existen en memoria; los passwords
 de las cuentas sinteticas no pertenecen a usuarios reales.
 
-`.github/workflows/jmeter.yml` ejecuta smoke en PR/push; el rendimiento se habilita solo
-en dispatch manual. Conserva evidencia aun al fallar, sin instalar ni ejecutar JMeter
-dentro del job pytest existente. Jenkins y k6 conservan su comportamiento.
+`.github/workflows/jmeter.yml` se ejecuta solo mediante `workflow_dispatch`: por ahora
+no corre JMeter en PR ni push. Por defecto valida la muestra pequena del smoke
+(nueve operaciones de negocio incluyendo recuperacion). El rendimiento requiere
+activar expresamente `performance`, desactivado por defecto. Conserva evidencia aun
+al fallar, sin instalar ni ejecutar JMeter dentro del job pytest existente.
+Pytest mantiene las pruebas del generador y evaluador, sin lanzar el motor JMeter.
+Jenkins y k6 conservan su comportamiento.
 
 ## Backend compartido con Cypress y Espresso
 

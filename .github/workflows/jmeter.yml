@@ -1,9 +1,6 @@
 name: JMeter local integrado
 
 on:
-  pull_request:
-  push:
-    branches: [develop, main]
   workflow_dispatch:
     inputs:
       performance:
