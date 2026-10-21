@@ -1,5 +1,35 @@
 # Manifiestos Kubernetes - cotizacion
 
+## Perfil academico de bajo consumo
+
+Las seis APIs (`bff-movil`, `bff-web`, `cotizacion`, `identidad`, `perfilamiento` y
+`polizas`) mantienen **una replica por servicio**. Los cuatro HPA existentes tienen
+minimo y maximo en 1. El despliegue reaplica ese limite antes de actualizar la imagen
+y fija una replica; Polizas aplica su Deployment con `replicas: 1`, incluso en su primer
+despliegue. La espera del rollout comprueba el resultado despues de ajustar la escala.
+`maxSurge: 1` permite un segundo pod transitorio durante un rollout, no una segunda
+replica permanente. Los PDB existentes conservan `minAvailable: 1`: bloquean desalojos
+voluntarios de la unica replica, pero no garantizan disponibilidad ante fallos.
+
+El grupo EKS usa dos `t3.small` (minimo, deseado y maximo en 2). Cada nodo admite
+11 pods y tiene 1466644 Ki de memoria asignable en el inventario observado. Un solo
+nodo no deja capacidad suficiente para las seis APIs, DNS, controladores, DaemonSets
+y Jobs de migracion o tareas programadas, ademas del margen para rollouts.
+No se reducen requests ni limites de memoria/CPU sin medir el consumo.
+RDS `db.t4g.micro` de 20 GB single-AZ y Redis `cache.t4g.micro` de un nodo ya son
+las clases minimas configuradas; se conservan datos, red, autenticacion y balanceador
+del flujo principal.
+
+Este perfil ahorra recursos, pero **no acredita alta disponibilidad ni ASR-ESC-01**.
+Para experimentar con carga/HA hay que restaurar replicas y capacidad y medir el
+recorrido real. Las actualizaciones del grupo EKS no deben retirar un nodo con pods
+sin comprobar antes su persistencia, capacidad de reubicacion y disponibilidad.
+
+Las regresiones locales de manifiestos y despliegue se ejecutan con
+`python -m pytest tests/test_academic_infrastructure.py`; las llamadas a AWS/Kubernetes
+se sustituyen por dobles de prueba, sin modificar el cluster. No sustituyen la
+validacion autenticada del flujo principal con persistencia.
+
 Los manifiestos `serviceaccount`, `deployment` y `targetgroupbinding` usan variables `${...}` que se sustituyen con
 `envsubst` a partir de los outputs de Terraform.
 

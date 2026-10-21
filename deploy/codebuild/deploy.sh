@@ -55,10 +55,14 @@ else
 fi
 
 echo "== Rollout =="
+if [ -f "${K8S_DIR}/hpa.yaml" ]; then
+  kubectl apply -f "${K8S_DIR}/hpa.yaml"
+fi
 if [ "$SERVICE_NAME" = "polizas" ]; then
   kubectl apply -f "${K8S_DIR}/service.yaml"
   envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
 else
+  kubectl -n "$NAMESPACE" scale deployment/"$SERVICE_NAME" --replicas=1
   kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
 fi
 if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s; then

@@ -4,7 +4,7 @@ metadata:
   name: polizas
   namespace: polizas
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   selector:
     matchLabels:
