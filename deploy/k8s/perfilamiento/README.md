@@ -83,10 +83,15 @@ Registrar inventario antes/despues y comprobar de nuevo que no reaparezcan.
 Los manifiestos ya no apuntan a HU11 y `deploy/codebuild/deploy.sh` rechaza ese
 namespace antes de cualquier operacion AWS/Kubernetes. No existe pipeline de
 Perfilamiento en la infraestructura actual: futuros despliegues deben usar
-`SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=false`;
-no inicializar tablas existentes ni reactivar manifiestos demo externos.
+`SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true` para SOL-326.
+El nuevo `migrate-job.yaml` ejecuta `init-db` sobre la base existente y agrega la
+tabla de eventos sin borrar perfiles ni auditoria. No reactivar manifiestos demo externos.
 El guard no es una politica de admision: revisar tambien automatizaciones
 fuera de este repositorio antes de autorizar la retirada.
+
+Para SOL-326 seguir el [orden coordinado](../identidad/README.md#sol-326-consentimiento-y-outbox):
+crear la tabla y desplegar el consumidor antes del Outbox de Identidad. Esta inicializacion
+aditiva no cambia el procedimiento historico `stage/retire` de retirada HU11 descrito arriba.
 
 Publicar esta hotfix hacia `main` con revision/checks requeridos, y propagar a
 `develop` mediante el backport habitual. No aplicar Terraform global: su drift

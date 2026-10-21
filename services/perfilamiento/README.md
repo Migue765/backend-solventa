@@ -19,6 +19,7 @@ API interna con Bearer; `/health` no requiere autenticacion:
 |---|---|---|
 | POST | `/v1/perfiles` | `clienteId` y `referenciaId` UUID de la cotizacion |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
+| POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
 
 El servicio consulta el consentimiento autoritativo antes de cada fuente y antes de entregar
 el perfil. Persiste una instantanea inmutable y su auditoria en la misma transaccion. Cada
@@ -30,12 +31,37 @@ Las lecturas comprueban titularidad, integridad del contenido, vigencia y la ver
 consentimiento. Revocar bloquea nuevas lecturas y usos; volver a autorizar no rehabilita perfiles
 antiguos. Los rechazos quedan auditados y el `X-Correlation-ID` cruza los servicios.
 
+SOL-326 exige aprobacion explicita vigente, actor igual al titular, finalidad `cotizacion`,
+terminos `1.0`, el dato `indicador_riesgo` y ambas fuentes cubiertas por el alcance.
+Rechazos, permisos parciales y evidencia legada incompleta deniegan **antes de consultar
+cualquier fuente**. No se infieren permisos adicionales ni se calcula un perfil parcial.
+`FuenteMock` es el adaptador integrado detras del puerto: simula la respuesta Open Finance/
+Open Data dentro del proceso. No hay que desplegar otra API ni conectar proveedores reales.
+
+El consumidor persiste evento, acuse y auditoria atomicamente en `eventos_consentimiento`
+y `consultas_perfilamiento`. `eventoId` es idempotente y cliente/version es unico;
+contenido distinto con el mismo identificador o version produce 409. La mayor version
+durable se usa en cada PEP y no retrocede por entregas desordenadas. El acuse contiene
+`eventoId`, `versionAplicada` (mayor version observada) y `aplicadaEn`; un duplicado
+devuelve su acuse original. Un evento nunca concede permisos por si mismo: siempre se
+requiere la consulta autoritativa vigente a Identidad. El evento tambien bloquea
+respuestas autoritativas antiguas y la reutilizacion de perfiles ya persistidos.
+
+Antes de desplegar ejecutar `init-db` con la imagen nueva y la **misma** base existente:
+crea la tabla nueva sin borrar perfiles/auditoria; no altera columnas existentes.
+El Job `deploy/k8s/perfilamiento/migrate-job.yaml` integra ese paso en `deploy.sh`.
+Ver el [rollout coordinado](../../deploy/k8s/identidad/README.md#sol-326-consentimiento-y-outbox).
+
 `PERFILAMIENTO_MOCK_ESCENARIO` acepta `disponible` (default), `no_disponible` o `vencido`, solo
 como configuracion del servicio. No se permite elegir el escenario desde una peticion publica.
 El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 422 por perfil vencido,
 409 por version concurrente y 503 por dependencia o integridad fallida. No se entregan perfiles
 parciales, ni un fallback que parezca exitoso.
 
-El adaptador de Identidad limita cada llamada a 700 ms. No se implementan todavia proveedores
-reales, cache Redis, circuit breaker, batch, consumidor de revocaciones ni almacenamiento WORM.
-El hash local detecta alteraciones del contenido, pero no sustituye WORM ni una firma.
+El adaptador de Identidad limita cada llamada a 700 ms. No existe cache Redis de perfiles,
+batch ni proyeccion analitica en este recorrido: no se inventan consumidores ni se acredita
+propagacion hacia ellos. Tampoco hay circuit breaker ni fallback automatico. No se contempla
+conectar proveedores reales. El hash local detecta alteraciones del contenido, pero no
+sustituye WORM ni una firma. El chequeo previo al uso no es una transaccion distribuida con
+Identidad; con las fuentes locales simuladas no hay divulgacion externa, y estas pruebas no
+demuestran la propiedad de cero divulgaciones para un adaptador real.

@@ -48,3 +48,6 @@ class ConsentEventModel(Base):
     tipo: Mapped[str] = mapped_column(String(60))
     contenido: Mapped[dict[str, object]] = mapped_column(JSON)
     publicado: Mapped[bool] = mapped_column(default=False)
+    intentos: Mapped[int] = mapped_column(default=0, server_default="0")
+    ultimo_error: Mapped[str | None] = mapped_column(String(80))
+    acuse: Mapped[dict[str, object] | None] = mapped_column(JSON)
