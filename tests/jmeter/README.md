@@ -13,7 +13,7 @@ Python 3.12, Java 17 y Git. Desde la raiz del backend, en un entorno virtual:
 python -m venv .venv-jmeter
 .\.venv-jmeter\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
-Get-ChildItem services -Directory | ForEach-Object { python -m pip install -e $_.FullName }
+Get-ChildItem services -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'pyproject.toml') } | ForEach-Object { python -m pip install -e $_.FullName }
 python -m tests.jmeter.install
 python -m tests.jmeter.run --jmeter-home reports\tools\apache-jmeter-5.6.3
 ```
