@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: identidad-consent-outbox
+  namespace: identidad
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 30
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 50
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: identidad
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: consent-outbox
+              image: ${IMAGE}
+              command: ["python", "-m", "identidad.consent_outbox"]
+              env:
+                - name: DB_SCHEMA
+                  value: identidad
+                - name: PERFILAMIENTO_SERVICE_URL
+                  value: http://perfilamiento.perfilamiento.svc.cluster.local:8080
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: identidad-config
+                      key: DATABASE_URL
+                - name: INTERNAL_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: profiling-internal
+                      key: INTERNAL_API_TOKEN
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]

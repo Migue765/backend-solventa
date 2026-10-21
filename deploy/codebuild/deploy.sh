@@ -70,4 +70,8 @@ if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout
   exit 1
 fi
 
+if [ "$SERVICE_NAME" = "identidad" ]; then
+  envsubst < "${K8S_DIR}/consent-outbox-cronjob.yaml" | kubectl apply -f -
+fi
+
 echo "Despliegue de ${IMAGE} completado."
