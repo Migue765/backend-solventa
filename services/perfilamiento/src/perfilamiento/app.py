@@ -12,7 +12,7 @@ from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from perfilamiento.adapters import ConsentimientosHttp, FuenteMock
 from perfilamiento.application import ConsultarPerfil
-from perfilamiento.domain import ErrorPerfilamiento
+from perfilamiento.domain import ErrorPerfilamiento, EventoConsentimiento
 from perfilamiento.persistence import RepositorioPerfiles
 from perfilamiento.ports import Consentimientos, FuentePerfilamiento
 
@@ -107,6 +107,14 @@ def create_app(
             return jsonify(error="solicitud_invalida"), 400
         perfil = servicio.generar(payload.cliente_id, payload.referencia_id, g.correlation_id)
         return jsonify(perfil.model_dump(mode="json", by_alias=True)), 201
+
+    @app.post("/v1/eventos/consentimientos")
+    def aplicar_consentimiento() -> tuple[Response, int] | Response:
+        try:
+            evento = EventoConsentimiento.model_validate(request.get_json())
+        except (ValidationError, BadRequest, UnsupportedMediaType):
+            return jsonify(error="solicitud_invalida"), 400
+        return jsonify(repositorio.aplicar_consentimiento(evento))
 
     @app.get("/v1/perfiles/<uuid:perfil_id>")
     def obtener(perfil_id: UUID) -> tuple[Response, int] | Response:

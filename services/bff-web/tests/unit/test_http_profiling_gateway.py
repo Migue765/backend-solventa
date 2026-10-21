@@ -15,7 +15,8 @@ def gateway() -> HttpProfilingGateway:
     return HttpProfilingGateway("http://identidad", "http://cotizacion", "token-de-prueba")
 
 
-def test_envia_identidad_de_sesion_token_y_correlacion() -> None:
+@pytest.mark.parametrize("scope", [None, {"finalidad": "cotizacion", "fuentes": ["open_data"]}])
+def test_envia_identidad_de_sesion_token_y_correlacion(scope: dict[str, object] | None) -> None:
     user_id = uuid4()
     payload = {"estado": "autorizado", "version": 1}
 
@@ -27,17 +28,21 @@ def test_envia_identidad_de_sesion_token_y_correlacion() -> None:
         assert request.get_header("X-correlation-id") == "corr-prueba"
         assert request.method == "PUT"
         assert isinstance(request.data, bytes)
-        assert json.loads(request.data) == {"autorizado": True, "version": 0}
+        expected: dict[str, object] = {"autorizado": True, "version": 0}
+        if scope is not None:
+            expected["solicitud"] = scope
+        assert json.loads(request.data) == expected
         assert timeout == 5
         return io.BytesIO(json.dumps(payload).encode())
 
     with patch("bff_web.infrastructure.http_profiling_gateway.urlopen", side_effect=respond):
-        assert gateway().set_consent(user_id, True, 0, "corr-prueba") == payload
+        assert gateway().set_consent(user_id, True, 0, "corr-prueba", scope) == payload
 
 
 @pytest.mark.parametrize(
     ("status", "code", "expected"),
     [
+        (400, "solicitud_invalida", "solicitud_invalida"),
         (403, "consentimiento_no_vigente", "consentimiento_no_vigente"),
         (404, "consentimiento_ausente", "consentimiento_ausente"),
         (404, "no_encontrado", "solicitud_no_encontrada"),

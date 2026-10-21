@@ -1,9 +1,12 @@
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
+from urllib.error import URLError
 from uuid import uuid4
 
 import pytest
@@ -20,6 +23,10 @@ from flask import Flask
 from flask.testing import FlaskClient
 from identidad.app import create_app as create_identity
 from identidad.config import Config as IdentityConfig
+from identidad.consent_outbox import ConsentOutbox, publish_http
+from identidad.infrastructure.persistence.database import create_sessions
+from identidad.infrastructure.persistence.models import ConsentEventModel
+from jsonschema import Draft202012Validator, FormatChecker
 from perfilamiento.adapters import FuenteMock
 from perfilamiento.app import Config as ProfilingConfig
 from perfilamiento.app import create_app as create_profiling
@@ -54,10 +61,26 @@ class Flow:
     headers: dict[str, str]
     profiling: Flask
     quote_database: str
+    identity: Flask
+    identity_database: str
+    profile_url: str
 
     def authorize(self, version: int = 0) -> None:
         response = self.client.put(
-            CONSENT, json={"autorizado": True, "version": version}, headers=self.headers
+            CONSENT,
+            json={
+                "autorizado": True,
+                "version": version,
+                "solicitud": {
+                    "finalidad": "cotizacion",
+                    "alcances": ["open_finance", "open_data"],
+                    "fuentes": ["open_finance", "open_data"],
+                    "datos": ["indicador_riesgo"],
+                    "versionTerminos": "1.0",
+                    "vigenteHasta": (datetime.now(UTC) + timedelta(days=29)).isoformat(),
+                },
+            },
+            headers=self.headers,
         )
         assert response.status_code == 200
 
@@ -144,7 +167,15 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
         )
         assert login.status_code == 200
         headers = {"Authorization": "Bearer " + login.get_json()["accessToken"]}
-        yield Flow(client, headers, profiling, databases["cotizacion"])
+        yield Flow(
+            client,
+            headers,
+            profiling,
+            databases["cotizacion"],
+            identity,
+            databases["identidad"],
+            profile_url,
+        )
 
 
 def test_jwt_consent_quote_profile_offers_selection_and_revocation(flow: Flow) -> None:
@@ -187,6 +218,45 @@ def test_jwt_consent_quote_profile_offers_selection_and_revocation(flow: Flow) -
         CONSENT, json={"autorizado": False, "version": 1}, headers=flow.headers
     )
     assert revoked.status_code == 200
+    effective_at = datetime.fromisoformat(revoked.get_json()["efectivaEn"])
+    # El Outbox sigue pendiente: la consulta autoritativa ya debe bloquear todo nuevo uso.
+    for suffix in ("/perfilamiento", "/ofertas", "/seleccion"):
+        assert flow.client.get(base + suffix, headers=flow.headers).status_code == 403
+    assert (
+        flow.client.post(
+            REQUESTS, json=QUOTE, headers={**flow.headers, "Idempotency-Key": str(uuid4())}
+        ).status_code
+        == 403
+    )
+    sessions = create_sessions(flow.identity_database, None, 1, 0)
+    schema = json.loads((ROOT / "contracts/events/consentimiento-v1.json").read_text())
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    attempts: list[str] = []
+
+    def publish(event: dict[str, object]) -> dict[str, object]:
+        validator.validate(event)
+        attempts.append(str(event["tipo"]))
+        ack = cast(dict[str, object], publish_http(flow.profile_url, INTERNAL_TOKEN, event))
+        if len(attempts) == 1:
+            raise URLError("Acuse perdido despues de persistir el evento")
+        return ack
+
+    outbox = ConsentOutbox(sessions, publish)
+    assert outbox.deliver() == (1, 1)
+    assert attempts[0] == "ConsentimientoRevocado"
+    assert outbox.deliver() == (1, 0)
+    assert attempts == (
+        ["ConsentimientoRevocado", "ConsentimientoAutorizado", "ConsentimientoRevocado"]
+    )
+    with sessions() as session:
+        event = session.scalars(
+            select(ConsentEventModel).where(ConsentEventModel.tipo == "ConsentimientoRevocado")
+        ).one()
+        assert event.publicado and event.acuse is not None
+        assert event.intentos == 2
+        applied_at = datetime.fromisoformat(str(event.acuse["aplicadaEn"]))
+        assert timedelta(0) <= applied_at - effective_at <= timedelta(minutes=5)
+    assert outbox.deliver() == (0, 0)
     for path in ("/perfilamiento", "/ofertas", "/seleccion"):
         response = flow.client.get(base + path, headers=flow.headers)
         assert response.status_code == 403, response.get_json()
@@ -207,6 +277,58 @@ def test_jwt_consent_quote_profile_offers_selection_and_revocation(flow: Flow) -
     assert new_profile.status_code == 200
     assert new_profile.get_json()["perfilId"] != data["perfilId"]
     assert new_profile.get_json()["consentimientoVersion"] == 3
+
+
+def test_incomplete_decisions_and_actor_spoofing_never_authorize(flow: Flow) -> None:
+    for payload in (
+        {"autorizado": True, "version": 0},
+        {"autorizado": True, "version": 0, "solicitud": {"finalidad": "cotizacion"}},
+        {"autorizado": True, "version": 0, "actorId": str(uuid4())},
+    ):
+        assert flow.client.put(CONSENT, json=payload, headers=flow.headers).status_code == 400
+    assert flow.client.get(CONSENT, headers=flow.headers).status_code == 404
+    assert flow.client.put(CONSENT, json={"autorizado": False, "version": 0}).status_code == 401
+    with Session(create_engine(flow.identity_database)) as session:
+        assert session.scalar(select(func.count()).select_from(ConsentEventModel)) == 0
+
+
+@pytest.mark.parametrize("state", ["rechazado", "parcial", "vencido"])
+def test_decisions_without_required_permission_block_the_full_flow(
+    flow: Flow, state: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flow.authorize()
+    approved = flow.client.get(CONSENT, headers=flow.headers).get_json()
+    if state == "vencido":
+        future = datetime.fromisoformat(approved["vigenteHasta"])
+        monkeypatch.setitem(flow.identity.extensions, "clock", lambda: future)
+        assert flow.client.get(CONSENT, headers=flow.headers).get_json()["estado"] == "vencido"
+    else:
+        scope = {
+            key: approved[key]
+            for key in (
+                "finalidad",
+                "alcances",
+                "fuentes",
+                "datos",
+                "versionTerminos",
+                "vigenteHasta",
+            )
+        }
+        if state == "parcial":
+            scope.update(alcances=["open_data"], fuentes=["open_data"])
+        result = flow.client.put(
+            CONSENT,
+            headers=flow.headers,
+            json={"autorizado": state != "rechazado", "version": 1, "solicitud": scope},
+        )
+        assert result.status_code == 200
+    response = flow.client.post(
+        REQUESTS, json=QUOTE, headers={**flow.headers, "Idempotency-Key": str(uuid4())}
+    )
+    assert response.status_code == 403
+    assert response.get_json()["code"] == "consentimiento_no_vigente"
+    with Session(create_engine(flow.quote_database)) as session:
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 0
 
 
 def test_partial_source_failure_never_creates_a_quote(

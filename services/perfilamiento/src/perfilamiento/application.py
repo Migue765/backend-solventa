@@ -27,6 +27,7 @@ class ConsultarPerfil:
         auditoria["consentimientoId"] = str(consentimiento.consentimiento_id)
         auditoria["consentimientoVersion"] = consentimiento.version
         consentimiento.validar(cliente_id, self._reloj())
+        self._repositorio.validar_version_consentimiento(consentimiento)
         return consentimiento
 
     def generar(self, cliente_id: UUID, referencia_id: UUID, correlation_id: str) -> Perfil:

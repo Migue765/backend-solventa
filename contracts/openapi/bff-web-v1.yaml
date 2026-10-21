@@ -21,11 +21,12 @@ paths:
       summary: Consulta el consentimiento de perfilamiento persistido
       description: >-
         Consulta la ultima version del consentimiento del usuario del JWT.
-        No autoriza automaticamente. La autorizacion expira a los 30 dias.
+        No autoriza automaticamente. Devuelve vencido al alcanzar vigenteHasta.
+        La vigencia elegida no puede superar 30 dias desde la decision.
       operationId: consultarConsentimientoPerfilamiento
       responses:
         "200":
-          description: Consentimiento vigente o revocado
+          description: Consentimiento autorizado, rechazado, revocado o vencido
           headers:
             Cache-Control:
               schema:
@@ -47,23 +48,20 @@ paths:
                 $ref: "#/components/schemas/Problema"
     put:
       tags: [Consentimientos]
-      summary: Autoriza o revoca el perfilamiento con control de version
+      summary: Aprueba, rechaza o revoca el perfilamiento con control de version
+      description: >-
+        Aprobar (autorizado=true) y rechazar (autorizado=false) requieren solicitud completa.
+        autorizado=false sin solicitud revoca la ultima autorizacion conservando su alcance.
+        El actor procede exclusivamente del JWT. Las fuentes son simuladas, nunca proveedores
+        reales. Los clientes que antes enviaban solo el booleano deben presentar la solicitud
+        al usuario y enviar su contenido; una aprobacion incompleta ahora devuelve 400.
       operationId: guardarConsentimientoPerfilamiento
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required: [autorizado, version]
-              properties:
-                autorizado:
-                  type: boolean
-                version:
-                  type: integer
-                  minimum: 0
-                  description: Version actual; 0 si no existe consentimiento
+              $ref: "#/components/schemas/DecisionConsentimiento"
       responses:
         "200":
           description: Nueva version persistida junto con su evento de auditoria
@@ -641,6 +639,60 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    DecisionConsentimiento:
+      type: object
+      additionalProperties: false
+      required: [autorizado, version]
+      properties:
+        autorizado:
+          type: boolean
+        version:
+          type: integer
+          minimum: 0
+          description: Version actual; 0 si no existe consentimiento
+        solicitud:
+          $ref: "#/components/schemas/SolicitudConsentimiento"
+      if:
+        properties:
+          autorizado:
+            const: true
+      then:
+        required: [solicitud]
+    SolicitudConsentimiento:
+      type: object
+      additionalProperties: false
+      required: [finalidad, alcances, fuentes, datos, versionTerminos, vigenteHasta]
+      properties:
+        finalidad:
+          type: string
+          const: cotizacion
+        alcances:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [open_finance, open_data]
+        fuentes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          description: Adaptadores simulados; cada fuente debe estar incluida en alcances
+          items:
+            type: string
+            enum: [open_finance, open_data]
+        datos:
+          type: array
+          const: [indicador_riesgo]
+          items:
+            type: string
+        versionTerminos:
+          type: string
+          const: "1.0"
+        vigenteHasta:
+          type: string
+          format: date-time
+          description: Fecha futura con zona horaria; como maximo 30 dias desde la decision
     ConsentimientoPerfilamiento:
       type: object
       additionalProperties: false
@@ -653,6 +705,10 @@ components:
         - alcances
         - efectivaEn
         - vigenteHasta
+        - actorId
+        - fuentes
+        - datos
+        - versionTerminos
       properties:
         consentimientoId:
           type: string
@@ -665,15 +721,31 @@ components:
           minimum: 1
         estado:
           type: string
-          enum: [autorizado, revocado]
+          enum: [autorizado, rechazado, revocado, vencido]
         finalidad:
           type: string
           const: cotizacion
         alcances:
           type: array
-          const: [open_finance, open_data]
+          minItems: 1
+          uniqueItems: true
           items:
             type: string
+            enum: [open_finance, open_data]
+        actorId:
+          type: [string, "null"]
+          format: uuid
+          description: Titular autenticado; null en evidencia historica incompleta
+        fuentes:
+          type: array
+          items:
+            type: string
+        datos:
+          type: array
+          items:
+            type: string
+        versionTerminos:
+          type: [string, "null"]
         efectivaEn:
           type: string
           format: date-time

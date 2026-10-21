@@ -11,7 +11,61 @@ tags:
   - name: Usuarios
   - name: OAuth
   - name: Descubrimiento
+  - name: Consentimientos
 paths:
+  /v1/clientes/{clienteId}/consentimiento-perfilamiento:
+    parameters:
+      - name: clienteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Consentimientos]
+      summary: Lee la ultima decision autoritativa
+      description: API interna; el BFF obtiene clienteId del JWT, no del cuerpo del cliente.
+      security:
+        - TokenInterno: []
+      responses:
+        "200":
+          description: Decision persistida; estado vencido si expiro, sin renovar la vigencia
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ConsentimientoPerfilamiento"
+        "401":
+          description: Token interno invalido
+        "404":
+          description: consentimiento_ausente
+        "503":
+          description: Servicio o credencial interna no configurados
+    put:
+      tags: [Consentimientos]
+      summary: Persiste decision e historial junto con su evento en el Outbox
+      security:
+        - TokenInterno: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./bff-web-v1.yaml#/components/schemas/DecisionConsentimiento"
+      responses:
+        "200":
+          description: Decision durable, aun si el consumidor de eventos esta caido
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ConsentimientoPerfilamiento"
+        "400":
+          description: Decision, solicitud o vigencia invalidas
+        "401":
+          description: Token interno invalido
+        "409":
+          description: Version obsoleta; recargar antes de decidir
+        "503":
+          description: Persistencia no disponible; no confirma una decision parcial
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -134,6 +188,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/Jwks"
 components:
+  securitySchemes:
+    TokenInterno:
+      type: http
+      scheme: bearer
   responses:
     SolicitudInvalida:
       description: La solicitud no cumple el contrato (`solicitud_invalida`)
