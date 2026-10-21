@@ -1,5 +1,15 @@
 # Comprobaciones del backend
 
+## Suite adicional Apache JMeter
+
+El workflow `JMeter local integrado` ejecuta escenarios HTTP contra los seis servicios
+reales, JWT/JWKS y SQLite temporal, con perfilamiento y pólizas habilitados. Incluye los
+ocho productos, ownership, revocación, idempotencia, persistencia y recuperación tras
+detener/reiniciar Pólizas. No reemplaza pytest/Jenkins ni el load test k6 existente.
+El rendimiento con presupuestos de los documentos rectores requiere dispatch manual.
+Los JTL/asserts y conteos persistidos determinan el resultado, no solo el exit code del motor.
+Consulta [preparación, comandos, matriz y límites](../tests/jmeter/README.md).
+
 ## Resultados visibles en GitHub
 
 - **Cobertura** publica una tabla de líneas/ramas por servicio y scripts, con conteos JUnit
