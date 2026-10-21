@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evento de consentimiento v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventoId", "clienteId", "consentimientoId", "version", "tipo",
+    "estado", "efectivaEn", "correlationId"
+  ],
+  "properties": {
+    "eventoId": {"type": "string", "format": "uuid"},
+    "clienteId": {"type": "string", "format": "uuid"},
+    "consentimientoId": {"type": "string", "format": "uuid"},
+    "version": {"type": "integer", "minimum": 1},
+    "tipo": {
+      "enum": ["ConsentimientoAutorizado", "ConsentimientoRechazado", "ConsentimientoRevocado"]
+    },
+    "estado": {"enum": ["autorizado", "rechazado", "revocado"]},
+    "efectivaEn": {"type": "string", "format": "date-time"},
+    "correlationId": {"type": "string", "minLength": 1, "maxLength": 128}
+  },
+  "oneOf": [
+    {"properties": {"tipo": {"const": "ConsentimientoAutorizado"}, "estado": {"const": "autorizado"}}},
+    {"properties": {"tipo": {"const": "ConsentimientoRechazado"}, "estado": {"const": "rechazado"}}},
+    {"properties": {"tipo": {"const": "ConsentimientoRevocado"}, "estado": {"const": "revocado"}}}
+  ]
+}

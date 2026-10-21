@@ -50,6 +50,38 @@ def test_explicit_authorization_and_revocation_are_forwarded(
     assert response.headers["Cache-Control"] == "no-store"
 
 
+def test_full_decision_is_forwarded_without_substituting_the_authenticated_actor(
+    app: Flask, keypair: KeyPair, profiling: Mock
+) -> None:
+    other = User(uuid4(), "Otro Cliente", "otro@solventa.co", "cliente")
+    scope = {
+        "finalidad": "cotizacion",
+        "alcances": ["open_data"],
+        "fuentes": ["open_data"],
+        "datos": ["indicador_riesgo"],
+        "versionTerminos": "1.0",
+        "vigenteHasta": "2026-11-01T00:00:00Z",
+    }
+    profiling.set_consent.return_value = {"estado": "rechazado", "version": 1}
+    response = app.test_client().put(
+        PATH + "?clienteId=" + str(USER.user_id),
+        json={"autorizado": False, "version": 0, "solicitud": scope},
+        headers=bearer(sign_token(keypair, user=other)),
+    )
+    assert response.status_code == 200
+    assert profiling.set_consent.call_args.args[:3] == (other.user_id, False, 0)
+    assert profiling.set_consent.call_args.args[4] == scope
+
+
+def test_identity_validation_error_is_preserved(app: Flask, token: str, profiling: Mock) -> None:
+    profiling.set_consent.side_effect = ProfilingError("solicitud_invalida", 400)
+    response = app.test_client().put(
+        PATH, json={"autorizado": True, "version": 0}, headers=bearer(token)
+    )
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "solicitud_invalida"
+
+
 @pytest.mark.parametrize(
     "payload",
     [

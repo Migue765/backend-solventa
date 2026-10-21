@@ -6,7 +6,12 @@ class ProfilingGateway(Protocol):
     def get_consent(self, user_id: UUID, correlation_id: str) -> dict[str, object]: ...
 
     def set_consent(
-        self, user_id: UUID, authorized: bool, version: int, correlation_id: str
+        self,
+        user_id: UUID,
+        authorized: bool,
+        version: int,
+        correlation_id: str,
+        scope: dict[str, object] | None = None,
     ) -> dict[str, object]: ...
 
     def get_profile(

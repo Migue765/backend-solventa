@@ -6,6 +6,7 @@ class ProfilingError(Exception):
 
 
 PROFILING_ERRORS = {
+    "solicitud_invalida": 400,
     "consentimiento_ausente": 403,
     "consentimiento_no_vigente": 403,
     "perfil_vencido": 422,
