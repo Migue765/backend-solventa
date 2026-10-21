@@ -9,6 +9,12 @@ public_access_cidrs = ["203.0.113.10/32"]
 # Debe incluir al usuario/rol que ejecuta terraform (helm usa esa identidad).
 eks_admin_principal_arns = ["arn:aws:iam::976083331509:user/Migue"]
 
+# Entorno academico: una replica por API y dos nodos pequenos para sistema y rollouts.
+node_instance_types = ["t3.small"]
+node_min_size       = 2
+node_desired_size   = 2
+node_max_size       = 2
+
 # RDS PostgreSQL (clase minima, capa gratuita)
 db_instance_class    = "db.t4g.micro"
 db_allocated_storage = 20

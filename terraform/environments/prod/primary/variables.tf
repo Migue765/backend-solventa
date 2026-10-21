@@ -70,9 +70,9 @@ variable "node_desired_size" {
 }
 
 variable "node_max_size" {
-  description = "Maximo de nodos."
+  description = "Maximo de nodos del entorno academico sin trafico real."
   type        = number
-  default     = 3
+  default     = 2
 }
 
 variable "db_name" {
