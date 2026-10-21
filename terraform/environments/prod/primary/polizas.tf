@@ -9,6 +9,8 @@ module "ecr_polizas" {
 module "cicd_polizas" {
   source = "../../../modules/cicd"
 
+  automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
+
   name                      = var.name_prefix
   service_name              = "polizas"
   resource_prefix           = "${var.name_prefix}-polizas"
