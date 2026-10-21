@@ -121,6 +121,57 @@ maximo 60 minutos) y los clientes deben renovar. Conviene rotar fuera de horas d
 
 ## Notas de operacion
 
+### SOL-326: consentimiento y Outbox
+
+No desplegar esta version hasta contar con un cliente compatible con la solicitud
+completa de consentimiento (coordinacion con SOL203). Una aprobacion booleana sola
+ahora devuelve 400; los registros antiguos sin evidencia completa dejan de autorizar
+perfilamiento. No ampliar permisos durante una migracion.
+
+Orden de rollout en una ventana coordinada, sin trafico de cotizacion durante la
+mezcla de versiones:
+
+1. Conservar digests y respaldo de las bases. Preparar el cliente compatible y las
+   imagenes de BFF, Identidad y Perfilamiento. Confirmar el secreto interno compartido
+   y la base existente de Perfilamiento; no crear otra base ni un servicio demo.
+2. Crear `eventos_consentimiento` ejecutando el Job de Perfilamiento con la imagen
+   nueva (`SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true`).
+   `init-db` usa `create_all`: conserva tablas y datos existentes. Desplegar su consumidor
+   y PEP. El PEP nuevo deniega evidencia legada; no habilitar trafico todavia.
+3. Desplegar Identidad con `MIGRATE=true`: Alembic `0003` agrega intentos, error y acuse
+   al Outbox sin reescribir el historial. `deploy.sh` aplica el CronJob solo tras un
+   rollout exitoso de Identidad. Usa `identidad-config/DATABASE_URL`, esquema `identidad`,
+   `profiling-internal/INTERNAL_API_TOKEN` y el Service interno de Perfilamiento en 8080.
+4. Desplegar BFF Web y el cliente compatible. Conservar la integracion existente de
+   Cotizacion con Perfilamiento y su flag habilitado. Reabrir trafico solo tras el
+   recorrido autenticado de aprobacion, perfil simulado, cotizacion, ofertas y revocacion.
+   Antes de ejecutar el worker comprobar que la revocacion durable ya deniega nuevas
+   consultas; luego verificar evento y acuse, sin duplicar auditoria al reintentar.
+
+El CronJob `identidad-consent-outbox` corre cada minuto, con `concurrencyPolicy=Forbid`,
+deadline de 50 segundos y sin reintento automatico del Job. Cada tick procesa hasta
+50 eventos y prioriza revocaciones/rechazos. Cinco fallos por evento lo dejan en DLQ
+logica; investigar y ejecutar manualmente el modulo con `--reintentar-fallidos` usando
+la misma imagen/configuracion. No borrar filas para ocultar errores.
+
+Monitorear Jobs fallidos, antiguedad y volumen de pendientes, filas con `intentos>=5`
+y la diferencia entre `acuse.aplicadaEn` y `contenido.efectivaEn` (objetivo <=300 s).
+Requiere relojes sincronizados. Un backlog superior a la capacidad o la indisponibilidad
+del consumidor puede exceder el objetivo; el CronJob y las pruebas locales no certifican
+el SLO de produccion. Este cambio no instala alarmas, Redis/batch/analitica ni proveedores
+Open Finance reales.
+
+Rollback: suspender el CronJob y cerrar temporalmente el flujo de cotizacion antes de
+revertir codigo incompatible. Conservar tablas, historial, Outbox, acuses y perfiles.
+No hacer downgrade destructivo de `0003`, eliminar la tabla del consumidor ni volver a
+un PEP que autorice evidencia legada mientras haya trafico. Corregir hacia delante
+cuando no pueda preservarse la denegacion por defecto.
+
+Esta entrega no ejecuta migraciones ni despliegues en el cluster. La aceptacion en
+PostgreSQL/Kubernetes, carga y observabilidad corresponde al rollout autorizado.
+
+### Operacion general
+
 - Release: tag `identidad-v*` (disjunto de `v*` de cotizacion, `bff-web-v*` y `bff-movil-v*`); el pipeline migra la
   base y despliega. Imagen con tag inmutable (`<version>-<commit7>`).
 - Imagen `linux/amd64`: en Apple Silicon usar `docker buildx build --platform linux/amd64`.

@@ -144,11 +144,40 @@ reemplaza ambos tokens: el refresh anterior deja de servir.
 
 ### Consentimiento y perfilamiento
 
-`GET/PUT /v1/consentimientos/perfilamiento` consulta, autoriza o revoca el
-consentimiento real de Identidad. El cuerpo de PUT es `{autorizado, version}`:
-la version inicial es 0; una version desactualizada responde 409. No se autoriza
-automaticamente ni se acepta un cliente desde el formulario; siempre procede del JWT.
-La autorizacion dura 30 dias. `INTERNAL_API_TOKEN` autentica estas llamadas internas.
+`GET/PUT /v1/consentimientos/perfilamiento` consulta, aprueba, rechaza o revoca el
+consentimiento persistido en Identidad. La version inicial es 0; una version
+desactualizada responde 409. El cliente y actor proceden exclusivamente del JWT.
+`INTERNAL_API_TOKEN` autentica las llamadas del BFF a Identidad.
+
+Para aprobar o rechazar, PUT recibe la decision explicita y la solicitud presentada
+al usuario (sustituir la fecha de ejemplo por una futura, como maximo a 30 dias):
+
+```json
+{
+  "autorizado": true,
+  "version": 0,
+  "solicitud": {
+    "finalidad": "cotizacion",
+    "alcances": ["open_finance", "open_data"],
+    "fuentes": ["open_finance", "open_data"],
+    "datos": ["indicador_riesgo"],
+    "versionTerminos": "1.0",
+    "vigenteHasta": "2026-10-25T23:59:00Z"
+  }
+}
+```
+
+`autorizado=false` con solicitud registra `rechazado`. Para revocar la autorizacion
+actual, enviar solo `{"autorizado": false, "version": 1}`. La respuesta incluye
+actor, fecha efectiva, alcance, fuentes, datos, version de terminos y vigencia.
+GET devuelve `vencido` al alcanzar el plazo; nunca renueva ni autoriza implicitamente.
+
+**Cambio incompatible de SOL-326:** una aprobacion con solo `{autorizado, version}`
+ahora responde 400 `solicitud_invalida`. El BFF conserva ese error de Identidad.
+Coordinar la pantalla y el payload con SOL203 antes de desplegar; este PR no implementa
+la UI. Nunca completar permisos silenciosamente en el BFF ni migrar consentimientos
+legados a aprobaciones completas. Los datos de Open Finance/Open Data son siempre
+sinteticos; no hay conexiones a proveedores reales.
 
 `GET /v1/solicitudes-cotizacion/{id}/perfilamiento` recupera el mismo perfil
 persistido para el calculo, con vigencia maxima de 15 minutos y ambas fuentes
@@ -157,8 +186,10 @@ o vencer el perfil bloquea su reutilizacion, las ofertas y la seleccion.
 Una solicitud anterior sin evidencia devuelve `perfil_no_encontrado`; se debe crear
 una nueva despues de autorizar. No se inventan perfiles para solicitudes antiguas.
 
-En AWS deben desplegarse Identidad (migracion 0002), Perfilamiento, Cotizacion
-con `COTIZACION_PERFILAMIENTO_HABILITADO=true` y el BFF. La regla ALB
+El [runbook SOL-326](../../deploy/k8s/identidad/README.md#sol-326-consentimiento-y-outbox)
+coordina cliente compatible, Identidad (migracion 0003), nueva tabla de eventos en
+Perfilamiento y Outbox. Cotizacion debe conservar
+`COTIZACION_PERFILAMIENTO_HABILITADO=true`. La regla ALB
 `bff_web_consents` lleva la consulta de consentimiento al BFF y CORS expone `Date`
 para validar la vigencia con el reloj del servidor.
 

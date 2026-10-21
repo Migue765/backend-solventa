@@ -76,15 +76,56 @@ El servicio no arranca si falta alguna de las obligatorias.
 
 ## Base de datos
 
-La migracion `0002` agrega `consentimientos_perfilamiento` y
-`outbox_consentimientos`: cada autorizacion/revocacion guarda una nueva version
-y su evento en la misma transaccion. La autorizacion dura 30 dias; las lecturas
-no renuevan la vigencia. El endpoint interno
-`GET/PUT /v1/clientes/{uuid}/consentimiento-perfilamiento` exige
-`Authorization: Bearer <INTERNAL_API_TOKEN>` y PUT recibe `{autorizado, version}`.
-No existe autorizacion automatica. Los clientes publicos pasan por el BFF con
-JWT; este determina el UUID. La outbox se persiste; no se incluye un consumidor
-de eventos, y la revocacion se aplica mediante consulta autoritativa antes de usar perfiles.
+La migracion `0002` agrega `consentimientos_perfilamiento` y `outbox_consentimientos`;
+`0003` agrega intentos, ultimo error y acuse durable de entrega. Cada decision y su
+evento se guardan en una unica transaccion. La clave cliente/version impide que dos
+decisiones concurrentes sobrescriban evidencia: una gana y la otra recibe 409.
+
+El endpoint interno `GET/PUT /v1/clientes/{uuid}/consentimiento-perfilamiento` exige
+`INTERNAL_API_TOKEN` como Bearer. Solo el BFF recibe clientes publicos; deriva el
+titular y actor del JWT, nunca del formulario. PUT recibe `autorizado`, la `version`
+actual (0 inicialmente) y, para aprobar o rechazar, una `solicitud` completa:
+`finalidad=cotizacion`, `alcances`, `fuentes`, `datos=[indicador_riesgo]`,
+`versionTerminos=1.0` y `vigenteHasta` RFC3339 con zona horaria, futura y hasta 30 dias.
+Alcances/fuentes solo admiten `open_finance` y `open_data`, sin duplicados, y cada
+fuente debe estar cubierta por el alcance. **Ambas fuentes son simuladas**.
+
+Con solicitud, `autorizado=true` registra aprobacion y `false` registra rechazo.
+Sin solicitud, `false` solo revoca una autorizacion existente conservando su alcance;
+`true` devuelve 400. Fecha efectiva y actor los fija el servidor. GET no renueva la
+vigencia: devuelve `vencido` al alcanzar el limite, sin mutar el historial original.
+Los registros legados sin evidencia completa se conservan pero no autorizan al PEP.
+Un alcance parcial no se amplia: el modelo de perfil actual exige las dos fuentes y
+deniega su generacion si falta alguna.
+
+### Outbox de consentimiento (SOL-326)
+
+`python -m identidad.consent_outbox` entrega hasta 50 eventos por ejecucion al endpoint
+interno `/v1/eventos/consentimientos` de Perfilamiento. Requiere `DATABASE_URL`,
+`DB_SCHEMA` cuando corresponda, `INTERNAL_API_TOKEN` y `PERFILAMIENTO_SERVICE_URL`.
+No usa JWT de clientes ni conecta con Open Finance. El contrato de transporte es
+`contracts/events/consentimiento-v1.json`; la evidencia completa permanece en Identidad.
+
+Prioriza revocaciones/rechazos, luego fecha efectiva. En PostgreSQL bloquea cada fila
+con `FOR UPDATE SKIP LOCKED` durante el envio; revalida el limite de intentos bajo ese
+bloqueo. La entrega es **al menos una vez**: si se pierde el acuse, el consumidor
+idempotente devuelve el original sin duplicar su auditoria. Solo se marca publicado
+con eventoId coincidente, version aplicada no inferior y fecha de aplicacion valida,
+posterior o igual a la efectiva y no futura. Requiere relojes sincronizados.
+
+Tras cinco intentos fallidos, la fila queda en DLQ logica (`publicado=false`,
+`intentos>=5`, `ultimo_error`). La ejecucion falla visiblemente mientras haya DLQ.
+Corregir conectividad/credenciales/consumidor antes de ejecutar
+`python -m identidad.consent_outbox --reintentar-fallidos`; no editar ni eliminar
+eventos. El comando tambien atiende pendientes normales y no reinicia contadores.
+
+El CronJob corre cada minuto, sin solapamiento, con deadline de 50 segundos.
+Las consultas autoritativas deniegan desde la revocacion persistida, sin esperar
+al worker. El objetivo de adopcion del evento es <=5 minutos: verificar
+`acuse.aplicadaEn - contenido.efectivaEn` y vigilar pendientes, DLQ y Jobs fallidos.
+La capacidad de 50 eventos/tick y una caida del consumidor pueden incumplir ese
+objetivo; el horario no constituye una garantia de produccion ni hay alarmas
+automaticas nuevas. Ver el [orden de rollout](../../deploy/k8s/identidad/README.md#sol-326-consentimiento-y-outbox).
 
 Tablas `usuarios` y `refresh_tokens`. Con `DB_SCHEMA` el motor fija `search_path` a ese esquema y
 la migración lo crea (`CREATE SCHEMA IF NOT EXISTS`); la versión se guarda en
