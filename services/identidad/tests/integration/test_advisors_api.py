@@ -18,7 +18,13 @@ def _register_client(client: FlaskClient) -> str:
         },
     )
     assert response.status_code == 201
-    return response.get_json()["usuario"]["id"]
+    payload = response.get_json()
+    assert isinstance(payload, dict)
+    user = payload.get("usuario")
+    assert isinstance(user, dict)
+    client_id = user.get("id")
+    assert isinstance(client_id, str)
+    return client_id
 
 
 def test_advisor_login_includes_authorized_partners(
