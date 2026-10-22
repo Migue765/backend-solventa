@@ -12,7 +12,31 @@ tags:
   - name: OAuth
   - name: Descubrimiento
   - name: Consentimientos
+  - name: Asesores
 paths:
+  /v1/clientes:
+    get:
+      tags: [Asesores]
+      summary: Lista clientes registrados para consumo interno del BFF
+      security:
+        - TokenInterno: []
+      responses:
+        "200":
+          description: Datos mínimos para seleccionar al titular
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientes]
+                properties:
+                  clientes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClienteRegistrado"
+        "401":
+          description: Token interno invalido
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes/{clienteId}/consentimiento-perfilamiento:
     parameters:
       - name: clienteId
@@ -262,7 +286,26 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor]
+        socios:
+          type: array
+          uniqueItems: true
+          description: Socios activos autorizados; presente para rol asesor.
+          items:
+            type: string
+    ClienteRegistrado:
+      type: object
+      additionalProperties: false
+      required: [clienteId, nombre, correo]
+      properties:
+        clienteId:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+        correo:
+          type: string
+          format: email
     UsuarioCreado:
       type: object
       additionalProperties: false
@@ -324,7 +367,7 @@ components:
           description: Vida del refresh token en segundos (web 28800, movil 2592000).
         scope:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor]
         usuario:
           $ref: "#/components/schemas/Usuario"
     SolicitudRevocacion:

@@ -3,17 +3,19 @@ from datetime import UTC, datetime
 from functools import partial
 from uuid import UUID, uuid4
 
+import click
 from flask import Flask, Response, g, request
 from redis import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from identidad.api import consents, health, oauth, users, wellknown
+from identidad.api import advisors, consents, health, oauth, users, wellknown
 from identidad.application.ports import LoginAttemptLimiter
 from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
 from identidad.config import Config
+from identidad.domain.auth import User
 from identidad.infrastructure.jwt_issuer import RsaJwtIssuer
 from identidad.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
 from identidad.infrastructure.passwords import hash_password
@@ -68,6 +70,7 @@ def create_app(
     app.extensions["identidad_config"] = active_config
     app.extensions["clock"] = active_clock
     app.extensions["consent_repository"] = SqlConsentRepository(sessions)
+    app.extensions["user_repository"] = user_repository
     app.extensions["jwt_issuer"] = jwt_issuer
     app.extensions["token_service"] = TokenService(
         users=user_repository,
@@ -91,6 +94,29 @@ def create_app(
     app.register_blueprint(oauth.bp)
     app.register_blueprint(wellknown.bp)
     app.register_blueprint(consents.bp)
+    app.register_blueprint(advisors.bp)
+
+    @app.cli.command("create-advisor")
+    @click.option("--name", required=True)
+    @click.option("--email", required=True)
+    @click.option("--password", required=True, hide_input=True)
+    @click.option("--partner-id", required=True)
+    @click.option("--partner-name", required=True)
+    def create_advisor(
+        name: str,
+        email: str,
+        password: str,
+        partner_id: str,
+        partner_name: str,
+    ) -> None:
+        user = User(uuid4(), name.strip(), email.strip().casefold(), "asesor", (partner_id,))
+        user_repository.create_advisor(
+            user,
+            hash_password(password, iterations=active_config.password_iterations),
+            partner_id.strip(),
+            partner_name.strip(),
+        )
+        click.echo(str(user.user_id))
 
     @app.before_request
     def assign_correlation_id() -> None:

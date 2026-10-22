@@ -21,23 +21,65 @@ class ConsultarPerfil:
         self._reloj = reloj
 
     def _autorizar(
-        self, cliente_id: UUID, correlation_id: str, auditoria: dict[str, object]
+        self,
+        cliente_id: UUID,
+        correlation_id: str,
+        auditoria: dict[str, object],
+        consentimiento_id: UUID | None = None,
+        consentimiento_version: int | None = None,
     ) -> Consentimiento:
         consentimiento = self._consentimientos.obtener(cliente_id, correlation_id)
         auditoria["consentimientoId"] = str(consentimiento.consentimiento_id)
         auditoria["consentimientoVersion"] = consentimiento.version
         consentimiento.validar(cliente_id, self._reloj())
         self._repositorio.validar_version_consentimiento(consentimiento)
+        if (
+            consentimiento_id is not None
+            and consentimiento.consentimiento_id != consentimiento_id
+        ) or (
+            consentimiento_version is not None
+            and consentimiento.version != consentimiento_version
+        ):
+            raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
         return consentimiento
 
-    def generar(self, cliente_id: UUID, referencia_id: UUID, correlation_id: str) -> Perfil:
+    def generar(
+        self,
+        cliente_id: UUID,
+        referencia_id: UUID,
+        correlation_id: str,
+        consentimiento_id: UUID | None = None,
+        consentimiento_version: int | None = None,
+    ) -> Perfil:
         auditoria = self._auditoria(cliente_id, correlation_id)
         auditoria["referenciaId"] = str(referencia_id)
         try:
-            consentimiento = self._autorizar(cliente_id, correlation_id, auditoria)
+            consentimiento = self._autorizar(
+                cliente_id,
+                correlation_id,
+                auditoria,
+                consentimiento_id,
+                consentimiento_version,
+            )
+            existente = self._repositorio.buscar_por_referencia(cliente_id, referencia_id)
+            if existente is not None:
+                existente.validar(consentimiento, self._reloj())
+                auditoria.update(
+                    perfilId=str(existente.perfil_id),
+                    resultado="disponible",
+                    idempotente=True,
+                )
+                self._repositorio.auditar(auditoria)
+                return existente
             fuentes: list[Fuente] = []
             for adaptador in self._fuentes:
-                actual = self._autorizar(cliente_id, correlation_id, auditoria)
+                actual = self._autorizar(
+                    cliente_id,
+                    correlation_id,
+                    auditoria,
+                    consentimiento_id,
+                    consentimiento_version,
+                )
                 if actual != consentimiento:
                     raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
                 auditoria["fuentes"] = [fuente.nombre for fuente in fuentes] + [adaptador.nombre]
@@ -62,7 +104,16 @@ class ConsultarPerfil:
                 ),
                 fuentes=tuple(fuentes),
             )
-            perfil.validar(self._autorizar(cliente_id, correlation_id, auditoria), self._reloj())
+            perfil.validar(
+                self._autorizar(
+                    cliente_id,
+                    correlation_id,
+                    auditoria,
+                    consentimiento_id,
+                    consentimiento_version,
+                ),
+                self._reloj(),
+            )
             auditoria.update(perfilId=str(perfil.perfil_id), resultado="disponible")
             self._repositorio.guardar(perfil, auditoria)
             return perfil

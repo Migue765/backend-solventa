@@ -14,7 +14,69 @@ tags:
   - name: Ofertas
   - name: Suscripciones
   - name: Dashboard
+  - name: Asesores
 paths:
+  /v1/asesor/clientes:
+    get:
+      tags: [Asesores]
+      summary: Lista clientes registrados para selección del asesor
+      description: Requiere JWT con rol y scope asesor.
+      operationId: listarClientesAsesor
+      responses:
+        "200":
+          description: Catálogo mínimo de clientes; no expone credenciales ni consentimiento
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientes]
+                properties:
+                  clientes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClienteRegistrado"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/perfilamientos-hipotecarios:
+    post:
+      tags: [Asesores]
+      summary: Perfila y cotiza vida hipotecaria en el contexto del socio
+      description: >-
+        Requiere JWT de asesor. socioId debe estar en el claim socios. operationId e
+        Idempotency-Key deben contener el mismo UUID. Un reintento idéntico devuelve
+        la misma operación completada; el mismo UUID con otros datos responde 409.
+      operationId: iniciarPerfilamientoHipotecario
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IniciarPerfilamientoHipotecario"
+      responses:
+        "201":
+          description: Perfilamiento y cotización confirmados por el backend
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfilamientoHipotecarioCompletado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Socio o consentimiento no autorizado
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/consentimientos/perfilamiento:
     get:
       tags: [Consentimientos]
@@ -639,6 +701,121 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    ClienteRegistrado:
+      type: object
+      additionalProperties: false
+      required: [clienteId, nombre, correo]
+      properties:
+        clienteId:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+        correo:
+          type: string
+          format: email
+    IniciarPerfilamientoHipotecario:
+      type: object
+      additionalProperties: false
+      required:
+        - operationId
+        - socioId
+        - cliente
+        - credito
+        - consentimientoId
+        - consentimientoVersion
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 50
+        cliente:
+          $ref: "#/components/schemas/ClienteHipotecario"
+        credito:
+          $ref: "#/components/schemas/CreditoHipotecario"
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+    ClienteHipotecario:
+      type: object
+      additionalProperties: false
+      required:
+        - clienteId
+        - tipoDocumento
+        - numeroDocumento
+        - telefono
+        - fechaNacimiento
+      properties:
+        clienteId:
+          type: string
+          format: uuid
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          pattern: "^[A-Za-z0-9]{6,15}$"
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
+        fechaNacimiento:
+          type: string
+          format: date
+    CreditoHipotecario:
+      type: object
+      additionalProperties: false
+      required: [referencia, monto, plazoMeses]
+      properties:
+        referencia:
+          type: string
+          pattern: "^[A-Za-z0-9-]{4,30}$"
+        monto:
+          type: integer
+          minimum: 1000000
+        plazoMeses:
+          type: integer
+          minimum: 12
+          maximum: 360
+    PerfilamientoHipotecarioCompletado:
+      type: object
+      additionalProperties: false
+      required:
+        - operationId
+        - socioId
+        - clienteId
+        - estado
+        - perfilamientoReferencia
+        - solicitudId
+        - cotizacionId
+        - recibidaEn
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          const: completada
+        perfilamientoReferencia:
+          type: string
+        solicitudId:
+          type: string
+        cotizacionId:
+          type: string
+          format: uuid
+        recibidaEn:
+          type: string
+          format: date-time
     DecisionConsentimiento:
       type: object
       additionalProperties: false

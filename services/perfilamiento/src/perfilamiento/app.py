@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import click
 from flask import Flask, Response, g, jsonify, request
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from perfilamiento.adapters import ConsentimientosHttp, FuenteMock
@@ -52,6 +52,16 @@ class ConsultaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     cliente_id: UUID = Field(alias="clienteId")
     referencia_id: UUID = Field(alias="referenciaId")
+    consentimiento_id: UUID | None = Field(default=None, alias="consentimientoId")
+    consentimiento_version: int | None = Field(
+        default=None, alias="consentimientoVersion", ge=1
+    )
+
+    @model_validator(mode="after")
+    def consentimiento_completo(self) -> "ConsultaRequest":
+        if (self.consentimiento_id is None) != (self.consentimiento_version is None):
+            raise ValueError("El consentimiento debe incluir id y version.")
+        return self
 
 
 def create_app(
@@ -105,7 +115,13 @@ def create_app(
             payload = ConsultaRequest.model_validate(request.get_json())
         except (ValidationError, BadRequest, UnsupportedMediaType):
             return jsonify(error="solicitud_invalida"), 400
-        perfil = servicio.generar(payload.cliente_id, payload.referencia_id, g.correlation_id)
+        perfil = servicio.generar(
+            payload.cliente_id,
+            payload.referencia_id,
+            g.correlation_id,
+            payload.consentimiento_id,
+            payload.consentimiento_version,
+        )
         return jsonify(perfil.model_dump(mode="json", by_alias=True)), 201
 
     @app.post("/v1/eventos/consentimientos")

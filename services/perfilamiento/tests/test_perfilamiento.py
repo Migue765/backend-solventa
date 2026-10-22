@@ -65,6 +65,7 @@ def test_perfil_valido_es_versionado_minimo_y_trazable(repo: RepositorioPerfiles
     assert all(fuente.simulada for fuente in perfil.fuentes)
     assert not perfil.fallback_used
     assert servicio.obtener(perfil.perfil_id, cliente_id, "corr-lectura") == perfil
+    assert servicio.generar(cliente_id, referencia_id, "corr-reintento") == perfil
     segundo = servicio.generar(cliente_id, uuid4(), "corr-prueba")
     assert segundo.version == 2
     with Session(repo.engine) as session:
@@ -74,6 +75,30 @@ def test_perfil_valido_es_versionado_minimo_y_trazable(repo: RepositorioPerfiles
         assert auditoria.contenido["consentimientoVersion"] == 1
         assert auditoria.contenido["fuentes"] == ["open_finance", "open_data"]
         assert session.scalar(select(func.count()).select_from(PerfilModel)) == 2
+
+
+def test_consentimiento_solicitado_debe_coincidir(repo: RepositorioPerfiles) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    assert consentimientos.actual is not None
+    servicio = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.generar(
+            cliente_id,
+            uuid4(),
+            "corr-consentimiento",
+            uuid4(),
+            consentimientos.actual.version,
+        )
+
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
 
 
 @pytest.mark.parametrize(

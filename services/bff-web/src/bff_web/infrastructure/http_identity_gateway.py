@@ -20,10 +20,17 @@ DEFAULT_RETRY_AFTER = 60
 
 
 class HttpIdentityGateway:
-    def __init__(self, base_url: str, timeout_seconds: float = 5, client_id: str = CHANNEL) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 5,
+        client_id: str = CHANNEL,
+        internal_api_token: str = "",
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._client_id = client_id
+        self._internal_api_token = internal_api_token
 
     def register(self, name: str, email: str, password: str, correlation_id: str) -> User:
         payload = self._post(
@@ -60,6 +67,37 @@ class HttpIdentityGateway:
 
     def revoke(self, refresh_token: str, correlation_id: str) -> None:
         self._post("/oauth/revoke", {"refresh_token": refresh_token}, correlation_id)
+
+    def list_clients(self, correlation_id: str) -> tuple[User, ...]:
+        payload = self._get("/v1/clientes", correlation_id)
+        clients = payload.get("clientes")
+        if not isinstance(clients, list):
+            raise IdentityUnavailableError()
+        return tuple(_client_from_json(client) for client in clients)
+
+    def _get(self, path: str, correlation_id: str) -> dict[str, Any]:
+        if not self._internal_api_token:
+            raise IdentityUnavailableError()
+        request = Request(
+            f"{self._base_url}{path}",
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._internal_api_token}",
+                "X-Correlation-ID": correlation_id,
+            },
+        )
+        try:
+            with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+                raw = response.read()
+        except (HTTPError, URLError, OSError, TimeoutError) as error:
+            raise IdentityUnavailableError() from error
+        try:
+            payload = json.loads(raw)
+        except ValueError as error:
+            raise IdentityUnavailableError() from error
+        if not isinstance(payload, dict):
+            raise IdentityUnavailableError()
+        return payload
 
     def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
         request = Request(
@@ -120,7 +158,30 @@ def _mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
 
 def _user_from_json(data: dict[str, Any]) -> User:
     try:
-        return User(UUID(data["id"]), data["nombre"], data["correo"], data["rol"])
+        partners = data.get("socios", [])
+        if not isinstance(partners, list) or not all(isinstance(value, str) for value in partners):
+            raise ValueError("socios invalidos")
+        return User(
+            UUID(data["id"]),
+            data["nombre"],
+            data["correo"],
+            data["rol"],
+            partner_ids=tuple(partners),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise IdentityUnavailableError() from error
+
+
+def _client_from_json(data: object) -> User:
+    if not isinstance(data, dict):
+        raise IdentityUnavailableError()
+    try:
+        return User(
+            UUID(data["clienteId"]),
+            _text(data["nombre"]),
+            _text(data["correo"]),
+            "cliente",
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise IdentityUnavailableError() from error
 

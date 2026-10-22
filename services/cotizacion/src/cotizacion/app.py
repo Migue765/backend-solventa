@@ -5,9 +5,10 @@ from uuid import uuid4
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-from cotizacion.api import cotizaciones, health, solicitudes
+from cotizacion.api import cotizaciones, health, operaciones_hipotecarias, solicitudes
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
 from cotizacion.application.crear_cotizacion import CrearCotizacion
+from cotizacion.application.iniciar_operacion_hipotecaria import IniciarOperacionHipotecaria
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
@@ -31,6 +32,9 @@ from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
+)
+from cotizacion.infrastructure.persistence.repositorio_operaciones_hipotecarias import (
+    RepositorioOperacionesHipotecarias,
 )
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.persistence.repositorio_reglas import (
@@ -73,8 +77,14 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(pagos)
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
     perfiles_riesgo = PerfilRiesgoSimulado()
-    app.extensions["registrar_solicitud"] = RegistrarSolicitud(
+    registrar_solicitud = RegistrarSolicitud(
         repositorio, calculadora, perfiles_riesgo, generador_perfiles=perfil_http
+    )
+    app.extensions["registrar_solicitud"] = registrar_solicitud
+    app.extensions["iniciar_operacion_hipotecaria"] = IniciarOperacionHipotecaria(
+        RepositorioOperacionesHipotecarias(sesiones),
+        registrar_solicitud,
+        perfilamiento_habilitado=perfil_http is not None,
     )
     app.extensions["proveedor_perfil"] = perfil_http
     app.extensions["gestionar_ofertas"] = GestionarOfertas(
@@ -90,6 +100,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(health.bp)
     app.register_blueprint(cotizaciones.bp)
     app.register_blueprint(solicitudes.bp)
+    app.register_blueprint(operaciones_hipotecarias.bp)
 
     @app.before_request
     def asignar_correlation_id() -> None:

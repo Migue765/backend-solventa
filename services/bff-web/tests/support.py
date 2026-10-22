@@ -189,6 +189,7 @@ class FakeJwks:
 class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
+    clients: tuple[User, ...] = (USER,)
 
     def _record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
@@ -212,6 +213,10 @@ class FakeIdentity:
 
     def revoke(self, refresh_token: str, correlation_id: str) -> None:
         self._record("revoke", refresh_token, correlation_id)
+
+    def list_clients(self, correlation_id: str) -> tuple[User, ...]:
+        self._record("list_clients", correlation_id)
+        return self.clients
 
 
 def rejected(status: int, code: str, retry_after: int | None = None) -> IdentityRejectedError:

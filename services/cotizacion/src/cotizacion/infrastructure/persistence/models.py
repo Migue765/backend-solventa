@@ -60,6 +60,33 @@ class CotizacionModel(Base):
     instantanea: Mapped["InstantaneaDecisionModel | None"] = relationship(lazy="selectin")
 
 
+class OperacionHipotecariaModel(Base):
+    __tablename__ = "operaciones_hipotecarias"
+    __table_args__ = (
+        UniqueConstraint("socio_id", "operation_id", name="uq_operacion_hipotecaria_socio"),
+    )
+
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    asesor_id: Mapped[UUID] = mapped_column(index=True)
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    consentimiento_id: Mapped[UUID]
+    consentimiento_version: Mapped[int] = mapped_column(Integer)
+    referencia_credito: Mapped[str] = mapped_column(String(30))
+    monto_credito: Mapped[Decimal] = mapped_column(MONTO)
+    plazo_meses: Mapped[int] = mapped_column(Integer)
+    solicitud_id: Mapped[str] = mapped_column(
+        ForeignKey("cotizaciones.solicitud_id", ondelete="RESTRICT")
+    )
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT")
+    )
+    perfilamiento_referencia: Mapped[str] = mapped_column(String(64))
+    estado: Mapped[str] = mapped_column(String(20))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class CoberturaCotizadaModel(Base):
     __tablename__ = "coberturas_cotizadas"
 
