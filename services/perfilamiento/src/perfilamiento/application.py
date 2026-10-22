@@ -34,11 +34,9 @@ class ConsultarPerfil:
         consentimiento.validar(cliente_id, self._reloj())
         self._repositorio.validar_version_consentimiento(consentimiento)
         if (
-            consentimiento_id is not None
-            and consentimiento.consentimiento_id != consentimiento_id
+            consentimiento_id is not None and consentimiento.consentimiento_id != consentimiento_id
         ) or (
-            consentimiento_version is not None
-            and consentimiento.version != consentimiento_version
+            consentimiento_version is not None and consentimiento.version != consentimiento_version
         ):
             raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
         return consentimiento

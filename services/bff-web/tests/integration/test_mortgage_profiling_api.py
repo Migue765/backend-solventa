@@ -140,7 +140,8 @@ def test_rejects_partner_outside_advisor_claims(app: Flask, keypair: KeyPair) ->
 
 
 def test_client_token_cannot_use_advisor_operation(
-    app: Flask, token: str,
+    app: Flask,
+    token: str,
 ) -> None:
     operation_id = uuid4()
 

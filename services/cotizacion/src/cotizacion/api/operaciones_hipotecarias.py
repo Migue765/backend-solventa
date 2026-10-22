@@ -19,12 +19,8 @@ def iniciar() -> tuple[Response, int] | Response:
     if not _authorized():
         return jsonify(error="no_autorizado"), 401
     try:
-        payload = IniciarOperacionHipotecariaRequest.model_validate(
-            request.get_json(silent=False)
-        )
-        idempotency_key = UUID_ADAPTER.validate_python(
-            request.headers.get("Idempotency-Key")
-        )
+        payload = IniciarOperacionHipotecariaRequest.model_validate(request.get_json(silent=False))
+        idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
     except (ValidationError, TypeError):
         return jsonify(error="solicitud_invalida"), 400
     if idempotency_key != payload.operation_id:

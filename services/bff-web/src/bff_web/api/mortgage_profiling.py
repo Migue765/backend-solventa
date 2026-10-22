@@ -31,9 +31,7 @@ class _Payload(BaseModel):
 class ClientPayload(_Payload):
     client_id: UUID = Field(alias="clienteId")
     document_type: str = Field(alias="tipoDocumento", pattern=r"^(cc|ce|passport|ppt)$")
-    identification: str = Field(
-        alias="numeroDocumento", pattern=r"^[A-Za-z0-9]{6,15}$"
-    )
+    identification: str = Field(alias="numeroDocumento", pattern=r"^[A-Za-z0-9]{6,15}$")
     phone: str = Field(alias="telefono", pattern=r"^\+57[0-9]{10}$")
     birth_date: date = Field(alias="fechaNacimiento")
 
@@ -188,8 +186,6 @@ def _error_response(error: MortgageProfilingError) -> Response:
         "perfil_vencido": ("perfilamiento_fallido", "Perfilamiento fallido"),
         "regla_de_negocio": ("perfilamiento_fallido", "Perfilamiento fallido"),
     }
-    code, title = public.get(
-        error.code, ("servicio_no_disponible", "Servicio no disponible")
-    )
+    code, title = public.get(error.code, ("servicio_no_disponible", "Servicio no disponible"))
     status = error.status if error.code in public else 503
     return problem_response(status, code, title, "No fue posible completar el perfilamiento.")

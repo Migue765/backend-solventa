@@ -132,18 +132,17 @@ def test_same_operation_with_different_body_conflicts(
         "Authorization": f"Bearer {INTERNAL_TOKEN}",
         "Idempotency-Key": operation_id,
     }
-    assert client.post(
-        "/v1/perfilamientos-hipotecarios", json=payload, headers=headers
-    ).status_code == 201
+    assert (
+        client.post("/v1/perfilamientos-hipotecarios", json=payload, headers=headers).status_code
+        == 201
+    )
 
     payload["credito"] = {
         "referencia": "HIP-2026-001",
         "monto": 320_000_000,
         "plazoMeses": 240,
     }
-    conflict = client.post(
-        "/v1/perfilamientos-hipotecarios", json=payload, headers=headers
-    )
+    conflict = client.post("/v1/perfilamientos-hipotecarios", json=payload, headers=headers)
 
     assert conflict.status_code == 409
     assert conflict.get_json()["error"] == "conflicto_idempotencia"

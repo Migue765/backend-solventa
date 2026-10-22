@@ -91,9 +91,7 @@ class ClienteOperacionHipotecariaRequest(_Solicitud):
 
     @model_validator(mode="after")
     def normalizar_documento(self) -> "ClienteOperacionHipotecariaRequest":
-        self.numero_documento = validar_identificacion(
-            self.tipo_documento, self.numero_documento
-        )
+        self.numero_documento = validar_identificacion(self.tipo_documento, self.numero_documento)
         return self
 
 

@@ -112,11 +112,7 @@ class RepositorioPerfiles:
                 ReferenciaPerfilModel,
                 {"cliente_id": cliente_id, "referencia_id": referencia_id},
             )
-            fila = (
-                sesion.get(PerfilModel, referencia.perfil_id)
-                if referencia is not None
-                else None
-            )
+            fila = sesion.get(PerfilModel, referencia.perfil_id) if referencia is not None else None
             if fila is None:
                 return None
             if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):

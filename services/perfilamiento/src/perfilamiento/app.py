@@ -53,9 +53,7 @@ class ConsultaRequest(BaseModel):
     cliente_id: UUID = Field(alias="clienteId")
     referencia_id: UUID = Field(alias="referenciaId")
     consentimiento_id: UUID | None = Field(default=None, alias="consentimientoId")
-    consentimiento_version: int | None = Field(
-        default=None, alias="consentimientoVersion", ge=1
-    )
+    consentimiento_version: int | None = Field(default=None, alias="consentimientoVersion", ge=1)
 
     @model_validator(mode="after")
     def consentimiento_completo(self) -> "ConsultaRequest":

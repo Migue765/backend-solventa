@@ -11,6 +11,8 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from identidad.domain.auth import User
 
 ALGORITHM = "RS256"
+
+
 class RsaJwtIssuer:
     def __init__(self, private_key_pem: str, issuer: str, audience: str) -> None:
         try:

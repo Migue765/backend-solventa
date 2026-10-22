@@ -32,9 +32,7 @@ def test_migrations_create_both_tables_with_their_own_version_table(
         "socios",
         "asesores_socios",
         "alembic_version_identidad",
-    } <= set(
-        inspector.get_table_names()
-    )
+    } <= set(inspector.get_table_names())
     assert "alembic_version" not in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("refresh_tokens")}
     assert columns == {
