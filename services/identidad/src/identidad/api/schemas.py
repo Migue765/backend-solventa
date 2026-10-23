@@ -38,12 +38,15 @@ class RevokeRequest(BaseModel):
 
 
 def user_to_json(user: User) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": str(user.user_id),
         "nombre": user.name,
         "correo": user.email,
         "rol": user.role,
     }
+    if user.role == "asesor":
+        result["socios"] = list(user.partner_ids)
+    return result
 
 
 def user_created_to_json(user: User) -> dict[str, object]:
@@ -57,6 +60,6 @@ def tokens_to_json(issued: IssuedTokens) -> dict[str, object]:
         "expires_in": issued.expires_in,
         "refresh_token": issued.refresh_token,
         "refresh_expires_in": issued.refresh_expires_in,
-        "scope": "cliente",
+        "scope": issued.user.role,
         "usuario": user_to_json(issued.user),
     }

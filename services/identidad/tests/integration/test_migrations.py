@@ -26,9 +26,13 @@ def test_migrations_create_both_tables_with_their_own_version_table(
     command.upgrade(config, "head")
 
     inspector = inspect(create_engine(url))
-    assert {"usuarios", "refresh_tokens", "alembic_version_identidad"} <= set(
-        inspector.get_table_names()
-    )
+    assert {
+        "usuarios",
+        "refresh_tokens",
+        "socios",
+        "asesores_socios",
+        "alembic_version_identidad",
+    } <= set(inspector.get_table_names())
     assert "alembic_version" not in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("refresh_tokens")}
     assert columns == {
@@ -44,7 +48,7 @@ def test_migrations_create_both_tables_with_their_own_version_table(
 
     command.downgrade(config, "base")
     remaining = set(inspect(create_engine(url)).get_table_names())
-    assert "usuarios" not in remaining and "refresh_tokens" not in remaining
+    assert not {"usuarios", "refresh_tokens", "socios", "asesores_socios"} & remaining
 
 
 def test_upgrade_preserves_legacy_evidence_without_granting_new_permissions(

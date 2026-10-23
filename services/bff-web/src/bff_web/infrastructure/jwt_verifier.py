@@ -118,15 +118,25 @@ class JwtVerifier:
             )
             if claims.get("client_id") != self._client_id:
                 raise InvalidAccessTokenError()
+            role = str(claims["rol"])
+            scope = str(claims.get("scope", ""))
+            partners_claim = claims.get("socios", [])
+            if (
+                not isinstance(partners_claim, list)
+                or not all(isinstance(partner, str) and partner for partner in partners_claim)
+                or (role == "asesor" and (scope != "asesor" or not partners_claim))
+            ):
+                raise InvalidAccessTokenError()
             return AccessClaims(
                 user=User(
                     UUID(claims["sub"]),
                     str(claims["nombre"]),
                     str(claims["correo"]),
-                    str(claims["rol"]),
+                    role,
+                    partner_ids=tuple(partners_claim),
                 ),
                 client_id=self._client_id,
-                scope=str(claims.get("scope", "")),
+                scope=scope,
                 expires_at=datetime.fromtimestamp(claims["exp"], UTC),
             )
         except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:

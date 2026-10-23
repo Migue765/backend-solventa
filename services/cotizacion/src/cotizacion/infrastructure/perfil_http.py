@@ -46,14 +46,32 @@ class ProveedorPerfilHttp:
         self._base_url = base_url.rstrip("/")
         self._token = token
 
-    def generar(self, cliente_id: UUID, referencia_id: UUID) -> PerfilRiesgo:
+    def generar(
+        self,
+        cliente_id: UUID,
+        referencia_id: UUID,
+        consentimiento_id: UUID | None = None,
+        consentimiento_version: int | None = None,
+    ) -> PerfilRiesgo:
+        body: dict[str, str | int] = {
+            "clienteId": str(cliente_id),
+            "referenciaId": str(referencia_id),
+        }
+        if consentimiento_id is not None and consentimiento_version is not None:
+            body["consentimientoId"] = str(consentimiento_id)
+            body["consentimientoVersion"] = consentimiento_version
         perfil = self._consultar(
             "/v1/perfiles",
             cliente_id,
-            {"clienteId": str(cliente_id), "referenciaId": str(referencia_id)},
+            body,
         )
         if perfil.evidencia is None or perfil.evidencia["referenciaId"] != str(referencia_id):
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if consentimiento_id is not None and (
+            perfil.evidencia["consentimientoId"] != str(consentimiento_id)
+            or perfil.evidencia["consentimientoVersion"] != consentimiento_version
+        ):
+            raise ErrorConsultaPerfil("consentimiento_no_vigente", 403)
         return perfil
 
     def obtener(self, perfil_id: str, cliente_id: UUID) -> PerfilRiesgo:
@@ -68,7 +86,7 @@ class ProveedorPerfilHttp:
         return perfil
 
     def _consultar(
-        self, path: str, cliente_id: UUID, body: dict[str, str] | None = None
+        self, path: str, cliente_id: UUID, body: dict[str, str | int] | None = None
     ) -> PerfilRiesgo:
         if not self._token.strip():
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
@@ -85,7 +103,7 @@ class ProveedorPerfilHttp:
             headers=headers,
         )
         try:
-            with urlopen(request, timeout=5) as response:
+            with urlopen(request, timeout=0.7) as response:
                 payload = PerfilResponse.model_validate(json.load(response))
         except HTTPError as error:
             try:

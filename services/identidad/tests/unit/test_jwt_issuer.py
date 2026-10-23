@@ -51,6 +51,25 @@ def test_issued_token_header_and_claims(private_key_pem: str) -> None:
     assert claims["exp"] - claims["iat"] == 3600
 
 
+def test_advisor_token_contains_scope_and_authorized_partners(private_key_pem: str) -> None:
+    issuer = RsaJwtIssuer(private_key_pem, "https://x", "aud")
+    now = datetime.now(UTC)
+    advisor = User(
+        uuid4(),
+        "Laura Asesora",
+        "laura@banco.co",
+        "asesor",
+        ("BANCO-001", "BANCO-002"),
+    )
+
+    token = issuer.issue(advisor, "web", now, now + timedelta(hours=1))
+
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["scope"] == "asesor"
+    assert claims["rol"] == "asesor"
+    assert claims["socios"] == ["BANCO-001", "BANCO-002"]
+
+
 def test_every_token_has_a_unique_jti(private_key_pem: str) -> None:
     issuer = RsaJwtIssuer(private_key_pem, "https://x", "aud")
     now = datetime.now(UTC)
