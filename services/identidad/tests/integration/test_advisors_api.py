@@ -92,3 +92,58 @@ def test_internal_client_catalog_requires_service_credential(make_app: Any) -> N
             }
         ]
     }
+
+
+def test_partner_user_has_distinct_role_and_organization_after_refresh(make_app: Any) -> None:
+    app: Flask = make_app()
+    created = app.test_cli_runner().invoke(
+        args=[
+            "create-partner-user",
+            "--name",
+            "Operador Socio",
+            "--email",
+            "socio@banco.co",
+            "--partner-id",
+            "BANCO-002",
+            "--partner-name",
+            "Banco Dos",
+        ],
+        input=f"{PASSWORD}\n{PASSWORD}\n",
+    )
+    assert created.exit_code == 0, created.output
+    client = app.test_client()
+    login = client.post(
+        "/oauth/token",
+        json={
+            "grant_type": "password",
+            "client_id": "web",
+            "username": "socio@banco.co",
+            "password": PASSWORD,
+        },
+    )
+    assert login.status_code == 200
+    tokens = login.get_json()
+    assert tokens["usuario"]["rol"] == tokens["scope"] == "socio"
+    assert tokens["usuario"]["socios"] == ["BANCO-002"]
+    refresh = client.post(
+        "/oauth/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": "web",
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+    assert refresh.status_code == 200
+    claims = jwt.decode(refresh.get_json()["access_token"], options={"verify_signature": False})
+    assert claims["rol"] == claims["scope"] == "socio"
+    assert claims["socios"] == ["BANCO-002"]
+    public = client.post(
+        "/v1/usuarios",
+        json={
+            "nombre": "Elevado",
+            "correo": "elevado@banco.co",
+            "contrasena": PASSWORD,
+            "rol": "socio",
+        },
+    )
+    assert public.status_code == 400

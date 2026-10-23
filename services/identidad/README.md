@@ -30,6 +30,27 @@ La respuesta incluye `access_token`, `token_type: Bearer`, `expires_in: 3600`, `
 
 ## Tokens
 
+### Usuarios de plataforma socio
+
+La migracion aditiva `0005_usuarios_socios.py` crea `usuarios_socios`, separada
+de `asesores_socios`. Ejecutar `alembic upgrade head` antes de habilitar socios.
+No cambia usuarios ni roles existentes. Un socio inicia/renueva sesion mediante
+los endpoints normales y recibe `rol: socio`, `scope: socio` y `socios` con sus
+organizaciones activas. El BFF aplica el alcance; no convertir asesor en socio.
+El registro publico sigue creando exclusivamente clientes.
+
+Provisionamiento administrativo (sin credenciales en argumentos):
+
+```sh
+flask --app identidad.app:create_app create-partner-user --name "Operador" --email operador@banco.example --partner-id BANCO-001 --partner-name "Banco"
+```
+
+El comando solicita la contrasena dos veces con entrada oculta; tambien admite
+stdin para automatizacion del operador sin imprimirla ni incluirla en argv.
+Entrega solo el UUID del usuario. No habilita cuentas automaticamente desde la web.
+Las organizaciones inactivas se excluyen al emitir/renovar JWT; tokens ya emitidos
+mantienen su vigencia existente hasta expiracion (una hora).
+
 - **Access token:** JWT `RS256` con `kid` en la cabecera. Claims: `iss`, `sub`, `aud`, `iat`,
   `exp` (`iat` + 3600 s), `jti`, `scope`, `rol`, `nombre`, `correo` y `client_id`.
 - **Refresh token:** `secrets.token_urlsafe(48)`; solo se guarda su SHA-256. Vive 8 horas para

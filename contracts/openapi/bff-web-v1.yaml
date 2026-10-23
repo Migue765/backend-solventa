@@ -15,7 +15,134 @@ tags:
   - name: Suscripciones
   - name: Dashboard
   - name: Asesores
+  - name: Socios
 paths:
+  /v1/socios/actual:
+    get:
+      tags: [Socios]
+      operationId: consultarContextoSocio
+      summary: Consulta organizaciones y productos de la cuenta socio
+      description: Requiere rol y scope socio y organizaciones activas en el JWT.
+      responses:
+        "200":
+          description: Contexto autorizado; no expone catalogo global de clientes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apiVersion, usuario, socios, alcances]
+                properties:
+                  apiVersion:
+                    const: "1"
+                  usuario:
+                    $ref: "#/components/schemas/UsuarioSesion"
+                  socios:
+                    type: array
+                    items:
+                      type: object
+                      required: [socioId, productos]
+                      properties:
+                        socioId:
+                          type: string
+                        productos:
+                          type: array
+                          items:
+                            type: string
+                  alcances:
+                    type: array
+                    items:
+                      const: "perfilamientos:crear"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente; cliente y asesor no son socios
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion:
+    post:
+      tags: [Socios]
+      operationId: iniciarSolicitudSocio
+      summary: Perfila y cotiza un producto del catalogo para el cliente autorizado
+      description: >-
+        Requiere rol y scope socio y socioId presente en el JWT. operationId debe
+        coincidir con Idempotency-Key y ser globalmente unico entre organizaciones.
+        Una colision de otro socio devuelve 409 sin revelar su propietario.
+        Consentimiento vigente del cliente obligatorio;
+        el socio nunca lo concede. El resultado enlaza la solicitud real del cliente.
+        Un reintento identico devuelve el mismo resultado sin consumir cuota.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSolicitudSocio"
+      responses:
+        "201":
+          description: Operacion persistida y completada, incluyendo reintentos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperacionSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
+        "404":
+          description: cliente_no_encontrado
+        "409":
+          description: idempotencia_conflicto o operacion_en_curso (Retry-After)
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "429":
+          $ref: "#/components/responses/CuotaSocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion/{operationId}:
+    get:
+      tags: [Socios]
+      operationId: recuperarSolicitudSocio
+      summary: Recupera una operacion sin guardar datos personales en el navegador
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: Misma operacion completada; no recalcula ni consulta fuentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperacionSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente o socio_no_autorizado
+        "404":
+          description: operacion_no_encontrada dentro del socio autorizado
+        "409":
+          description: >-
+            operacion_en_curso o operacion_reintentable, con Retry-After.
+            GET no reanuda; para reintentar se necesita POST con el cuerpo original.
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/asesor/clientes:
     get:
       tags: [Asesores]
@@ -50,6 +177,7 @@ paths:
       operationId: iniciarPerfilamientoHipotecario
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
       requestBody:
         required: true
         content:
@@ -75,6 +203,8 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
+        "429":
+          $ref: "#/components/responses/CuotaSocio"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/consentimientos/perfilamiento:
@@ -635,7 +765,27 @@ components:
       schema:
         type: string
         format: uuid
+    ApiVersion:
+      name: API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: ["1"]
+        default: "1"
+      description: Una version distinta devuelve 400 version_no_soportada.
   responses:
+    CuotaSocio:
+      description: cuota_socio_excedida o socio_ocupado, sin iniciar perfilamiento
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     SolicitudInvalida:
       description: La solicitud no cumple el contrato
       content:
@@ -714,6 +864,75 @@ components:
         correo:
           type: string
           format: email
+    NuevaSolicitudSocio:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, productoId, datosProducto, cliente, consentimientoId, consentimientoVersion]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 50
+        productoId:
+          type: string
+          enum: [automotive, travel, life, device-protection, parametric, parametric-weather, payment-protection, mortgage-life]
+        datosProducto:
+          $ref: "#/components/schemas/DatosProducto"
+        cliente:
+          type: object
+          additionalProperties: false
+          required: [clienteId, tipoCliente, tipoDocumento, numeroDocumento, telefono]
+          properties:
+            clienteId:
+              type: string
+              format: uuid
+            tipoCliente:
+              const: persona_natural
+            tipoDocumento:
+              enum: [cc, ce, passport, ppt]
+            numeroDocumento:
+              type: string
+              description: cc 6-10 digitos; ce 6-12; passport 5-16 A-Z/0-9; ppt 7-10 digitos.
+            telefono:
+              type: string
+              pattern: "^\\+57[0-9]{10}$"
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+    OperacionSocio:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, clienteId, productoId, estado, perfilamientoReferencia, solicitudId, cotizacionId, recibidaEn]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        estado:
+          const: completada
+        perfilamientoReferencia:
+          type: string
+          description: Referencia opaca del perfil persistido.
+        solicitudId:
+          type: string
+        cotizacionId:
+          type: string
+          format: uuid
+        recibidaEn:
+          type: string
+          format: date-time
     IniciarPerfilamientoHipotecario:
       type: object
       additionalProperties: false
@@ -728,6 +947,10 @@ components:
         operationId:
           type: string
           format: uuid
+        productoId:
+          type: string
+          const: mortgage-life
+          default: mortgage-life
         socioId:
           type: string
           minLength: 1
@@ -795,6 +1018,9 @@ components:
         - cotizacionId
         - recibidaEn
       properties:
+        productoId:
+          type: string
+          const: mortgage-life
         operationId:
           type: string
           format: uuid
@@ -1033,7 +1259,7 @@ components:
     UsuarioSesion:
       type: object
       additionalProperties: false
-      required: [id, nombre, correo, rol, tipoDocumento, identificacion, telefono]
+      required: [id, nombre, correo, rol]
       properties:
         id:
           type: string
@@ -1047,7 +1273,13 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor, socio]
+        socios:
+          type: array
+          uniqueItems: true
+          description: Organizaciones autorizadas para roles asesor y socio.
+          items:
+            type: string
         tipoDocumento:
           type: string
           enum: [cc, ce, passport, ppt]

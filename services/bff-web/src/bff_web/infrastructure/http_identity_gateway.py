@@ -75,7 +75,11 @@ class HttpIdentityGateway:
             raise IdentityUnavailableError()
         return tuple(_client_from_json(client) for client in clients)
 
-    def _get(self, path: str, correlation_id: str) -> dict[str, Any]:
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        payload = self._get(f"/v1/clientes/{client_id}", correlation_id, allow_not_found=True)
+        return _client_from_json(payload) if payload else None
+
+    def _get(self, path: str, correlation_id: str, allow_not_found: bool = False) -> dict[str, Any]:
         if not self._internal_api_token:
             raise IdentityUnavailableError()
         request = Request(
@@ -89,7 +93,11 @@ class HttpIdentityGateway:
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
                 raw = response.read()
-        except (HTTPError, URLError, OSError, TimeoutError) as error:
+        except HTTPError as error:
+            if allow_not_found and error.code == 404:
+                return {}
+            raise IdentityUnavailableError() from error
+        except (URLError, OSError, TimeoutError) as error:
             raise IdentityUnavailableError() from error
         try:
             payload = json.loads(raw)

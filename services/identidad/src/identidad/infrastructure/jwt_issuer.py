@@ -62,7 +62,7 @@ class RsaJwtIssuer:
             "correo": user.email,
             "client_id": client_id,
         }
-        if user.role == "asesor":
+        if user.role in {"asesor", "socio"}:
             claims["socios"] = list(user.partner_ids)
         return jwt.encode(
             claims,

@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
@@ -103,6 +104,7 @@ class CreditoHipotecarioRequest(_Solicitud):
 
 class IniciarOperacionHipotecariaRequest(_Solicitud):
     operation_id: UUID
+    producto_id: Literal["mortgage-life"] = "mortgage-life"
     socio_id: str = Field(min_length=1, max_length=50)
     asesor_id: UUID
     cliente: ClienteOperacionHipotecariaRequest

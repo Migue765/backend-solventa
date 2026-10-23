@@ -23,6 +23,50 @@ tests/
 
 ## Endpoints
 
+### Admision de socios (SOL-195)
+
+Aplicar `alembic upgrade head` antes del nuevo codigo. La revision
+`admision_socios` (`0012_admision_socios.py`, sobre `operaciones_hipotecarias`)
+agrega `operaciones_socios`, `admision_socios` y `reservas_operaciones`; no modifica
+cotizaciones historicas. Persiste asociacion organizacion/operador/cliente/producto,
+UUID de operacion, solicitud, cotizacion y referencia del perfil.
+
+La ruta interna `POST /v1/socios/solicitudes-cotizacion` requiere el secreto
+`INTERNAL_API_TOKEN`. Solo el BFF la publica: valida JWT socio, organizacion,
+datos del producto y cliente real. Cotizacion revalida el contrato y encapsula
+`RegistrarSolicitud`, manteniendo catalogo, calculadora y consentimiento existentes.
+Se requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`; nunca usa fallback local
+para ingreso socio. `GET` por UUID y `socioId` es solo lectura de la operacion.
+
+`SOCIOS_CUOTA_POR_MINUTO=60` y `SOCIOS_MAX_CONCURRENTES=2` son defaults positivos.
+La ventana de 60 segundos comienza con la primera admision. Cuota y concurrencia
+son **por organizacion**, compartidas entre todos los procesos/pods via PostgreSQL.
+La transaccion de admision bloquea solo la fila del socio y termina antes de HTTP.
+Un rechazo por cuota/concurrencia no inicia perfilamiento. Reservas activas duran
+60s y las dependencias HTTP tienen timeout acotado; un fallo
+libera la reserva y conserva fingerprint. Tras caida, esperar vencimiento antes
+de reintentar. La escritura final exige el token de reserva vigente en su misma
+transaccion: un worker atrasado no puede publicar resultados de un intento reemplazado.
+
+La clave interna y UUID de cotizacion son deterministas por socio/operacion:
+un fallo posterior al commit recupera la solicitud ya creada, sin duplicarla;
+Perfilamiento reutiliza su referencia persistida. No se promete exactamente una
+llamada externa si el proveedor ejecuta pero pierde su respuesta antes de persistir.
+Un reintento completado no consume cuota, uno fallido nuevamente admitido si.
+No se guardan cuerpos originales en reservas ni se retornan PII en recuperacion.
+
+Overrides administrativos para un socio, sin cambiar limites globales:
+
+```sh
+flask --app cotizacion.app:create_app configure-partner-limit --partner-id BANCO-PRUEBA --per-minute 2 --concurrency 1
+```
+
+El comando conserva la ventana y consumo existentes. Para verificar 429 de forma
+acotada usar un socio sintetico nuevo, dos operaciones diferentes y una tercera;
+otra organizacion debe continuar. Para un benchmark aislado de100 muestras usar
+un socio sintetico propio y `--per-minute 200`, sin elevar umbrales de latencia.
+No requiere nuevos secretos, Redis ni servicio paralelo.
+
 Con `COTIZACION_PERFILAMIENTO_HABILITADO=true`, `PERFILAMIENTO_SERVICE_URL` e
 `INTERNAL_API_TOKEN`, cada solicitud genera un perfil remoto autorizado, usa ese
 mismo perfil en el calculo y conserva su evidencia en la instantanea de decision.

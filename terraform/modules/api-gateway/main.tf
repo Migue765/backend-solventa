@@ -160,6 +160,24 @@ resource "aws_lb_listener_rule" "bff_web" {
   tags = var.tags
 }
 
+resource "aws_lb_listener_rule" "bff_web_partners" {
+  listener_arn = aws_lb_listener.this.arn
+  priority     = 13
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.bff_web.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/v1/socios/*", "/v1/asesor/*", "/v1/perfilamientos-hipotecarios"]
+    }
+  }
+
+  tags = var.tags
+}
+
 resource "aws_lb_listener_rule" "bff_web_consents" {
   listener_arn = aws_lb_listener.this.arn
   priority     = 12
@@ -276,8 +294,8 @@ resource "aws_apigatewayv2_api" "this" {
   cors_configuration {
     allow_origins     = var.cors_allowed_origins
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers     = ["authorization", "content-type", "idempotency-key", "x-correlation-id"]
-    expose_headers    = ["x-correlation-id", "retry-after", "date"]
+    allow_headers     = ["authorization", "content-type", "idempotency-key", "x-correlation-id", "api-version"]
+    expose_headers    = ["x-correlation-id", "retry-after", "date", "api-version"]
     max_age           = 3600
     allow_credentials = false
   }

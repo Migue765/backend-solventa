@@ -44,7 +44,7 @@ def user_to_json(user: User) -> dict[str, object]:
         "correo": user.email,
         "rol": user.role,
     }
-    if user.role == "asesor":
+    if user.role in {"asesor", "socio"}:
         result["socios"] = list(user.partner_ids)
     return result
 

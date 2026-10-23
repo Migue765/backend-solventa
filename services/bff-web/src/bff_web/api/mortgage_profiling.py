@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
@@ -44,6 +44,7 @@ class CreditPayload(_Payload):
 
 class StartPayload(_Payload):
     operation_id: UUID
+    product_id: Literal["mortgage-life"] = Field(default="mortgage-life", alias="productoId")
     partner_id: str = Field(alias="socioId", min_length=1, max_length=50)
     client: ClientPayload = Field(alias="cliente")
     credit: CreditPayload = Field(alias="credito")
@@ -77,6 +78,10 @@ def start() -> tuple[Response, int] | Response:
     claims = _advisor_claims()
     if claims is None:
         return invalid_session_response()
+    if request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "version_no_soportada", "Version no soportada", "Usa la version 1 de la API."
+        )
     try:
         payload = StartPayload.model_validate(request.get_json(silent=False))
         idempotency_key = UUID(request.headers["Idempotency-Key"])
@@ -89,14 +94,10 @@ def start() -> tuple[Response, int] | Response:
             403,
             "socio_no_autorizado",
             "Socio no autorizado",
-            "El asesor no esta autorizado para operar en este socio.",
+            "La cuenta no esta autorizada para operar en este socio.",
         )
     identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
-    clients = identity.list_clients(str(g.correlation_id))
-    selected = next(
-        (client for client in clients if client.user_id == payload.client.client_id),
-        None,
-    )
+    selected = identity.get_client(payload.client.client_id, str(g.correlation_id))
     if selected is None:
         return problem_response(
             404,
@@ -113,7 +114,10 @@ def start() -> tuple[Response, int] | Response:
         result = gateway.start(command, str(g.correlation_id))
     except MortgageProfilingError as error:
         return _error_response(error)
-    return jsonify(_result_json(result)), 201
+    response = jsonify(_result_json(result))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response, 201
 
 
 def _advisor_claims() -> AccessClaims | None:
@@ -154,6 +158,7 @@ def _result_json(result: MortgageProfilingResult) -> dict[str, object]:
         "operationId": str(result.operation_id),
         "socioId": result.partner_id,
         "clienteId": str(result.client_id),
+        "productoId": "mortgage-life",
         "estado": result.status,
         "perfilamientoReferencia": result.profiling_reference,
         "solicitudId": result.request_id,
@@ -185,7 +190,15 @@ def _error_response(error: MortgageProfilingError) -> Response:
         ),
         "perfil_vencido": ("perfilamiento_fallido", "Perfilamiento fallido"),
         "regla_de_negocio": ("perfilamiento_fallido", "Perfilamiento fallido"),
+        "operacion_en_curso": ("operacion_en_curso", "Operacion en curso"),
+        "cuota_socio_excedida": ("cuota_socio_excedida", "Cuota del socio excedida"),
+        "socio_ocupado": ("socio_ocupado", "Socio ocupado"),
+        "operacion_no_encontrada": ("operacion_no_encontrada", "Operacion no encontrada"),
+        "operacion_reintentable": ("operacion_reintentable", "Operacion sin resultado"),
     }
     code, title = public.get(error.code, ("servicio_no_disponible", "Servicio no disponible"))
     status = error.status if error.code in public else 503
-    return problem_response(status, code, title, "No fue posible completar el perfilamiento.")
+    response = problem_response(status, code, title, "No fue posible completar el perfilamiento.")
+    if error.retry_after is not None:
+        response.headers["Retry-After"] = str(error.retry_after)
+    return response

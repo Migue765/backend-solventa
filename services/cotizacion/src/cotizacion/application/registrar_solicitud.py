@@ -33,6 +33,7 @@ class RegistrarSolicitudComando:
     idempotency_key: UUID
     consentimiento_id: UUID | None = None
     consentimiento_version: int | None = None
+    cotizacion_id: UUID | None = None
 
 
 class RegistrarSolicitud:
@@ -76,6 +77,7 @@ class RegistrarSolicitud:
             deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
+            cotizacion_id=comando.cotizacion_id or uuid4(),
             cliente_id=comando.cliente_id,
             producto_id=producto.producto_interno_id,
             coberturas=[cobertura],

@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from identidad.api import advisors, consents, health, oauth, users, wellknown
+from identidad.api.schemas import RegisterRequest
 from identidad.application.ports import LoginAttemptLimiter
 from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
@@ -111,6 +112,29 @@ def create_app(
     ) -> None:
         user = User(uuid4(), name.strip(), email.strip().casefold(), "asesor", (partner_id,))
         user_repository.create_advisor(
+            user,
+            hash_password(password, iterations=active_config.password_iterations),
+            partner_id.strip(),
+            partner_name.strip(),
+        )
+        click.echo(str(user.user_id))
+
+    @app.cli.command("create-partner-user")
+    @click.option("--name", required=True)
+    @click.option("--email", required=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+    @click.option("--partner-id", required=True)
+    @click.option("--partner-name", required=True)
+    def create_partner_user(
+        name: str, email: str, password: str, partner_id: str, partner_name: str
+    ) -> None:
+        payload = RegisterRequest(nombre=name.strip(), correo=email.strip(), contrasena=password)
+        if not partner_name.strip() or len(partner_name.strip()) > 120:
+            raise click.BadParameter("Nombre del socio invalido.", param_hint="partner-name")
+        user = User(
+            uuid4(), payload.nombre, str(payload.correo).casefold(), "socio", (partner_id.strip(),)
+        )
+        user_repository.create_partner_user(
             user,
             hash_password(password, iterations=active_config.password_iterations),
             partner_id.strip(),

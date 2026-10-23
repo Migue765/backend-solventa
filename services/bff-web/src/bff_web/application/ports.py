@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from bff_web.domain.auth import AccessClaims, TokenSet, User
 
@@ -17,6 +18,8 @@ class IdentityGateway(Protocol):
     def revoke(self, refresh_token: str, correlation_id: str) -> None: ...
 
     def list_clients(self, correlation_id: str) -> tuple[User, ...]: ...
+
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None: ...
 
 
 class TokenVerifier(Protocol):

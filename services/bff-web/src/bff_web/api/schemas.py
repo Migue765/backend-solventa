@@ -33,12 +33,15 @@ class LogoutRequest(BaseModel):
 
 
 def user_to_json(user: User) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": str(user.user_id),
         "nombre": user.name,
         "correo": user.email,
         "rol": user.role,
     }
+    if user.role in {"asesor", "socio"}:
+        result["socios"] = list(user.partner_ids)
+    return result
 
 
 def created_user_to_json(user: User) -> dict[str, object]:

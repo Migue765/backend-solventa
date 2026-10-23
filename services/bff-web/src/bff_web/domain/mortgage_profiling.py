@@ -46,7 +46,8 @@ class MortgageProfilingResult:
 
 
 class MortgageProfilingError(Exception):
-    def __init__(self, code: str, status: int) -> None:
+    def __init__(self, code: str, status: int, retry_after: int | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.status = status
+        self.retry_after = retry_after

@@ -286,11 +286,11 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente, asesor]
+          enum: [cliente, asesor, socio]
         socios:
           type: array
           uniqueItems: true
-          description: Socios activos autorizados; presente para rol asesor.
+          description: Socios activos autorizados; presente para rol asesor o socio.
           items:
             type: string
     ClienteRegistrado:
@@ -367,7 +367,7 @@ components:
           description: Vida del refresh token en segundos (web 28800, movil 2592000).
         scope:
           type: string
-          enum: [cliente, asesor]
+          enum: [cliente, asesor, socio]
         usuario:
           $ref: "#/components/schemas/Usuario"
     SolicitudRevocacion:

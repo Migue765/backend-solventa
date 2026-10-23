@@ -218,6 +218,10 @@ class FakeIdentity:
         self._record("list_clients", correlation_id)
         return self.clients
 
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        self._record("get_client", client_id, correlation_id)
+        return next((client for client in self.clients if client.user_id == client_id), None)
+
 
 def rejected(status: int, code: str, retry_after: int | None = None) -> IdentityRejectedError:
     return IdentityRejectedError(status, code, retry_after)

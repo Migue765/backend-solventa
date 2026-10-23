@@ -25,6 +25,81 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Plataforma de socios (SOL-195)
+
+El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y
+JWT del canal web, con `scope: socio` y claim `socios` obtenido de Identidad.
+Login y `/v1/sesiones/actual` incluyen `usuario.socios` para estos operadores.
+`GET /v1/socios/actual` devuelve `apiVersion: "1"`, `usuario`, `socios` (cada
+organizacion con `socioId` y los IDs de productos disponibles del catalogo) y
+`alcances: ["perfilamientos:crear"]`. No hay registro publico de socios.
+
+`POST /v1/socios/solicitudes-cotizacion` integra **todos los productos actuales**
+con el motor y la persistencia principales, no una simulacion paralela:
+
+```json
+{
+  "operationId": "11111111-1111-4111-8111-111111111111",
+  "socioId": "BANCO-001",
+  "productoId": "automotive",
+  "datosProducto": {"vehiclePlate": "ABC123"},
+  "cliente": {
+    "clienteId": "22222222-2222-4222-8222-222222222222",
+    "tipoCliente": "persona_natural",
+    "tipoDocumento": "cc",
+    "numeroDocumento": "1023456789",
+    "telefono": "+573001234567"
+  },
+  "consentimientoId": "33333333-3333-4333-8333-333333333333",
+  "consentimientoVersion": 1
+}
+```
+
+Exige `Idempotency-Key` igual a `operationId`. `API-Version: 1` es opcional;
+otra version devuelve `400 version_no_soportada`. `datosProducto` reutiliza
+exactamente el contrato vigente de solicitudes de clientes. Se consulta al
+cliente por UUID en Identidad; el correo y el usuario operador no son campos
+editables. No se publica un catalogo global de clientes a socios. La pertenencia
+del operador al socio se comprueba antes de consultar dependencias.
+
+Respuesta `201`: `{operationId,socioId,clienteId,productoId,estado:"completada",
+perfilamientoReferencia,solicitudId,cotizacionId,recibidaEn}`.
+`perfilamientoReferencia` es una referencia opaca; `cotizacionId` es UUID.
+La solicitud queda disponible en el flujo habitual del **cliente titular**.
+El consentimiento debe haber sido otorgado por ese cliente mediante SOL-203;
+el socio no puede otorgarlo por el cliente. Ausente/revocado/vencido/version
+incorrecta rechaza la operacion antes de consultar fuentes.
+
+Repetir POST con mismo UUID y cuerpo recupera la misma operacion, incluso entre
+replicas. `GET /v1/socios/solicitudes-cotizacion/{operationId}?socioId=...`
+recupera el mismo resultado sin repetir perfilamiento ni necesitar datos personales.
+Devuelve `404 operacion_no_encontrada`, `409 operacion_en_curso` o
+`409 operacion_reintentable` si no hay resultado. GET nunca reanuda;
+el ultimo caso necesita POST original. `409 idempotencia_conflicto` impide
+reutilizar la clave con otros datos. La admision generica garantiza UUID global
+unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
+propietario. Reintentos y lecturas siguen aislados por organizacion.
+
+Errores previos a perfilamiento: `400 solicitud_invalida`, `401 sesion_invalida`,
+`403 alcance_insuficiente`/`socio_no_autorizado`, `404 cliente_no_encontrado`.
+Admision persistente de Cotizacion devuelve `429 cuota_socio_excedida` o
+`socio_ocupado` con `Retry-After`; un duplicado en curso da `409` con ese header.
+Fallos de dependencias devuelven `503`, nunca una cotizacion artificial.
+Respuestas llevan `Cache-Control: no-store` y `X-Correlation-ID`.
+
+HU46 conserva `/v1/perfilamientos-hipotecarios` y `/v1/asesor/clientes` para asesor.
+Para socio, vida hipotecaria se cotiza en la ruta generica usando
+`productoId: "mortgage-life"` y los datos del producto del catalogo.
+La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
+permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
+siempre debe pasar por autenticacion del BFF.
+
+Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
+`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones automotrices por HTTP local
+entre servicios/SQLite con umbrales p95 250ms y p99 500ms. No acredita SLA AWS:
+medir tambien el gateway publico regional, con la ubicacion del generador,
+100 o mas muestras por producto, errores, cuotas y concurrencia entre socios.
+
 | Método   | Ruta                              | Auth   | Descripción                                   |
 | -------- | --------------------------------- | ------ | --------------------------------------------- |
 | `POST`   | `/v1/usuarios`                    | No     | Registra un usuario cliente (proxy a identidad) |

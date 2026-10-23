@@ -120,7 +120,7 @@ def test_advisor_starts_operation_with_authoritative_context(
     assert gateway.command.partner_id == "BANCO-001"
     assert gateway.command.client.client_id == USER.user_id
     assert gateway.command.client.email == USER.email
-    assert identity.calls[-1][0] == "list_clients"
+    assert identity.calls[-1][0] == "get_client"
 
 
 def test_rejects_partner_outside_advisor_claims(app: Flask, keypair: KeyPair) -> None:
