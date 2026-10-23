@@ -4,11 +4,19 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, String, UniqueConstraint, create_engine, func, select
+from sqlalchemy import JSON, String, UniqueConstraint, create_engine, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConsentimiento, Perfil
+from perfilamiento.domain import (
+    Consentimiento,
+    ErrorPerfilamiento,
+    EventoConsentimiento,
+    Fuente,
+    Perfil,
+)
 
 
 class Base(DeclarativeBase):
@@ -34,11 +42,29 @@ class ReferenciaPerfilModel(Base):
     perfil_id: Mapped[UUID] = mapped_column(unique=True)
 
 
+class VersionPerfilModel(Base):
+    __tablename__ = "versiones_perfilamiento"
+
+    cliente_id: Mapped[UUID] = mapped_column(primary_key=True)
+    ultima_version: Mapped[int]
+
+
 class ConsultaModel(Base):
     __tablename__ = "consultas_perfilamiento"
 
     consulta_id: Mapped[UUID] = mapped_column(primary_key=True)
     contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
+class FuenteCacheModel(Base):
+    __tablename__ = "cache_fuentes"
+
+    cliente_id: Mapped[UUID] = mapped_column(primary_key=True)
+    consentimiento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    consentimiento_version: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(String(64), primary_key=True)
+    contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+    hash_contenido: Mapped[str] = mapped_column(String(64))
 
 
 class EventoConsentimientoModel(Base):
@@ -66,17 +92,40 @@ class RepositorioPerfiles:
     def inicializar(self) -> None:
         Base.metadata.create_all(self.engine)
 
-    def siguiente_version(self, cliente_id: UUID) -> int:
-        with self._sesiones() as sesion:
-            version = sesion.scalar(
-                select(func.max(PerfilModel.version)).where(PerfilModel.cliente_id == cliente_id)
+    def _siguiente_version(self, sesion: Session, cliente_id: UUID) -> int:
+        insertar = sqlite_insert if self.engine.dialect.name == "sqlite" else pg_insert
+        sesion.execute(
+            insertar(VersionPerfilModel)
+            .values(cliente_id=cliente_id, ultima_version=0)
+            .on_conflict_do_nothing()
+        )
+        historico = (
+            select(func.coalesce(func.max(PerfilModel.version), 0))
+            .where(PerfilModel.cliente_id == cliente_id)
+            .scalar_subquery()
+        )
+        sesion.execute(
+            update(VersionPerfilModel)
+            .where(
+                VersionPerfilModel.cliente_id == cliente_id,
+                VersionPerfilModel.ultima_version < historico,
             )
-            return (version or 0) + 1
+            .values(ultima_version=historico)
+        )
+        return sesion.execute(
+            update(VersionPerfilModel)
+            .where(VersionPerfilModel.cliente_id == cliente_id)
+            .values(ultima_version=VersionPerfilModel.ultima_version + 1)
+            .returning(VersionPerfilModel.ultima_version)
+        ).scalar_one()
 
-    def guardar(self, perfil: Perfil, auditoria: dict[str, object]) -> None:
-        contenido = perfil.model_dump(mode="json", by_alias=True)
+    def guardar(self, perfil: Perfil, auditoria: dict[str, object]) -> Perfil:
         try:
             with self._sesiones.begin() as sesion:
+                perfil = perfil.model_copy(
+                    update={"version": self._siguiente_version(sesion, perfil.cliente_id)}
+                )
+                contenido = perfil.model_dump(mode="json", by_alias=True)
                 sesion.add(
                     PerfilModel(
                         perfil_id=perfil.perfil_id,
@@ -94,8 +143,17 @@ class RepositorioPerfiles:
                     )
                 )
                 sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
+                for fuente in perfil.fuentes:
+                    self._guardar_fuente(
+                        sesion,
+                        perfil.cliente_id,
+                        perfil.consentimiento_id,
+                        perfil.consentimiento_version,
+                        fuente,
+                    )
         except IntegrityError as error:
             raise ErrorPerfilamiento("conflicto_version", 409) from error
+        return perfil
 
     def obtener(self, perfil_id: UUID, cliente_id: UUID) -> Perfil:
         with self._sesiones() as sesion:
@@ -119,9 +177,70 @@ class RepositorioPerfiles:
                 raise ErrorPerfilamiento("perfil_no_integro", 503)
             return Perfil.model_validate(fila.contenido)
 
-    def auditar(self, auditoria: dict[str, object]) -> None:
+    def auditar(
+        self,
+        auditoria: dict[str, object],
+        consentimiento: Consentimiento | None = None,
+        fuentes: tuple[Fuente, ...] = (),
+    ) -> None:
         with self._sesiones.begin() as sesion:
             sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
+            if consentimiento is not None:
+                for fuente in fuentes:
+                    self._guardar_fuente(
+                        sesion,
+                        consentimiento.cliente_id,
+                        consentimiento.consentimiento_id,
+                        consentimiento.version,
+                        fuente,
+                    )
+
+    def _guardar_fuente(
+        self,
+        sesion: Session,
+        cliente_id: UUID,
+        consentimiento_id: UUID,
+        version: int,
+        fuente: Fuente,
+    ) -> None:
+        contenido = fuente.model_dump(mode="json", by_alias=True)
+        insertar = sqlite_insert if self.engine.dialect.name == "sqlite" else pg_insert
+        sentencia = insertar(FuenteCacheModel).values(
+            cliente_id=cliente_id,
+            consentimiento_id=consentimiento_id,
+            consentimiento_version=version,
+            nombre=fuente.nombre,
+            contenido=contenido,
+            hash_contenido=_hash(contenido),
+        )
+        sesion.execute(
+            sentencia.on_conflict_do_update(
+                index_elements=[
+                    "cliente_id",
+                    "consentimiento_id",
+                    "consentimiento_version",
+                    "nombre",
+                ],
+                set_={"contenido": contenido, "hash_contenido": _hash(contenido)},
+            )
+        )
+
+    def buscar_fuente(self, consentimiento: Consentimiento, nombre: str) -> Fuente | None:
+        with self._sesiones() as sesion:
+            fila = sesion.get(
+                FuenteCacheModel,
+                (
+                    consentimiento.cliente_id,
+                    consentimiento.consentimiento_id,
+                    consentimiento.version,
+                    nombre,
+                ),
+            )
+            if fila is None:
+                return None
+            if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
+                raise ErrorPerfilamiento("fuente_no_integra", 503)
+            return Fuente.model_validate(fila.contenido)
 
     def aplicar_consentimiento(self, evento: EventoConsentimiento) -> dict[str, object]:
         contenido = evento.model_dump(mode="json", by_alias=True)

@@ -16,12 +16,20 @@ from cotizacion.domain.tarifa import PerfilRiesgo
 
 class FuenteResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    nombre: Literal["open_finance", "open_data"]
+    nombre: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     version: str
     consultadaEn: AwareDatetime
     vigenteHasta: AwareDatetime
     simulada: bool
     indicadorRiesgo: Decimal = Field(ge=0, le=1)
+
+
+class EstadoFuenteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fuente: str
+    estado: Literal["disponible", "cache", "fallida"]
+    intentos: int = Field(ge=0, le=2)
+    motivo: str | None = None
 
 
 class PerfilResponse(BaseModel):
@@ -39,6 +47,7 @@ class PerfilResponse(BaseModel):
     vigenteHasta: AwareDatetime
     fuentes: tuple[FuenteResponse, ...]
     fallbackUsed: bool
+    estadoFuentes: tuple[EstadoFuenteResponse, ...] = ()
 
 
 class ProveedorPerfilHttp:
@@ -127,10 +136,23 @@ class ProveedorPerfilHttp:
         if (
             payload.clienteId != cliente_id
             or not payload.calculadoEn <= ahora < payload.vigenteHasta
-            or len(payload.fuentes) != 2
-            or {fuente.nombre for fuente in payload.fuentes} != {"open_finance", "open_data"}
+            or len(payload.fuentes) != len({fuente.nombre for fuente in payload.fuentes})
+            or not {"open_finance", "open_data"}.issubset(
+                fuente.nombre for fuente in payload.fuentes
+            )
             or any(
                 not fuente.consultadaEn <= ahora < fuente.vigenteHasta for fuente in payload.fuentes
+            )
+            or payload.fallbackUsed
+            != any(estado.estado == "cache" for estado in payload.estadoFuentes)
+            or (
+                payload.estadoFuentes
+                and (
+                    len(payload.estadoFuentes) != len(payload.fuentes)
+                    or {estado.fuente for estado in payload.estadoFuentes}
+                    != {fuente.nombre for fuente in payload.fuentes}
+                    or any(estado.estado == "fallida" for estado in payload.estadoFuentes)
+                )
             )
         ):
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)

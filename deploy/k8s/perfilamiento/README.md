@@ -96,3 +96,36 @@ aditiva no cambia el procedimiento historico `stage/retire` de retirada HU11 des
 Publicar esta hotfix hacia `main` con revision/checks requeridos, y propagar a
 `develop` mediante el backport habitual. No aplicar Terraform global: su drift
 ajeno a esta migracion no esta autorizado.
+
+## SOL-201
+
+El rollout es coordinado y no crea servicios alternativos ni cambia los secretos:
+
+1. Publicar Cotizacion con el consumidor `estadoFuentes` opcional y nombres de fuente
+   extensibles; todavia acepta los perfiles anteriores. Alinear el guard del frontend
+   para aceptar fallback explicito vigente; conservar todas las validaciones de consentimiento.
+2. Con la imagen nueva de Perfilamiento, ejecutar `migrate-job.yaml` contra
+   `perfilamiento-runtime/PERFILAMIENTO_DATABASE_URL`. El comando exacto del Job es
+   `python -m flask --app perfilamiento.app init-db`; el pipeline existente lo ejecuta con
+   `SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true`.
+   Esperar Job completado antes de publicar el Deployment. Crea `cache_fuentes` y
+   `versiones_perfilamiento`, ademas de las tablas existentes si faltan. No altera columnas
+   ni borra perfiles/eventos/auditoria. Los contadores se inicializan desde el historial al
+   primer guardado de cada cliente.
+3. Publicar la misma imagen de Perfilamiento en su Deployment existente. Mantener
+   `COTIZACION_PERFILAMIENTO_HABILITADO=true` y la URL productiva actual de Cotizacion.
+   No hay variables nuevas obligatorias; los limites estan en `PoliticaConsultas`.
+4. Tras el rollout SOL-203/SOL-326, comprobar desde la aplicacion consentimiento nuevo
+   explicito, cotizacion, GET de perfil y persistencia; negar consentimiento revocado,
+   vencido o legado. Correlacionar auditoria de cada dependencia con HTTP extremo a extremo.
+   Pruebas locales cubren fallos, retries, breaker y timeout con una fuente que tarda 800 ms;
+   no inyectar fallas globales en produccion para repetirlas.
+
+El cambio no ejecuta ni reconfigura el Outbox. Conserva los pasos de Identidad0003/0004 y
+su consumidor establecidos por el operador. La aprobacion historica sin evidencia completa
+no habilita cache; requiere nueva decision explicita.
+
+Para revertir, conservar las tablas aditivas. No volver a un consumidor Cotizacion que
+rechace `estadoFuentes` mientras se lean perfiles con ese campo. Mantener el consumidor
+compatible y decidir una imagen de Perfilamiento correctiva con el operador; no ejecutar
+`rollout undo` ciego ni borrar evidencias para hacer pasar una imagen antigua.
