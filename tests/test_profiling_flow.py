@@ -11,6 +11,7 @@ from urllib.error import URLError
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from bff_web.app import create_app as create_bff
@@ -379,6 +380,27 @@ def test_authorized_cached_source_reaches_quote_and_is_explicit(
     assert profile["fuentes"][1] == original["fuentes"][1]
     assert profile["estadoFuentes"][1]["estado"] == "cache"
     assert profile["estadoFuentes"][1]["motivo"] == "fuente_no_disponible"
+    contract = yaml.safe_load(
+        (ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text(encoding="utf-8")
+    )
+    validator = Draft202012Validator(
+        contract["components"]["schemas"]["Perfilamiento"], format_checker=FormatChecker()
+    )
+    validator.validate(profile)
+    validator.validate(original)
+    without_metadata = {key: value for key, value in original.items() if key != "estadoFuentes"}
+    validator.validate(without_metadata)
+    assert not validator.is_valid({**without_metadata, "fallbackUsed": True})
+    assert not validator.is_valid({**profile, "fallbackUsed": False})
+    extended = {
+        **profile,
+        "fuentes": [*profile["fuentes"], {**profile["fuentes"][0], "nombre": "fuente_adicional"}],
+        "estadoFuentes": [
+            *profile["estadoFuentes"],
+            {**profile["estadoFuentes"][0], "fuente": "fuente_adicional"},
+        ],
+    }
+    validator.validate(extended)
     with Session(create_engine(flow.quote_database)) as session:
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 2
 
