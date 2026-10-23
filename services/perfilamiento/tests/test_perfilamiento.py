@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
+from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,9 +13,12 @@ from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConse
 from perfilamiento.persistence import (
     ConsultaModel,
     EventoConsentimientoModel,
+    FuenteCacheModel,
     PerfilModel,
     RepositorioPerfiles,
+    VersionPerfilModel,
 )
+from perfilamiento.resilience import CircuitBreaker, EjecutorAcotado, PoliticaConsultas
 from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
@@ -240,6 +244,416 @@ def test_no_entrega_perfil_alterado(repo: RepositorioPerfiles) -> None:
         fila.contenido = {**fila.contenido, "score": "0.01"}
     with pytest.raises(ErrorPerfilamiento, match="perfil_no_integro"):
         servicio.obtener(perfil.perfil_id, cliente_id, "corr-integridad")
+
+
+class FuenteControlada:
+    nombre = "open_data"
+
+    def __init__(self) -> None:
+        self.llamadas = 0
+        self.falla = False
+        self.demora = 0.0
+
+    def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+        self.llamadas += 1
+        sleep(self.demora)
+        if self.falla:
+            raise OSError("numero de cuenta y secreto que nunca deben salir del adaptador")
+        return FuenteMock("open_data").consultar(cliente_id, ahora)
+
+
+def test_fallback_cache_durable_breaker_y_parcialidad(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    fuente = FuenteControlada()
+    servicio = ConsultarPerfil(repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA)
+    original = servicio.generar(cliente, uuid4(), "original")
+    fuente.falla = True
+    for _ in range(3):
+        perfil = servicio.generar(cliente, uuid4(), "degradado")
+        assert perfil.fallback_used
+        assert perfil.fuentes[1] == original.fuentes[1]
+        assert perfil.estado_fuentes[0].estado == "disponible"
+        assert perfil.estado_fuentes[1].estado == "cache"
+        assert perfil.estado_fuentes[1].intentos == 2
+    assert fuente.llamadas == 7
+    perfil = servicio.generar(cliente, uuid4(), "abierto")
+    assert fuente.llamadas == 7
+    assert perfil.estado_fuentes[1].motivo == "circuito_abierto"
+    assert perfil.estado_fuentes[1].intentos == 0
+    reiniciado = ConsultarPerfil(
+        RepositorioPerfiles(str(repo.engine.url)),
+        permisos,
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+    )
+    assert reiniciado.generar(cliente, uuid4(), "reinicio").fallback_used
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(FuenteCacheModel)) == 2
+        contenido = str([row.contenido for row in session.scalars(select(ConsultaModel))])
+        assert "numero de cuenta" not in contenido
+        assert "objetivoExcedido" in contenido
+
+
+@pytest.mark.parametrize("cambio", ["revocado", "rechazado", "version", "vencido", "legado", "id"])
+def test_cache_nunca_amplia_ni_rehabilita_consentimiento(
+    repo: RepositorioPerfiles, cambio: str
+) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    fuente = FuenteControlada()
+    servicio = ConsultarPerfil(repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA)
+    servicio.generar(cliente, uuid4(), "original")
+    assert permisos.actual is not None
+    cambios: dict[str, dict[str, object]] = {
+        "revocado": {"estado": "revocado"},
+        "rechazado": {"estado": "rechazado"},
+        "version": {"version": 2},
+        "vencido": {"vigente_hasta": AHORA},
+        "legado": {"version_terminos": None},
+        "id": {"consentimiento_id": uuid4()},
+    }
+    permisos.actual = permisos.actual.model_copy(update=cambios[cambio])
+    fuente.falla = True
+    with pytest.raises(ErrorPerfilamiento) as caught:
+        servicio.generar(cliente, uuid4(), "sin-cache")
+    assert caught.value.status == (503 if cambio in {"version", "id"} else 403)
+    assert fuente.llamadas == (3 if cambio in {"version", "id"} else 1)
+
+
+def test_reintento_vuelve_a_autorizar_y_no_reutiliza_cache_revocada(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+
+    class Revocadora(FuenteControlada):
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            self.llamadas += 1
+            assert permisos.actual is not None
+            permisos.actual = permisos.actual.model_copy(update={"estado": "revocado"})
+            raise OSError("fallo transitorio")
+
+    fuente = Revocadora()
+    servicio = ConsultarPerfil(repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA)
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.generar(cliente, uuid4(), "revocacion-en-reintento")
+    assert fuente.llamadas == 1
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(FuenteCacheModel)) == 0
+
+
+def test_timeout_real_mayor_700ms_no_espera_ni_reintenta(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    fuente = FuenteControlada()
+    fuente.demora = 0.8
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+    )
+    inicio = monotonic()
+    with pytest.raises(ErrorPerfilamiento, match="fuentes_no_disponibles") as caught:
+        servicio.generar(cliente, uuid4(), "timeout-real")
+    duracion = monotonic() - inicio
+    assert duracion < 0.7
+    assert caught.value.fuentes is not None
+    assert caught.value.fuentes[1]["motivo"] == "dependencia_timeout"
+    assert fuente.llamadas == 1
+    sleep(0.8)
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
+        cache = session.scalars(select(FuenteCacheModel)).all()
+        assert [fila.nombre for fila in cache] == ["open_finance"]
+        auditoria = session.scalars(select(ConsultaModel)).one().contenido
+        assert isinstance(auditoria["duracionMs"], (int, float))
+        assert auditoria["duracionMs"] < 450
+
+
+def test_timeout_con_cache_vigente_es_degradacion_explicita(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    fuente = FuenteControlada()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+    )
+    servicio.generar(cliente, uuid4(), "cache")
+    fuente.demora = 0.8
+    inicio = monotonic()
+    perfil = servicio.generar(cliente, uuid4(), "lenta")
+    assert monotonic() - inicio < 0.7
+    assert perfil.fallback_used
+    assert perfil.estado_fuentes[1].motivo == "dependencia_timeout"
+    sleep(0.8)
+
+
+@pytest.mark.parametrize("nativo", [True, False])
+def test_timeout_del_transporte_no_se_reintenta(repo: RepositorioPerfiles, nativo: bool) -> None:
+    cliente = uuid4()
+
+    class TimeoutFuente(FuenteControlada):
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            self.llamadas += 1
+            if nativo:
+                raise TimeoutError("detalle privado del transporte")
+            raise ErrorPerfilamiento("dependencia_timeout", 503)
+
+    fuente = TimeoutFuente()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+    )
+    with pytest.raises(ErrorPerfilamiento, match="fuentes_no_disponibles") as caught:
+        servicio.generar(cliente, uuid4(), "timeout-nativo")
+    assert fuente.llamadas == 1
+    assert caught.value.fuentes is not None
+    assert caught.value.fuentes[1]["motivo"] == "dependencia_timeout"
+
+
+def test_cache_vencida_o_alterada_no_es_fallback(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    fuente = FuenteControlada()
+    permisos = ConsentimientosPrueba(cliente)
+    servicio = ConsultarPerfil(repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA)
+    servicio.generar(cliente, uuid4(), "cache")
+    fuente.falla = True
+    vencido = ConsultarPerfil(
+        repo,
+        permisos,
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA + timedelta(minutes=15),
+    )
+    with pytest.raises(ErrorPerfilamiento, match="fuentes_no_disponibles"):
+        vencido.generar(cliente, uuid4(), "vencido")
+    with Session(repo.engine) as session, session.begin():
+        fila = session.scalars(
+            select(FuenteCacheModel).where(FuenteCacheModel.nombre == "open_data")
+        ).one()
+        fila.contenido = {**fila.contenido, "indicadorRiesgo": "0.01"}
+    with pytest.raises(ErrorPerfilamiento, match="fuente_no_integra"):
+        servicio.generar(cliente, uuid4(), "alterada")
+
+
+def test_fuente_adicional_normalizada_sin_cambiar_consumidor(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    assert permisos.actual is not None
+    permisos.actual = permisos.actual.model_copy(
+        update={
+            "fuentes": ("open_finance", "open_data", "fuente_adicional"),
+            "alcances": ("open_finance", "open_data", "fuente_adicional"),
+        }
+    )
+
+    class Adicional:
+        nombre = "fuente_adicional"
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            return (
+                FuenteMock("open_data")
+                .consultar(cliente_id, ahora)
+                .model_copy(update={"nombre": self.nombre})
+            )
+
+    servicio = ConsultarPerfil(
+        repo,
+        permisos,
+        (FuenteMock("open_finance"), FuenteMock("open_data"), Adicional()),
+        lambda: AHORA,
+    )
+    perfil = servicio.generar(cliente, uuid4(), "extension")
+    assert len(perfil.fuentes) == 3
+    assert perfil.fuentes[2].nombre == "fuente_adicional"
+    assert servicio.obtener(perfil.perfil_id, cliente, "lectura") == perfil
+    permisos.actual = permisos.actual.model_copy(update={"datos": ("movimientos",)})
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.generar(cliente, uuid4(), "datos-no-autorizados")
+
+
+def test_breaker_solo_admite_una_sonda_y_se_recupera(monkeypatch: pytest.MonkeyPatch) -> None:
+    tiempo = [1.0]
+    monkeypatch.setattr("perfilamiento.resilience.monotonic", lambda: tiempo[0])
+    breaker = CircuitBreaker(PoliticaConsultas(fallos_para_abrir=1))
+    assert breaker.permitir()
+    breaker.registrar(False)
+    assert not breaker.permitir()
+    tiempo[0] += 30
+    assert breaker.permitir()
+    assert not breaker.permitir()
+    breaker.registrar(True)
+    assert breaker.permitir()
+
+
+def test_timeout_no_acumula_trabajo_ni_encola_consultas() -> None:
+    ejecutor = EjecutorAcotado(capacidad=1)
+    with pytest.raises(ErrorPerfilamiento, match="dependencia_timeout"):
+        ejecutor.ejecutar(lambda: sleep(0.1), 0.01)
+    with pytest.raises(ErrorPerfilamiento, match="dependencia_saturada"):
+        ejecutor.ejecutar(lambda: pytest.fail("No debe encolar"), 0.01)
+    sleep(0.12)
+    assert ejecutor.ejecutar(lambda: "recuperado", 0.1) == "recuperado"
+
+
+def test_api_error_parcial_conserva_datos_validos_sin_exponerlos(
+    repo: RepositorioPerfiles, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    fuente = FuenteControlada()
+    fuente.falla = True
+    app = create_app(
+        Config(internal_api_token="token-prueba", database_url=str(repo.engine.url)),
+        permisos,
+        (FuenteMock("open_finance"), fuente),
+    )
+    monkeypatch.setattr(app.extensions["consultar_perfil"], "_reloj", lambda: AHORA)
+    response = app.test_client().post(
+        "/v1/perfiles",
+        headers={"Authorization": "Bearer token-prueba"},
+        json={
+            "clienteId": str(cliente),
+            "referenciaId": str(uuid4()),
+            "fuentes": ["open_finance", "open_data"],
+            "finalidad": "cotizacion",
+            "datos": ["indicador_riesgo"],
+        },
+    )
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["fuentes"] == [
+        {"fuente": "open_finance", "estado": "disponible", "intentos": 1},
+        {
+            "fuente": "open_data",
+            "estado": "fallida",
+            "intentos": 2,
+            "motivo": "fuente_no_disponible",
+        },
+    ]
+    assert "indicadorRiesgo" not in response.text
+    assert "numero de cuenta" not in response.text
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
+        guardada = session.scalars(select(FuenteCacheModel)).one()
+        assert guardada.nombre == "open_finance"
+        assert guardada.contenido["indicadorRiesgo"] == "0.50"
+
+
+@pytest.mark.parametrize(
+    "consulta",
+    [
+        {"finalidad": "marketing"},
+        {"datos": ("movimientos",)},
+        {"fuentes_solicitadas": ("open_finance", "open_data", "sin_permiso")},
+    ],
+)
+def test_consulta_solicitada_fuera_del_permiso_no_invoca(
+    repo: RepositorioPerfiles,
+    consulta: dict[str, object],
+) -> None:
+    cliente = uuid4()
+    fuente = FuenteControlada()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+    )
+    if "finalidad" in consulta:
+        with pytest.raises(ErrorPerfilamiento, match="consulta_no_autorizada"):
+            servicio.generar(cliente, uuid4(), "finalidad", finalidad="marketing")
+    elif "datos" in consulta:
+        with pytest.raises(ErrorPerfilamiento, match="consulta_no_autorizada"):
+            servicio.generar(cliente, uuid4(), "datos", datos=("movimientos",))
+    else:
+        with pytest.raises(ErrorPerfilamiento, match="fuentes_invalidas"):
+            servicio.generar(
+                cliente,
+                uuid4(),
+                "fuente",
+                fuentes_solicitadas=("open_finance", "open_data", "sin_permiso"),
+            )
+    assert fuente.llamadas == 0
+
+
+def test_version_y_cache_atomicas_para_dos_consultas_mismo_cliente(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente = uuid4()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    barrera = Barrier(2)
+
+    def generar(_: int) -> int:
+        barrera.wait(timeout=5)
+        return servicio.generar(cliente, uuid4(), "concurrente").version
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        versiones = list(executor.map(generar, range(2)))
+    assert sorted(versiones) == [1, 2]
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 2
+        assert session.scalar(select(func.count()).select_from(FuenteCacheModel)) == 2
+
+
+def test_migracion_aditiva_continua_versiones_historicas(repo: RepositorioPerfiles) -> None:
+    cliente = uuid4()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente),
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    primero = servicio.generar(cliente, uuid4(), "historico")
+    VersionPerfilModel.metadata.tables["versiones_perfilamiento"].drop(repo.engine)
+    repo.inicializar()
+    repo.inicializar()
+    segundo = servicio.generar(cliente, uuid4(), "migrado")
+    assert segundo.version == 2
+    assert servicio.obtener(primero.perfil_id, cliente, "historial") == primero
+    with pytest.raises(ErrorPerfilamiento, match="conflicto_version"):
+        repo.guardar(segundo, {"resultado": "duplicado"})
+    tercero = servicio.generar(cliente, uuid4(), "sin-hueco")
+    assert tercero.version == 3
+
+
+@pytest.mark.parametrize("estado", ["sin-metadatos", "duplicados", "fallida", "flag-incoherente"])
+def test_evidencia_fallback_inconsistente_no_se_entrega(
+    repo: RepositorioPerfiles, estado: str
+) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    servicio = ConsultarPerfil(
+        repo,
+        permisos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    perfil = servicio.generar(cliente, uuid4(), "completo")
+    estados = perfil.estado_fuentes
+    if estado == "sin-metadatos":
+        alterado = perfil.model_copy(update={"fallback_used": True, "estado_fuentes": ()})
+    elif estado == "duplicados":
+        alterado = perfil.model_copy(update={"estado_fuentes": (estados[0], estados[0])})
+    elif estado == "fallida":
+        alterado = perfil.model_copy(
+            update={
+                "estado_fuentes": (estados[0], estados[1].model_copy(update={"estado": "fallida"}))
+            }
+        )
+    else:
+        alterado = perfil.model_copy(update={"fallback_used": True})
+    assert permisos.actual is not None
+    with pytest.raises(ErrorPerfilamiento, match="perfil_no_integro"):
+        alterado.validar(permisos.actual, AHORA)
 
 
 def test_events_are_idempotent_durable_and_never_restore_an_old_version(

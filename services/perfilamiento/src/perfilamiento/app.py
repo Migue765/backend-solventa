@@ -54,6 +54,9 @@ class ConsultaRequest(BaseModel):
     referencia_id: UUID = Field(alias="referenciaId")
     consentimiento_id: UUID | None = Field(default=None, alias="consentimientoId")
     consentimiento_version: int | None = Field(default=None, alias="consentimientoVersion", ge=1)
+    fuentes: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    finalidad: str = "cotizacion"
+    datos: tuple[str, ...] = ("indicador_riesgo",)
 
     @model_validator(mode="after")
     def consentimiento_completo(self) -> "ConsultaRequest":
@@ -119,6 +122,9 @@ def create_app(
             g.correlation_id,
             payload.consentimiento_id,
             payload.consentimiento_version,
+            payload.fuentes,
+            payload.finalidad,
+            payload.datos,
         )
         return jsonify(perfil.model_dump(mode="json", by_alias=True)), 201
 
@@ -144,7 +150,10 @@ def create_app(
         logger.warning(
             "Consulta rechazada: %s", error.codigo, extra={"correlationId": g.correlation_id}
         )
-        return jsonify(error=error.codigo, correlationId=g.correlation_id), error.status
+        body: dict[str, object] = {"error": error.codigo, "correlationId": g.correlation_id}
+        if error.fuentes is not None:
+            body["fuentes"] = error.fuentes
+        return jsonify(body), error.status
 
     @app.errorhandler(500)
     def error_interno(error: Exception) -> tuple[Response, int]:

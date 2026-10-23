@@ -965,11 +965,33 @@ components:
           format: date-time
         fallbackUsed:
           type: boolean
-          const: false
+          description: Indica evidencia cache vigente bajo la misma autorizacion; no riesgo parcial.
+        estadoFuentes:
+          type: array
+          description: Metadatos completos por fuente; opcionales solo para perfiles historicos sin fallback.
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, estado, intentos, motivo]
+            properties:
+              fuente:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
+              estado:
+                type: string
+                enum: [disponible, cache]
+              intentos:
+                type: integer
+                minimum: 0
+                maximum: 2
+              motivo:
+                type: [string, "null"]
         fuentes:
           type: array
           minItems: 2
-          maxItems: 2
+          description: Nombres unicos; incluye open_finance y open_data, admite adaptadores adicionales autorizados.
           items:
             type: object
             additionalProperties: false
@@ -977,7 +999,9 @@ components:
             properties:
               nombre:
                 type: string
-                enum: [open_finance, open_data]
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
               version:
                 type: string
               consultadaEn:
@@ -991,6 +1015,27 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+      allOf:
+        - if:
+            properties:
+              fallbackUsed:
+                const: true
+          then:
+            required: [estadoFuentes]
+            properties:
+              estadoFuentes:
+                minItems: 2
+                contains:
+                  properties:
+                    estado:
+                      const: cache
+          else:
+            properties:
+              estadoFuentes:
+                items:
+                  properties:
+                    estado:
+                      const: disponible
     Credenciales:
       type: object
       additionalProperties: false
