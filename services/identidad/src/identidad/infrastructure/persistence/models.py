@@ -39,6 +39,17 @@ class AsesorSocioModel(Base):
     )
 
 
+class UsuarioSocioModel(Base):
+    __tablename__ = "usuarios_socios"
+
+    usuario_id: Mapped[UUID] = mapped_column(
+        ForeignKey("usuarios.usuario_id", ondelete="CASCADE"), primary_key=True
+    )
+    socio_id: Mapped[str] = mapped_column(
+        ForeignKey("socios.socio_id", ondelete="CASCADE"), primary_key=True
+    )
+
+
 class RefreshTokenModel(Base):
     __tablename__ = "refresh_tokens"
 

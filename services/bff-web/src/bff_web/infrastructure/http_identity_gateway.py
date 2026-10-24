@@ -53,6 +53,25 @@ class HttpIdentityGateway:
         )
         return _token_set_from_json(payload)
 
+    def login_challenge(self, correlation_id: str) -> dict[str, object]:
+        return self._get("/oauth/login-challenge", correlation_id, internal=False)
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet:
+        return _token_set_from_json(
+            self._post(
+                "/oauth/token",
+                {
+                    "grant_type": "encrypted_password",
+                    "client_id": "web",
+                    "username": email,
+                    "credencialCifrada": encrypted_credential,
+                },
+                correlation_id,
+            )
+        )
+
     def refresh(self, refresh_token: str, correlation_id: str) -> TokenSet:
         payload = self._post(
             "/oauth/token",
@@ -75,21 +94,37 @@ class HttpIdentityGateway:
             raise IdentityUnavailableError()
         return tuple(_client_from_json(client) for client in clients)
 
-    def _get(self, path: str, correlation_id: str) -> dict[str, Any]:
-        if not self._internal_api_token:
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        payload = self._get(f"/v1/clientes/{client_id}", correlation_id, allow_not_found=True)
+        return _client_from_json(payload) if payload else None
+
+    def _get(
+        self,
+        path: str,
+        correlation_id: str,
+        *,
+        internal: bool = True,
+        allow_not_found: bool = False,
+    ) -> dict[str, Any]:
+        if internal and not self._internal_api_token:
             raise IdentityUnavailableError()
+        headers = {"Accept": "application/json", "X-Correlation-ID": correlation_id}
+        if internal:
+            headers["Authorization"] = f"Bearer {self._internal_api_token}"
         request = Request(
             f"{self._base_url}{path}",
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._internal_api_token}",
-                "X-Correlation-ID": correlation_id,
-            },
+            headers=headers,
         )
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
                 raw = response.read()
-        except (HTTPError, URLError, OSError, TimeoutError) as error:
+        except HTTPError as error:
+            if allow_not_found and error.code == 404:
+                return {}
+            if internal:
+                raise IdentityUnavailableError() from error
+            raise _rejection_from(error) from error
+        except (URLError, OSError, TimeoutError) as error:
             raise IdentityUnavailableError() from error
         try:
             payload = json.loads(raw)

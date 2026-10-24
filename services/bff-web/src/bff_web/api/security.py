@@ -34,3 +34,15 @@ def invalid_session_response() -> Response:
     )
     response.headers["WWW-Authenticate"] = "Bearer"
     return response
+
+
+def partner_claims() -> AccessClaims | Response:
+    try:
+        claims = authenticate()
+    except InvalidAccessTokenError:
+        return invalid_session_response()
+    if claims.user.role != "socio" or claims.scope != "socio" or not claims.user.partner_ids:
+        return problem_response(
+            403, "alcance_insuficiente", "Acceso denegado", "Se requiere una cuenta de socio."
+        )
+    return claims

@@ -37,6 +37,15 @@ class RevokeRequest(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=512)
 
 
+class EncryptedTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    grant_type: Literal["encrypted_password"]
+    client_id: Literal["web"]
+    username: EmailStr = Field(max_length=254)
+    credencialCifrada: str = Field(min_length=1, max_length=8192, strict=True)
+
+
 def user_to_json(user: User) -> dict[str, object]:
     result: dict[str, object] = {
         "id": str(user.user_id),
@@ -44,7 +53,7 @@ def user_to_json(user: User) -> dict[str, object]:
         "correo": user.email,
         "rol": user.role,
     }
-    if user.role == "asesor":
+    if user.role in {"asesor", "socio"}:
         result["socios"] = list(user.partner_ids)
     return result
 

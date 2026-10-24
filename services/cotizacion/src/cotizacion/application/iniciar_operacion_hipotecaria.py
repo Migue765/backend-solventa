@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -18,7 +19,13 @@ from cotizacion.domain.operacion_hipotecaria import OperacionHipotecaria
 class RepositorioOperacionHipotecaria(Protocol):
     def buscar(self, socio_id: str, operation_id: UUID) -> OperacionHipotecaria | None: ...
 
-    def guardar(self, operacion: OperacionHipotecaria) -> None: ...
+    def guardar(self, operacion: OperacionHipotecaria, token: UUID) -> None: ...
+
+
+class AdmisionOperaciones(Protocol):
+    def reservar(
+        self, socio: str, operation_id: UUID, fingerprint: str, *, global_id: bool = False
+    ) -> AbstractContextManager[UUID]: ...
 
 
 @dataclass(frozen=True)
@@ -45,11 +52,13 @@ class IniciarOperacionHipotecaria:
         repositorio: RepositorioOperacionHipotecaria,
         registrar_solicitud: RegistrarSolicitud,
         perfilamiento_habilitado: bool,
+        admision: AdmisionOperaciones,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._repositorio = repositorio
         self._registrar_solicitud = registrar_solicitud
         self._perfilamiento_habilitado = perfilamiento_habilitado
+        self._admision = admision
         self._reloj = reloj
 
     def ejecutar(self, comando: IniciarOperacionHipotecariaComando) -> OperacionHipotecaria:
@@ -62,6 +71,18 @@ class IniciarOperacionHipotecaria:
         if not self._perfilamiento_habilitado:
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
 
+        with self._admision.reservar(comando.socio_id, comando.operation_id, fingerprint) as token:
+            # Otro worker pudo completar la operacion entre la lectura y la reserva.
+            existente = self._repositorio.buscar(comando.socio_id, comando.operation_id)
+            if existente is not None:
+                if existente.request_fingerprint != fingerprint:
+                    raise ConflictoIdempotenciaError()
+                return existente
+            return self._crear(comando, fingerprint, token)
+
+    def _crear(
+        self, comando: IniciarOperacionHipotecariaComando, fingerprint: str, token: UUID
+    ) -> OperacionHipotecaria:
         solicitud = self._registrar_solicitud.ejecutar(
             RegistrarSolicitudComando(
                 cliente_id=comando.cliente_id,
@@ -81,6 +102,10 @@ class IniciarOperacionHipotecaria:
                 ),
                 consentimiento_id=comando.consentimiento_id,
                 consentimiento_version=comando.consentimiento_version,
+                cotizacion_id=uuid5(
+                    NAMESPACE_URL,
+                    f"solventa:cotizacion:{comando.socio_id}:{comando.operation_id}",
+                ),
             )
         )
         instantanea = solicitud.cotizacion.instantanea
@@ -103,7 +128,7 @@ class IniciarOperacionHipotecaria:
             request_fingerprint=fingerprint,
             creada_en=self._reloj(),
         )
-        self._repositorio.guardar(operacion)
+        self._repositorio.guardar(operacion, token)
         return operacion
 
 

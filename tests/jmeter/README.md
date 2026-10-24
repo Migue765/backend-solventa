@@ -138,6 +138,22 @@ Jenkins y k6 conservan su comportamiento.
 python -m tests.jmeter.local_stack --web-port 5000 --mobile-port 5001
 ```
 
+Para probar el frontend con login JWE, instalar los extras de pruebas de identidad
+(`python -m pip install -e "services\identidad[dev]"`) y habilitarlo explícitamente:
+
+```powershell
+python -m tests.jmeter.local_stack --web-port 5592 --mobile-port 5593 --encrypted-login
+```
+
+El flag habilita el contrato cifrado en identidad y BFF web, genera una segunda
+clave RSA efímera en memoria y usa un único `fakeredis` para desafíos y límite de
+intentos. Las llamadas entre servicios siguen usando HTTP real. Registrar usuarios
+sintéticos conserva el contrato existente; login web requiere desafío + JWE.
+Móvil conserva su login. Sin el flag, no cambia el contrato heredado ni los planes JMeter.
+También se admite `LocalStack(directory, encrypted_login_enabled=True)` desde pytest.
+El helper CLI guarda SQLite bajo `reports/solventa-e2e-<id>` dentro del checkout
+y elimina solo ese directorio al cerrar.
+
 Web: `http://127.0.0.1:5000`, rutas `/v1/...`, readiness `/ping`.
 Movil: `http://127.0.0.1:5001`, rutas `/movil/v1/...`, readiness `/ping`.
 Android Emulator puede usar `adb reverse tcp:5001 tcp:5001` y base local
