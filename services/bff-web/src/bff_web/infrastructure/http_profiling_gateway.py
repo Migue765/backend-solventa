@@ -20,12 +20,20 @@ class HttpProfilingGateway:
         )
 
     def set_consent(
-        self, user_id: UUID, authorized: bool, version: int, correlation_id: str
+        self,
+        user_id: UUID,
+        authorized: bool,
+        version: int,
+        correlation_id: str,
+        scope: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        body: dict[str, object] = {"autorizado": authorized, "version": version}
+        if scope is not None:
+            body["solicitud"] = scope
         return self._request(
             f"{self._identity_url}/v1/clientes/{user_id}/consentimiento-perfilamiento",
             correlation_id,
-            {"autorizado": authorized, "version": version},
+            body,
         )
 
     def get_profile(self, user_id: UUID, request_id: str, correlation_id: str) -> dict[str, object]:

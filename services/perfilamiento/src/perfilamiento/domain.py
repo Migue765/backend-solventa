@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class ErrorPerfilamiento(Exception):
@@ -17,15 +17,41 @@ class Documento(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
 
 
+class EventoConsentimiento(Documento):
+    evento_id: UUID = Field(alias="eventoId")
+    cliente_id: UUID = Field(alias="clienteId")
+    consentimiento_id: UUID = Field(alias="consentimientoId")
+    version: int = Field(ge=1, strict=True)
+    tipo: Literal["ConsentimientoAutorizado", "ConsentimientoRechazado", "ConsentimientoRevocado"]
+    estado: Literal["autorizado", "rechazado", "revocado"]
+    efectiva_en: AwareDatetime = Field(alias="efectivaEn")
+    correlation_id: str = Field(alias="correlationId", min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validar_tipo(self) -> "EventoConsentimiento":
+        tipos = {
+            "autorizado": "ConsentimientoAutorizado",
+            "rechazado": "ConsentimientoRechazado",
+            "revocado": "ConsentimientoRevocado",
+        }
+        if tipos[self.estado] != self.tipo:
+            raise ValueError("Tipo de evento incompatible con la decision.")
+        return self
+
+
 class Consentimiento(Documento):
     consentimiento_id: UUID = Field(alias="consentimientoId")
     cliente_id: UUID = Field(alias="clienteId")
     version: int = Field(ge=1)
-    estado: Literal["autorizado", "revocado"]
+    estado: Literal["autorizado", "rechazado", "revocado", "vencido"]
     finalidad: str
     alcances: tuple[str, ...]
     efectiva_en: AwareDatetime = Field(alias="efectivaEn")
     vigente_hasta: AwareDatetime = Field(alias="vigenteHasta")
+    actor_id: UUID | None = Field(default=None, alias="actorId")
+    fuentes: tuple[str, ...] = ()
+    datos: tuple[str, ...] = ()
+    version_terminos: str | None = Field(default=None, alias="versionTerminos")
 
     def validar(self, cliente_id: UUID, ahora: datetime) -> None:
         if (
@@ -33,6 +59,10 @@ class Consentimiento(Documento):
             or self.estado != "autorizado"
             or self.finalidad != "cotizacion"
             or not {"open_finance", "open_data"}.issubset(self.alcances)
+            or not {"open_finance", "open_data"}.issubset(self.fuentes)
+            or "indicador_riesgo" not in self.datos
+            or self.actor_id != cliente_id
+            or self.version_terminos != "1.0"
             or not self.efectiva_en <= ahora < self.vigente_hasta
         ):
             raise ErrorPerfilamiento("consentimiento_no_vigente", 403)

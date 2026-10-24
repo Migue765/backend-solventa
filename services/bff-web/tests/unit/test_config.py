@@ -8,6 +8,7 @@ def test_defaults() -> None:
     assert config.jwt_audience == "solventa-api"
     assert config.identity_timeout_seconds == 5
     assert config.jwks_endpoint == "http://identidad/.well-known/jwks.json"
+    assert config.encrypted_login_enabled is False
 
 
 def test_explicit_jwks_url_wins() -> None:
@@ -58,3 +59,19 @@ def test_session_and_storage_settings_no_longer_exist(monkeypatch: pytest.Monkey
 
     for removed in ("database_url", "redis_url", "session_cookie_name", "cors_allowed_origins"):
         assert not hasattr(config, removed)
+
+
+def test_encrypted_login_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IDENTIDAD_URL", "http://identidad")
+    monkeypatch.setenv("JWT_ISSUER", "https://iss")
+    monkeypatch.setenv("ENCRYPTED_LOGIN_ENABLED", "true")
+    assert Config.from_environment().encrypted_login_enabled
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "enabled", ""])
+def test_invalid_encrypted_login_flag(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("IDENTIDAD_URL", "http://identidad")
+    monkeypatch.setenv("JWT_ISSUER", "https://iss")
+    monkeypatch.setenv("ENCRYPTED_LOGIN_ENABLED", value)
+    with pytest.raises(ValueError, match="ENCRYPTED_LOGIN_ENABLED"):
+        Config.from_environment()

@@ -25,6 +25,8 @@ module = [
     "test_profiling_flow", "test_dashboard_flow", "test_policies_flow",
     "tests.test_dashboard_flow", "tests.test_policies_flow",
     "tests.test_profiling_flow",
+    "test_partner_flow", "tests.test_partner_flow",
+    "tests.jmeter.local_stack", "tests.jmeter.run",
 ]
 disable_error_code = ["import-untyped"]
 

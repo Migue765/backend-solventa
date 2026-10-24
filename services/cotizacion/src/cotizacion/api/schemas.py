@@ -1,11 +1,15 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
+from cotizacion.application.iniciar_operacion_hipotecaria import (
+    IniciarOperacionHipotecariaComando,
+)
 from cotizacion.application.registrar_solicitud import RegistrarSolicitudComando
 from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.datos_producto import validar_datos_producto
@@ -75,6 +79,55 @@ class RegistrarSolicitudRequest(_Solicitud):
             correo=str(self.correo).casefold(),
             telefono=self.telefono,
             idempotency_key=idempotency_key,
+        )
+
+
+class ClienteOperacionHipotecariaRequest(_Solicitud):
+    cliente_id: UUID
+    tipo_documento: str = Field(pattern=r"^(cc|ce|passport|ppt)$")
+    numero_documento: str
+    correo: EmailStr
+    telefono: str = Field(pattern=r"^\+57[0-9]{10}$")
+    fecha_nacimiento: date
+
+    @model_validator(mode="after")
+    def normalizar_documento(self) -> "ClienteOperacionHipotecariaRequest":
+        self.numero_documento = validar_identificacion(self.tipo_documento, self.numero_documento)
+        return self
+
+
+class CreditoHipotecarioRequest(_Solicitud):
+    referencia: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
+    monto: Decimal = Field(ge=1_000_000, decimal_places=0)
+    plazo_meses: int = Field(ge=12, le=360)
+
+
+class IniciarOperacionHipotecariaRequest(_Solicitud):
+    operation_id: UUID
+    producto_id: Literal["mortgage-life"] = "mortgage-life"
+    socio_id: str = Field(min_length=1, max_length=50)
+    asesor_id: UUID
+    cliente: ClienteOperacionHipotecariaRequest
+    credito: CreditoHipotecarioRequest
+    consentimiento_id: UUID
+    consentimiento_version: int = Field(ge=1)
+
+    def a_comando(self) -> IniciarOperacionHipotecariaComando:
+        return IniciarOperacionHipotecariaComando(
+            operation_id=self.operation_id,
+            socio_id=self.socio_id,
+            asesor_id=self.asesor_id,
+            cliente_id=self.cliente.cliente_id,
+            tipo_documento=self.cliente.tipo_documento,
+            numero_documento=self.cliente.numero_documento,
+            correo=str(self.cliente.correo).casefold(),
+            telefono=self.cliente.telefono,
+            fecha_nacimiento=self.cliente.fecha_nacimiento.isoformat(),
+            referencia_credito=self.credito.referencia,
+            monto_credito=self.credito.monto,
+            plazo_meses=self.credito.plazo_meses,
+            consentimiento_id=self.consentimiento_id,
+            consentimiento_version=self.consentimiento_version,
         )
 
 

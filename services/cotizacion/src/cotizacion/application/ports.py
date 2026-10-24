@@ -65,7 +65,13 @@ class ProveedorPerfil(Protocol):
 
 
 class GeneradorPerfil(Protocol):
-    def generar(self, cliente_id: UUID, referencia_id: UUID) -> PerfilRiesgo: ...
+    def generar(
+        self,
+        cliente_id: UUID,
+        referencia_id: UUID,
+        consentimiento_id: UUID | None = None,
+        consentimiento_version: int | None = None,
+    ) -> PerfilRiesgo: ...
 
 
 class Tarificador(Protocol):

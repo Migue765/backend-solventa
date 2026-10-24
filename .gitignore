@@ -55,6 +55,7 @@ secrets.tfvars
 # Python
 .venv/
 .venv-jenkins/
+.venv-jmeter/
 .pip-cache/
 reports/
 venv/

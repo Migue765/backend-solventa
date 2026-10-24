@@ -12,6 +12,13 @@ class LoginRequest(BaseModel):
     contrasena: str = Field(min_length=8, max_length=128)
 
 
+class EncryptedLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correo: EmailStr = Field(max_length=254)
+    credencialCifrada: str = Field(min_length=1, max_length=8192, strict=True)
+
+
 class RegisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,12 +40,15 @@ class LogoutRequest(BaseModel):
 
 
 def user_to_json(user: User) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "id": str(user.user_id),
         "nombre": user.name,
         "correo": user.email,
         "rol": user.role,
     }
+    if user.role in {"asesor", "socio"}:
+        result["socios"] = list(user.partner_ids)
+    return result
 
 
 def created_user_to_json(user: User) -> dict[str, object]:

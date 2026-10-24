@@ -11,7 +11,6 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from identidad.domain.auth import User
 
 ALGORITHM = "RS256"
-SCOPE = "cliente"
 
 
 class RsaJwtIssuer:
@@ -57,12 +56,14 @@ class RsaJwtIssuer:
             "iat": int(issued_at.timestamp()),
             "exp": int(expires_at.timestamp()),
             "jti": str(uuid4()),
-            "scope": SCOPE,
+            "scope": user.role,
             "rol": user.role,
             "nombre": user.name,
             "correo": user.email,
             "client_id": client_id,
         }
+        if user.role in {"asesor", "socio"}:
+            claims["socios"] = list(user.partner_ids)
         return jwt.encode(
             claims,
             self._private_key,

@@ -14,6 +14,7 @@ class User:
     document_type: str = "cc"
     identification: str = "1234567890"
     phone: str = "+573001234567"
+    partner_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

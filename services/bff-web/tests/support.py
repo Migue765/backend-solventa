@@ -189,6 +189,17 @@ class FakeJwks:
 class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
+    clients: tuple[User, ...] = (USER,)
+
+    def login_challenge(self, correlation_id: str) -> dict[str, object]:
+        self._record("login_challenge", correlation_id)
+        return {"desafioId": "challenge", "clavePublica": {}, "expiraEn": "2026-10-24T12:00:00Z"}
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet:
+        self._record("encrypted_login", email, encrypted_credential, correlation_id)
+        return self._tokens()
 
     def _record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
@@ -212,6 +223,14 @@ class FakeIdentity:
 
     def revoke(self, refresh_token: str, correlation_id: str) -> None:
         self._record("revoke", refresh_token, correlation_id)
+
+    def list_clients(self, correlation_id: str) -> tuple[User, ...]:
+        self._record("list_clients", correlation_id)
+        return self.clients
+
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        self._record("get_client", client_id, correlation_id)
+        return next((client for client in self.clients if client.user_id == client_id), None)
 
 
 def rejected(status: int, code: str, retry_after: int | None = None) -> IdentityRejectedError:

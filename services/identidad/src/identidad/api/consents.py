@@ -8,7 +8,7 @@ from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 from identidad.config import Config
-from identidad.domain.consent import ConsentVersionConflictError
+from identidad.domain.consent import ConsentScope, ConsentVersionConflictError, InvalidConsentError
 from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.problems import problem_response
 
@@ -19,6 +19,7 @@ class ConsentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     autorizado: StrictBool
     version: int = Field(ge=0, strict=True)
+    solicitud: ConsentScope | None = None
 
 
 @bp.route("/v1/clientes/<uuid:user_id>/consentimiento-perfilamiento", methods=["GET", "PUT"])
@@ -39,6 +40,7 @@ def consent(user_id: UUID) -> Response:
             401, "no_autorizado", "No autorizado", "Credencial interna invalida."
         )
     repository = cast(SqlConsentRepository, current_app.extensions["consent_repository"])
+    clock = cast(Callable[[], datetime], current_app.extensions["clock"])
     if request.method == "GET":
         result = repository.get(user_id)
         if result is None:
@@ -56,12 +58,24 @@ def consent(user_id: UUID) -> Response:
                 400,
                 "solicitud_invalida",
                 "Solicitud invalida",
-                "Indica autorizado y la version vigente.",
+                "Indica la decision, version y solicitud completa con alcance, fuentes y terminos.",
             )
-        clock = cast(Callable[[], datetime], current_app.extensions["clock"])
         try:
             result = repository.record(
-                user_id, payload.autorizado, payload.version, clock(), str(g.correlation_id)
+                user_id,
+                payload.autorizado,
+                payload.version,
+                clock(),
+                str(g.correlation_id),
+                payload.solicitud,
+            )
+        except InvalidConsentError:
+            return problem_response(
+                400,
+                "solicitud_invalida",
+                "Solicitud invalida",
+                "Aprobar o rechazar requiere una solicitud completa y vigencia de hasta 30 dias. "
+                "Omitir solicitud solo permite revocar una autorizacion existente.",
             )
         except ConsentVersionConflictError:
             return problem_response(
@@ -70,6 +84,8 @@ def consent(user_id: UUID) -> Response:
                 "Conflicto de version",
                 "Actualiza el consentimiento antes de modificarlo.",
             )
+    if result.estado == "autorizado" and clock() >= result.vigente_hasta:
+        result = result.model_copy(update={"estado": "vencido"})
     response = jsonify(result.model_dump(mode="json", by_alias=True))
     response.headers["Cache-Control"] = "no-store"
     return response

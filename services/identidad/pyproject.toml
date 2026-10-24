@@ -8,6 +8,7 @@ dependencies = [
     "flask>=3.1,<4",
     "pydantic>=2.9,<3",
     "PyJWT[crypto]>=2.8,<3",
+    "jwcrypto>=1.6.1,<2",
     "redis>=5,<7",
     "sqlalchemy>=2.0,<3",
     "alembic>=1.13,<2",

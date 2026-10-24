@@ -1,13 +1,21 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
 from perfilamiento.adapters import FuenteMock
+from perfilamiento.app import Config, create_app
 from perfilamiento.application import ConsultarPerfil
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, Fuente
-from perfilamiento.persistence import ConsultaModel, PerfilModel, RepositorioPerfiles
-from sqlalchemy import func, select
+from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConsentimiento, Fuente
+from perfilamiento.persistence import (
+    ConsultaModel,
+    EventoConsentimientoModel,
+    PerfilModel,
+    RepositorioPerfiles,
+)
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 AHORA = datetime(2026, 10, 16, tzinfo=UTC)
@@ -22,6 +30,10 @@ class ConsentimientosPrueba:
             estado="autorizado",
             finalidad="cotizacion",
             alcances=("open_finance", "open_data"),
+            fuentes=("open_finance", "open_data"),
+            datos=("indicador_riesgo",),
+            version_terminos="1.0",
+            actor_id=cliente_id,
             efectiva_en=AHORA - timedelta(days=1),
             vigente_hasta=AHORA + timedelta(days=1),
         )
@@ -53,6 +65,7 @@ def test_perfil_valido_es_versionado_minimo_y_trazable(repo: RepositorioPerfiles
     assert all(fuente.simulada for fuente in perfil.fuentes)
     assert not perfil.fallback_used
     assert servicio.obtener(perfil.perfil_id, cliente_id, "corr-lectura") == perfil
+    assert servicio.generar(cliente_id, referencia_id, "corr-reintento") == perfil
     segundo = servicio.generar(cliente_id, uuid4(), "corr-prueba")
     assert segundo.version == 2
     with Session(repo.engine) as session:
@@ -64,7 +77,47 @@ def test_perfil_valido_es_versionado_minimo_y_trazable(repo: RepositorioPerfiles
         assert session.scalar(select(func.count()).select_from(PerfilModel)) == 2
 
 
-@pytest.mark.parametrize("estado", ["ausente", "revocado", "vencido", "ajeno", "alcance"])
+def test_consentimiento_solicitado_debe_coincidir(repo: RepositorioPerfiles) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    assert consentimientos.actual is not None
+    servicio = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.generar(
+            cliente_id,
+            uuid4(),
+            "corr-consentimiento",
+            uuid4(),
+            consentimientos.actual.version,
+        )
+
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
+
+
+@pytest.mark.parametrize(
+    "estado",
+    [
+        "ausente",
+        "revocado",
+        "rechazado",
+        "vencido",
+        "ajeno",
+        "alcance",
+        "fuente",
+        "finalidad",
+        "datos",
+        "actor",
+        "terminos",
+        "legado",
+    ],
+)
 def test_sin_consentimiento_aplicable_no_consulta_fuentes(
     repo: RepositorioPerfiles, estado: str
 ) -> None:
@@ -73,15 +126,31 @@ def test_sin_consentimiento_aplicable_no_consulta_fuentes(
     assert consentimientos.actual is not None
     if estado == "ausente":
         consentimientos.actual = None
-    elif estado == "revocado":
-        consentimientos.actual = consentimientos.actual.model_copy(update={"estado": "revocado"})
+    elif estado in {"revocado", "rechazado"}:
+        consentimientos.actual = consentimientos.actual.model_copy(update={"estado": estado})
     elif estado == "vencido":
         consentimientos.actual = consentimientos.actual.model_copy(update={"vigente_hasta": AHORA})
     elif estado == "ajeno":
         consentimientos.actual = consentimientos.actual.model_copy(update={"cliente_id": uuid4()})
     else:
-        consentimientos.actual = consentimientos.actual.model_copy(update={"alcances": ()})
-    servicio = ConsultarPerfil(repo, consentimientos, (), lambda: AHORA)
+        cambios: dict[str, dict[str, object]] = {
+            "alcance": {"alcances": ("open_data",)},
+            "fuente": {"fuentes": ("open_data",)},
+            "finalidad": {"finalidad": "mercadeo"},
+            "datos": {"datos": ("movimientos",)},
+            "actor": {"actor_id": uuid4()},
+            "terminos": {"version_terminos": "desconocida"},
+            "legado": {"actor_id": None, "fuentes": (), "datos": (), "version_terminos": None},
+        }
+        consentimientos.actual = consentimientos.actual.model_copy(update=cambios[estado])
+
+    class FuenteNoAutorizada:
+        nombre = "open_finance"
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            pytest.fail("No se debe consultar ninguna fuente sin el consentimiento requerido.")
+
+    servicio = ConsultarPerfil(repo, consentimientos, (FuenteNoAutorizada(),), lambda: AHORA)
     with pytest.raises(ErrorPerfilamiento) as caught:
         servicio.generar(cliente_id, uuid4(), "corr-denegada")
     assert caught.value.status == 403
@@ -171,3 +240,167 @@ def test_no_entrega_perfil_alterado(repo: RepositorioPerfiles) -> None:
         fila.contenido = {**fila.contenido, "score": "0.01"}
     with pytest.raises(ErrorPerfilamiento, match="perfil_no_integro"):
         servicio.obtener(perfil.perfil_id, cliente_id, "corr-integridad")
+
+
+def test_events_are_idempotent_durable_and_never_restore_an_old_version(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    actual = consentimientos.actual
+    assert actual is not None
+    revoke = EventoConsentimiento(
+        evento_id=uuid4(),
+        cliente_id=cliente_id,
+        consentimiento_id=actual.consentimiento_id,
+        version=2,
+        tipo="ConsentimientoRevocado",
+        estado="revocado",
+        efectiva_en=AHORA,
+        correlation_id="corr-revocacion",
+    )
+    ack = repo.aplicar_consentimiento(revoke)
+    assert repo.aplicar_consentimiento(revoke) == ack
+    old_grant = revoke.model_copy(
+        update={
+            "evento_id": uuid4(),
+            "version": 1,
+            "tipo": "ConsentimientoAutorizado",
+            "estado": "autorizado",
+        }
+    )
+    assert repo.aplicar_consentimiento(old_grant)["versionAplicada"] == 2
+    restarted = RepositorioPerfiles(str(repo.engine.url))
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        restarted.validar_version_consentimiento(actual)
+    renewed = actual.model_copy(update={"version": 3})
+    restarted.validar_version_consentimiento(renewed)
+    conflict = revoke.model_copy(update={"evento_id": uuid4()})
+    with pytest.raises(ErrorPerfilamiento, match="conflicto_evento"):
+        repo.aplicar_consentimiento(conflict)
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(EventoConsentimientoModel)) == 2
+
+
+def test_event_invalidates_persisted_profile_even_with_stale_authoritative_response(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    servicio = ConsultarPerfil(
+        repo, consentimientos, (FuenteMock("open_finance"), FuenteMock("open_data")), lambda: AHORA
+    )
+    perfil = servicio.generar(cliente_id, uuid4(), "antes")
+    actual = consentimientos.actual
+    assert actual is not None
+    event = EventoConsentimiento(
+        evento_id=uuid4(),
+        cliente_id=cliente_id,
+        consentimiento_id=actual.consentimiento_id,
+        version=2,
+        estado="revocado",
+        tipo="ConsentimientoRevocado",
+        efectiva_en=AHORA,
+        correlation_id="revocacion",
+    )
+    repo.aplicar_consentimiento(event)
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.obtener(perfil.perfil_id, cliente_id, "despues")
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.generar(cliente_id, uuid4(), "despues")
+    with Session(repo.engine) as session:
+        denied = list(
+            session.scalars(
+                select(ConsultaModel).where(
+                    ConsultaModel.contenido["correlationId"].as_string() == "despues"
+                )
+            )
+        )
+        assert len(denied) == 2
+        assert all(row.contenido["resultado"] == "consentimiento_no_vigente" for row in denied)
+
+
+def test_internal_event_endpoint_authentication_validation_and_replay(
+    repo: RepositorioPerfiles,
+) -> None:
+    app = create_app(Config(internal_api_token="interno-test", database_url=str(repo.engine.url)))
+    client = app.test_client()
+    path = "/v1/eventos/consentimientos"
+    evento = EventoConsentimiento(
+        evento_id=uuid4(),
+        cliente_id=uuid4(),
+        consentimiento_id=uuid4(),
+        version=1,
+        tipo="ConsentimientoRechazado",
+        estado="rechazado",
+        efectiva_en=AHORA,
+        correlation_id="corr-evento",
+    ).model_dump(mode="json", by_alias=True)
+    headers = {"Authorization": "Bearer interno-test"}
+    assert client.post(path, json=evento).status_code == 401
+    for change in ({"version": True}, {"estado": "autorizado"}, {"datoExtra": "no"}):
+        assert client.post(path, json={**evento, **change}, headers=headers).status_code == 400
+    response = client.post(path, json=evento, headers=headers)
+    assert response.status_code == 200
+    assert response.get_json()["versionAplicada"] == 1
+    assert client.post(path, json=evento, headers=headers).get_json() == response.get_json()
+    conflict = client.post(path, json={**evento, "correlationId": "otra"}, headers=headers)
+    assert conflict.status_code == 409
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(EventoConsentimientoModel)) == 1
+        assert session.scalar(select(func.count()).select_from(ConsultaModel)) == 1
+
+
+def test_event_ack_and_audit_are_atomic(repo: RepositorioPerfiles) -> None:
+    evento = EventoConsentimiento(
+        evento_id=uuid4(),
+        cliente_id=uuid4(),
+        consentimiento_id=uuid4(),
+        version=1,
+        tipo="ConsentimientoRevocado",
+        estado="revocado",
+        efectiva_en=AHORA,
+        correlation_id="atomicidad",
+    )
+
+    def fail_audit(*args: object) -> None:
+        raise RuntimeError("auditoria_no_disponible")
+
+    event.listen(ConsultaModel, "before_insert", fail_audit)
+    try:
+        with pytest.raises(RuntimeError, match="auditoria_no_disponible"):
+            repo.aplicar_consentimiento(evento)
+    finally:
+        event.remove(ConsultaModel, "before_insert", fail_audit)
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(EventoConsentimientoModel)) == 0
+        assert session.scalar(select(func.count()).select_from(ConsultaModel)) == 0
+    assert repo.aplicar_consentimiento(evento)["eventoId"] == str(evento.evento_id)
+
+
+def test_concurrent_duplicates_produce_one_durable_ack(repo: RepositorioPerfiles) -> None:
+    evento = EventoConsentimiento(
+        evento_id=uuid4(),
+        cliente_id=uuid4(),
+        consentimiento_id=uuid4(),
+        version=1,
+        tipo="ConsentimientoRevocado",
+        estado="revocado",
+        efectiva_en=AHORA,
+        correlation_id="concurrente",
+    )
+    barrier = Barrier(2)
+
+    def wait_for_duplicate(*args: object) -> None:
+        barrier.wait(timeout=5)
+
+    event.listen(EventoConsentimientoModel, "before_insert", wait_for_duplicate)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            acks = list(executor.map(repo.aplicar_consentimiento, (evento, evento)))
+        assert acks[0] == acks[1]
+    finally:
+        event.remove(EventoConsentimientoModel, "before_insert", wait_for_duplicate)
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(EventoConsentimientoModel)) == 1
+        assert session.scalar(select(func.count()).select_from(ConsultaModel)) == 1

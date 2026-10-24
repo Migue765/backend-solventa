@@ -160,6 +160,24 @@ resource "aws_lb_listener_rule" "bff_web" {
   tags = var.tags
 }
 
+resource "aws_lb_listener_rule" "bff_web_partners" {
+  listener_arn = aws_lb_listener.this.arn
+  priority     = 13
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.bff_web.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/v1/socios/*", "/v1/asesor/*", "/v1/perfilamientos-hipotecarios"]
+    }
+  }
+
+  tags = var.tags
+}
+
 resource "aws_lb_listener_rule" "bff_web_consents" {
   listener_arn = aws_lb_listener.this.arn
   priority     = 12
@@ -276,8 +294,8 @@ resource "aws_apigatewayv2_api" "this" {
   cors_configuration {
     allow_origins     = var.cors_allowed_origins
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers     = ["authorization", "content-type", "idempotency-key", "x-correlation-id"]
-    expose_headers    = ["x-correlation-id", "retry-after", "date"]
+    allow_headers     = ["authorization", "content-type", "idempotency-key", "x-correlation-id", "api-version"]
+    expose_headers    = ["x-correlation-id", "retry-after", "date", "api-version"]
     max_age           = 3600
     allow_credentials = false
   }
@@ -346,6 +364,13 @@ resource "aws_apigatewayv2_route" "movil" {
 
 # ---- Rutas publicas (mas especificas que el proxy protegido) ----------------------------------
 # Autenticacion y registro, con throttling propio para frenar la fuerza bruta.
+resource "aws_apigatewayv2_route" "login_challenge" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "GET /v1/sesiones/desafio"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
 resource "aws_apigatewayv2_route" "login" {
   api_id    = aws_apigatewayv2_api.this.id
   route_key = "POST /v1/sesiones"
@@ -409,6 +434,12 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_rate_limit  = var.throttling_rate_limit
     throttling_burst_limit = var.throttling_burst_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.login_challenge.route_key
+    throttling_rate_limit  = var.auth_throttling_rate_limit
+    throttling_burst_limit = var.auth_throttling_burst_limit
   }
 
   route_settings {

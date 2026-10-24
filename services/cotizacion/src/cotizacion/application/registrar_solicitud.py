@@ -31,6 +31,9 @@ class RegistrarSolicitudComando:
     correo: str
     telefono: str
     idempotency_key: UUID
+    consentimiento_id: UUID | None = None
+    consentimiento_version: int | None = None
+    cotizacion_id: UUID | None = None
 
 
 class RegistrarSolicitud:
@@ -74,6 +77,7 @@ class RegistrarSolicitud:
             deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
+            cotizacion_id=comando.cotizacion_id or uuid4(),
             cliente_id=comando.cliente_id,
             producto_id=producto.producto_interno_id,
             coberturas=[cobertura],
@@ -81,9 +85,17 @@ class RegistrarSolicitud:
         perfil_id = str(comando.cliente_id)
         perfil_ofertas = None
         if self._generador_perfiles is not None:
-            perfil_remoto = self._generador_perfiles.generar(
-                comando.cliente_id, cotizacion.cotizacion_id
-            )
+            if comando.consentimiento_id is not None and comando.consentimiento_version is not None:
+                perfil_remoto = self._generador_perfiles.generar(
+                    comando.cliente_id,
+                    cotizacion.cotizacion_id,
+                    comando.consentimiento_id,
+                    comando.consentimiento_version,
+                )
+            else:
+                perfil_remoto = self._generador_perfiles.generar(
+                    comando.cliente_id, cotizacion.cotizacion_id
+                )
             perfil_id = perfil_remoto.perfil_id
             perfil_ofertas = perfil_desde_score(perfil_remoto.score)
             ahora = self._reloj()
@@ -126,6 +138,10 @@ def _fingerprint(comando: RegistrarSolicitudComando) -> str:
         "datosProducto": comando.datos_producto,
         "correo": comando.correo,
         "telefono": comando.telefono,
+        "consentimientoId": (
+            str(comando.consentimiento_id) if comando.consentimiento_id is not None else None
+        ),
+        "consentimientoVersion": comando.consentimiento_version,
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()

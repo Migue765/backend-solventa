@@ -20,10 +20,17 @@ DEFAULT_RETRY_AFTER = 60
 
 
 class HttpIdentityGateway:
-    def __init__(self, base_url: str, timeout_seconds: float = 5, client_id: str = CHANNEL) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 5,
+        client_id: str = CHANNEL,
+        internal_api_token: str = "",
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._client_id = client_id
+        self._internal_api_token = internal_api_token
 
     def register(self, name: str, email: str, password: str, correlation_id: str) -> User:
         payload = self._post(
@@ -46,6 +53,25 @@ class HttpIdentityGateway:
         )
         return _token_set_from_json(payload)
 
+    def login_challenge(self, correlation_id: str) -> dict[str, object]:
+        return self._get("/oauth/login-challenge", correlation_id, internal=False)
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet:
+        return _token_set_from_json(
+            self._post(
+                "/oauth/token",
+                {
+                    "grant_type": "encrypted_password",
+                    "client_id": "web",
+                    "username": email,
+                    "credencialCifrada": encrypted_credential,
+                },
+                correlation_id,
+            )
+        )
+
     def refresh(self, refresh_token: str, correlation_id: str) -> TokenSet:
         payload = self._post(
             "/oauth/token",
@@ -60,6 +86,53 @@ class HttpIdentityGateway:
 
     def revoke(self, refresh_token: str, correlation_id: str) -> None:
         self._post("/oauth/revoke", {"refresh_token": refresh_token}, correlation_id)
+
+    def list_clients(self, correlation_id: str) -> tuple[User, ...]:
+        payload = self._get("/v1/clientes", correlation_id)
+        clients = payload.get("clientes")
+        if not isinstance(clients, list):
+            raise IdentityUnavailableError()
+        return tuple(_client_from_json(client) for client in clients)
+
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        payload = self._get(f"/v1/clientes/{client_id}", correlation_id, allow_not_found=True)
+        return _client_from_json(payload) if payload else None
+
+    def _get(
+        self,
+        path: str,
+        correlation_id: str,
+        *,
+        internal: bool = True,
+        allow_not_found: bool = False,
+    ) -> dict[str, Any]:
+        if internal and not self._internal_api_token:
+            raise IdentityUnavailableError()
+        headers = {"Accept": "application/json", "X-Correlation-ID": correlation_id}
+        if internal:
+            headers["Authorization"] = f"Bearer {self._internal_api_token}"
+        request = Request(
+            f"{self._base_url}{path}",
+            headers=headers,
+        )
+        try:
+            with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+                raw = response.read()
+        except HTTPError as error:
+            if allow_not_found and error.code == 404:
+                return {}
+            if internal:
+                raise IdentityUnavailableError() from error
+            raise _rejection_from(error) from error
+        except (URLError, OSError, TimeoutError) as error:
+            raise IdentityUnavailableError() from error
+        try:
+            payload = json.loads(raw)
+        except ValueError as error:
+            raise IdentityUnavailableError() from error
+        if not isinstance(payload, dict):
+            raise IdentityUnavailableError()
+        return payload
 
     def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
         request = Request(
@@ -120,7 +193,30 @@ def _mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
 
 def _user_from_json(data: dict[str, Any]) -> User:
     try:
-        return User(UUID(data["id"]), data["nombre"], data["correo"], data["rol"])
+        partners = data.get("socios", [])
+        if not isinstance(partners, list) or not all(isinstance(value, str) for value in partners):
+            raise ValueError("socios invalidos")
+        return User(
+            UUID(data["id"]),
+            data["nombre"],
+            data["correo"],
+            data["rol"],
+            partner_ids=tuple(partners),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise IdentityUnavailableError() from error
+
+
+def _client_from_json(data: object) -> User:
+    if not isinstance(data, dict):
+        raise IdentityUnavailableError()
+    try:
+        return User(
+            UUID(data["clienteId"]),
+            _text(data["nombre"]),
+            _text(data["correo"]),
+            "cliente",
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise IdentityUnavailableError() from error
 

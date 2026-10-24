@@ -25,10 +25,105 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Plataforma de socios (SOL-195)
+
+El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y
+JWT del canal web, con `scope: socio` y claim `socios` obtenido de Identidad.
+Login y `/v1/sesiones/actual` incluyen `usuario.socios` para estos operadores.
+`GET /v1/socios/actual` devuelve `apiVersion: "1"`, `usuario`, `socios` (cada
+organizacion con `socioId` y los IDs de productos disponibles del catalogo) y
+`alcances: ["perfilamientos:crear"]`. No hay registro publico de socios.
+
+`POST /v1/socios/solicitudes-cotizacion` integra **todos los productos actuales**
+con el motor y la persistencia principales, no una simulacion paralela:
+
+```json
+{
+  "operationId": "11111111-1111-4111-8111-111111111111",
+  "socioId": "BANCO-001",
+  "productoId": "automotive",
+  "datosProducto": {"vehiclePlate": "ABC123"},
+  "cliente": {
+    "clienteId": "22222222-2222-4222-8222-222222222222",
+    "tipoCliente": "persona_natural",
+    "tipoDocumento": "cc",
+    "numeroDocumento": "1023456789",
+    "telefono": "+573001234567"
+  },
+  "consentimientoId": "33333333-3333-4333-8333-333333333333",
+  "consentimientoVersion": 1
+}
+```
+
+Exige `Idempotency-Key` igual a `operationId`. `API-Version: 1` es opcional;
+otra version devuelve `400 version_no_soportada`. `datosProducto` reutiliza
+exactamente el contrato vigente de solicitudes de clientes. Se consulta al
+cliente por UUID en Identidad; el correo y el usuario operador no son campos
+editables. No se publica un catalogo global de clientes a socios. La pertenencia
+del operador al socio se comprueba antes de consultar dependencias.
+
+Respuesta `201`: `{operationId,socioId,clienteId,productoId,estado:"completada",
+perfilamientoReferencia,solicitudId,cotizacionId,recibidaEn}`.
+`perfilamientoReferencia` es una referencia opaca; `cotizacionId` es UUID.
+La solicitud queda disponible en el flujo habitual del **cliente titular**.
+El consentimiento debe haber sido otorgado por ese cliente mediante SOL-203;
+el socio no puede otorgarlo por el cliente. Ausente/revocado/vencido/version
+incorrecta rechaza la operacion antes de consultar fuentes.
+
+Repetir POST con mismo UUID y cuerpo recupera la misma operacion, incluso entre
+replicas. `GET /v1/socios/solicitudes-cotizacion/{operationId}?socioId=...`
+recupera el mismo resultado sin repetir perfilamiento ni necesitar datos personales.
+Devuelve `404 operacion_no_encontrada`, `409 operacion_en_curso` o
+`409 operacion_reintentable` si no hay resultado. GET nunca reanuda;
+el ultimo caso necesita POST original. `409 idempotencia_conflicto` impide
+reutilizar la clave con otros datos. La admision generica garantiza UUID global
+unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
+propietario. Reintentos y lecturas siguen aislados por organizacion.
+
+Errores previos a perfilamiento: `400 solicitud_invalida`, `401 sesion_invalida`,
+`403 alcance_insuficiente`/`socio_no_autorizado`, `404 cliente_no_encontrado`.
+Admision persistente de Cotizacion devuelve `429 cuota_socio_excedida` o
+`socio_ocupado` con `Retry-After`; un duplicado en curso da `409` con ese header.
+Fallos de dependencias devuelven `503`, nunca una cotizacion artificial.
+Respuestas llevan `Cache-Control: no-store` y `X-Correlation-ID`.
+
+HU46 conserva `/v1/perfilamientos-hipotecarios` y `/v1/asesor/clientes` para asesor.
+Para socio, vida hipotecaria se cotiza en la ruta generica usando
+`productoId: "mortgage-life"` y los datos del producto del catalogo.
+La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
+permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
+siempre debe pasar por autenticacion del BFF.
+
+Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
+`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones automotrices por HTTP local
+entre servicios/SQLite con umbrales p95 250ms y p99 500ms. No acredita SLA AWS:
+medir tambien el gateway publico regional, con la ubicacion del generador,
+100 o mas muestras por producto, errores, cuotas y concurrencia entre socios.
+### Login cifrado (deshabilitado por defecto)
+
+Con `ENCRYPTED_LOGIN_ENABLED=true` en **BFF e identidad**, `GET /v1/sesiones/desafio`
+es público y devuelve `{desafioId, clavePublica, expiraEn}` de identidad, sin caché.
+`POST /v1/sesiones` acepta exclusivamente `{correo, credencialCifrada}` y rechaza
+`contrasena` y campos adicionales. El BFF no descifra: reenvía el sobre a
+`POST /oauth/token` con `grant_type=encrypted_password`, `client_id=web`,
+`username=correo`, `credencialCifrada`. No hay Redis ni claves privadas en el BFF.
+El cliente debe generar JWE `RSA-OAEP-256` + `A256GCM` y pedir un desafío nuevo
+por intento. Véase [identidad](../identidad/README.md#login-web-cifrado-opt-in-no-desplegado).
+
+Sin el flag, el login heredado sigue funcionando y el desafío responde 503.
+No hay fallback entre contratos. Refresh, logout, móvil y **registro** no cambian;
+registro aún envía su contraseña sin este sobre. HTTPS es imprescindible:
+esto no oculta la contraseña al dueño del navegador ni frente a XSS.
+
+La excepción pública `GET /v1/sesiones/desafio` está declarada con throttling de
+autenticación. La ruta interna de identidad no se publica en API Gateway.
+Ver [operación coordinada](../../docs/operacion-login-cifrado.md) antes de habilitar flags.
+
 | Método   | Ruta                              | Auth   | Descripción                                   |
 | -------- | --------------------------------- | ------ | --------------------------------------------- |
 | `POST`   | `/v1/usuarios`                    | No     | Registra un usuario cliente (proxy a identidad) |
 | `POST`   | `/v1/sesiones`                    | No     | Inicia sesión: access token + refresh token   |
+| `GET`    | `/v1/sesiones/desafio`            | No     | Desafío cifrado de un solo uso (opt-in)       |
 | `POST`   | `/v1/sesiones/renovar`            | No     | Rota el refresh token y emite nuevos tokens   |
 | `GET`    | `/v1/sesiones/actual`             | Bearer | Usuario y vencimiento tomados del JWT         |
 | `DELETE` | `/v1/sesiones/actual`             | Bearer | Cierra sesión; revoca el `refreshToken` si se envía |
@@ -144,11 +239,40 @@ reemplaza ambos tokens: el refresh anterior deja de servir.
 
 ### Consentimiento y perfilamiento
 
-`GET/PUT /v1/consentimientos/perfilamiento` consulta, autoriza o revoca el
-consentimiento real de Identidad. El cuerpo de PUT es `{autorizado, version}`:
-la version inicial es 0; una version desactualizada responde 409. No se autoriza
-automaticamente ni se acepta un cliente desde el formulario; siempre procede del JWT.
-La autorizacion dura 30 dias. `INTERNAL_API_TOKEN` autentica estas llamadas internas.
+`GET/PUT /v1/consentimientos/perfilamiento` consulta, aprueba, rechaza o revoca el
+consentimiento persistido en Identidad. La version inicial es 0; una version
+desactualizada responde 409. El cliente y actor proceden exclusivamente del JWT.
+`INTERNAL_API_TOKEN` autentica las llamadas del BFF a Identidad.
+
+Para aprobar o rechazar, PUT recibe la decision explicita y la solicitud presentada
+al usuario (sustituir la fecha de ejemplo por una futura, como maximo a 30 dias):
+
+```json
+{
+  "autorizado": true,
+  "version": 0,
+  "solicitud": {
+    "finalidad": "cotizacion",
+    "alcances": ["open_finance", "open_data"],
+    "fuentes": ["open_finance", "open_data"],
+    "datos": ["indicador_riesgo"],
+    "versionTerminos": "1.0",
+    "vigenteHasta": "2026-10-25T23:59:00Z"
+  }
+}
+```
+
+`autorizado=false` con solicitud registra `rechazado`. Para revocar la autorizacion
+actual, enviar solo `{"autorizado": false, "version": 1}`. La respuesta incluye
+actor, fecha efectiva, alcance, fuentes, datos, version de terminos y vigencia.
+GET devuelve `vencido` al alcanzar el plazo; nunca renueva ni autoriza implicitamente.
+
+**Cambio incompatible de SOL-326:** una aprobacion con solo `{autorizado, version}`
+ahora responde 400 `solicitud_invalida`. El BFF conserva ese error de Identidad.
+Coordinar la pantalla y el payload con SOL203 antes de desplegar; este PR no implementa
+la UI. Nunca completar permisos silenciosamente en el BFF ni migrar consentimientos
+legados a aprobaciones completas. Los datos de Open Finance/Open Data son siempre
+sinteticos; no hay conexiones a proveedores reales.
 
 `GET /v1/solicitudes-cotizacion/{id}/perfilamiento` recupera el mismo perfil
 persistido para el calculo, con vigencia maxima de 15 minutos y ambas fuentes
@@ -157,8 +281,10 @@ o vencer el perfil bloquea su reutilizacion, las ofertas y la seleccion.
 Una solicitud anterior sin evidencia devuelve `perfil_no_encontrado`; se debe crear
 una nueva despues de autorizar. No se inventan perfiles para solicitudes antiguas.
 
-En AWS deben desplegarse Identidad (migracion 0002), Perfilamiento, Cotizacion
-con `COTIZACION_PERFILAMIENTO_HABILITADO=true` y el BFF. La regla ALB
+El [runbook SOL-326](../../deploy/k8s/identidad/README.md#sol-326-consentimiento-y-outbox)
+coordina cliente compatible, Identidad (migracion 0003), nueva tabla de eventos en
+Perfilamiento y Outbox. Cotizacion debe conservar
+`COTIZACION_PERFILAMIENTO_HABILITADO=true`. La regla ALB
 `bff_web_consents` lleva la consulta de consentimiento al BFF y CORS expone `Date`
 para validar la vigencia con el reloj del servidor.
 

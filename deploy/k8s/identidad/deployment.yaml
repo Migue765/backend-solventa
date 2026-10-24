@@ -7,7 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: identidad
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -43,6 +43,14 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: ENCRYPTED_LOGIN_ENABLED
+              value: "false"
+            - name: LOGIN_ENCRYPTION_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ${LOGIN_ENCRYPTION_SECRET_NAME}
+                  key: LOGIN_ENCRYPTION_PRIVATE_KEY
+                  optional: true
             - name: AWS_REGION
               value: ${AWS_REGION}
             - name: WEB_CONCURRENCY

@@ -20,7 +20,7 @@ def openid_configuration() -> Response:
         response_types_supported=["token"],
         subject_types_supported=["public"],
         id_token_signing_alg_values_supported=["RS256"],
-        scopes_supported=["cliente"],
+        scopes_supported=["cliente", "asesor", "socio"],
     )
     response.headers["Cache-Control"] = CACHE_CONTROL
     return response

@@ -19,7 +19,7 @@ def load_contract(path: Path) -> Mapping[Hashable, Any]:
 
 
 def validate_contract(path: Path) -> None:
-    validate(load_contract(path))
+    validate(load_contract(path), base_uri=path.as_uri())
 
 
 def contract_paths() -> list[Path]:

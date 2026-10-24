@@ -11,7 +11,85 @@ tags:
   - name: Usuarios
   - name: OAuth
   - name: Descubrimiento
+  - name: Consentimientos
+  - name: Asesores
 paths:
+  /v1/clientes:
+    get:
+      tags: [Asesores]
+      summary: Lista clientes registrados para consumo interno del BFF
+      security:
+        - TokenInterno: []
+      responses:
+        "200":
+          description: Datos mínimos para seleccionar al titular
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientes]
+                properties:
+                  clientes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClienteRegistrado"
+        "401":
+          description: Token interno invalido
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/{clienteId}/consentimiento-perfilamiento:
+    parameters:
+      - name: clienteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Consentimientos]
+      summary: Lee la ultima decision autoritativa
+      description: API interna; el BFF obtiene clienteId del JWT, no del cuerpo del cliente.
+      security:
+        - TokenInterno: []
+      responses:
+        "200":
+          description: Decision persistida; estado vencido si expiro, sin renovar la vigencia
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ConsentimientoPerfilamiento"
+        "401":
+          description: Token interno invalido
+        "404":
+          description: consentimiento_ausente
+        "503":
+          description: Servicio o credencial interna no configurados
+    put:
+      tags: [Consentimientos]
+      summary: Persiste decision e historial junto con su evento en el Outbox
+      security:
+        - TokenInterno: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./bff-web-v1.yaml#/components/schemas/DecisionConsentimiento"
+      responses:
+        "200":
+          description: Decision durable, aun si el consumidor de eventos esta caido
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ConsentimientoPerfilamiento"
+        "400":
+          description: Decision, solicitud o vigencia invalidas
+        "401":
+          description: Token interno invalido
+        "409":
+          description: Version obsoleta; recargar antes de decidir
+        "503":
+          description: Persistencia no disponible; no confirma una decision parcial
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -38,25 +116,54 @@ paths:
           $ref: "#/components/responses/DemasiadosIntentos"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /oauth/login-challenge:
+    get:
+      tags: [OAuth]
+      summary: Emite desafío de login web cifrado, válido 60 segundos
+      operationId: emitirDesafioLogin
+      security: []
+      responses:
+        "200":
+          description: Desafío de un solo uso persistido en Redis
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/DesafioLogin"
+        "503":
+          description: Función deshabilitada o Redis no disponible
   /oauth/token:
     post:
       tags: [OAuth]
-      summary: Emite tokens (grant password o refresh_token)
+      summary: Emite tokens (password, encrypted_password o refresh_token)
       description: >-
         Con `grant_type=password` autentica al usuario. Con `grant_type=refresh_token`
         rota el refresh token: el presentado queda revocado y se emite uno nuevo en la misma
         familia. Presentar un refresh token ya rotado revoca toda la familia.
         El access token es un JWT RS256 de 1 hora (`expires_in: 3600`).
+        Con ENCRYPTED_LOGIN_ENABLED=true, web debe usar encrypted_password; password
+        queda disponible solo para movil. El grant cifrado exige cliente web y rechaza
+        campos adicionales, incluyendo password. Desafío consumido atómicamente en Redis
+        tras validar JWE y correo, antes de verificar credenciales. Fallo de sobre,
+        desafío expirado o replay responde 400; credenciales incorrectas 401. No hay fallback.
       operationId: emitirToken
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SolicitudToken"
+              oneOf:
+                - $ref: "#/components/schemas/SolicitudToken"
+                - $ref: "#/components/schemas/SolicitudTokenCifrado"
           application/x-www-form-urlencoded:
             schema:
-              $ref: "#/components/schemas/SolicitudToken"
+              oneOf:
+                - $ref: "#/components/schemas/SolicitudToken"
+                - $ref: "#/components/schemas/SolicitudTokenCifrado"
       responses:
         "200":
           description: Tokens emitidos
@@ -134,6 +241,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/Jwks"
 components:
+  securitySchemes:
+    TokenInterno:
+      type: http
+      scheme: bearer
   responses:
     SolicitudInvalida:
       description: La solicitud no cumple el contrato (`solicitud_invalida`)
@@ -204,7 +315,26 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor, socio]
+        socios:
+          type: array
+          uniqueItems: true
+          description: Socios activos autorizados; presente para rol asesor o socio.
+          items:
+            type: string
+    ClienteRegistrado:
+      type: object
+      additionalProperties: false
+      required: [clienteId, nombre, correo]
+      properties:
+        clienteId:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+        correo:
+          type: string
+          format: email
     UsuarioCreado:
       type: object
       additionalProperties: false
@@ -212,6 +342,26 @@ components:
       properties:
         usuario:
           $ref: "#/components/schemas/Usuario"
+    SolicitudTokenCifrado:
+      type: object
+      additionalProperties: false
+      required: [grant_type, client_id, username, credencialCifrada]
+      properties:
+        grant_type:
+          type: string
+          const: encrypted_password
+        client_id:
+          type: string
+          const: web
+        username:
+          type: string
+          format: email
+          maxLength: 254
+        credencialCifrada:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: JWE compacto; mismo formato que CredencialesCifradas del BFF.
     SolicitudToken:
       type: object
       required: [grant_type, client_id]
@@ -266,7 +416,7 @@ components:
           description: Vida del refresh token en segundos (web 28800, movil 2592000).
         scope:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor, socio]
         usuario:
           $ref: "#/components/schemas/Usuario"
     SolicitudRevocacion:

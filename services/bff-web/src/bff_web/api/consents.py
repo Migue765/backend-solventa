@@ -17,6 +17,7 @@ class ConsentPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     autorizado: StrictBool
     version: int = Field(ge=0, strict=True)
+    solicitud: dict[str, object] | None = None
 
 
 @bp.route("/consentimientos/perfilamiento", methods=["GET", "PUT"])
@@ -40,7 +41,11 @@ def profiling_consent() -> Response:
                 "Indica una autorizacion explicita y la version vigente.",
             )
         result = gateway.set_consent(
-            user.user_id, payload.autorizado, payload.version, str(g.correlation_id)
+            user.user_id,
+            payload.autorizado,
+            payload.version,
+            str(g.correlation_id),
+            payload.solicitud,
         )
     response = jsonify(result)
     response.headers["Cache-Control"] = "no-store"
@@ -66,6 +71,7 @@ def profiling_profile(request_id: str) -> Response:
 def profiling_error(error: ProfilingError) -> Response:
     current_app.logger.warning("Perfilamiento: %s", error.code)
     details = {
+        "solicitud_invalida": "Indica una decision y solicitud de consentimiento completas.",
         "consentimiento_ausente": "Autoriza el uso de datos antes de cotizar.",
         "consentimiento_no_vigente": "La autorizacion no esta vigente.",
         "conflicto_version": "Actualiza el consentimiento antes de modificarlo.",

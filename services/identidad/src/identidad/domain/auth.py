@@ -10,6 +10,7 @@ class User:
     name: str
     email: str
     role: str
+    partner_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

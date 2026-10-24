@@ -24,7 +24,7 @@ def test_openid_configuration_matches_the_contract(client: FlaskClient) -> None:
         "response_types_supported": ["token"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": ["cliente"],
+        "scopes_supported": ["cliente", "asesor", "socio"],
     }
     assert response.headers["Cache-Control"] == "public, max-age=300"
 
