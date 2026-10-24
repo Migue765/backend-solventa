@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -8,6 +10,41 @@ import pytest
 from jwcrypto import jwe, jwk
 
 from tests.jmeter.local_stack import LocalStack
+
+
+def test_cli_dependency_is_declared_for_integrated_workflows() -> None:
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements-dev.txt").read_text()
+    assert any(line.startswith("fakeredis") for line in requirements.splitlines())
+
+
+def test_cli_starts_encrypted_stack_and_cleans_up() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+import threading
+from types import SimpleNamespace
+from tests.jmeter import local_stack
+local_stack.threading = SimpleNamespace(
+    Thread=threading.Thread,
+    Event=lambda: SimpleNamespace(wait=lambda: None, set=lambda: None)
+)
+sys.argv = ["local_stack", "--web-port", "0", "--mobile-port", "0", "--encrypted-login"]
+local_stack.main()
+""",
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BFF web:" in result.stdout
 
 
 def call(url: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, Any]]:

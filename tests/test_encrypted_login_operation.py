@@ -1,6 +1,8 @@
 import argparse
+import base64
 import json
 import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -71,9 +73,13 @@ def test_operation_changes_only_selected_deployment(
         },
         "spec": {
             "replicas": 1,
-            "template": {"spec": {"containers": [{"name": service, "image": "registry/current"}]}},
+            "template": {
+                "spec": {"containers": [{"name": service, "image": "registry/current:1"}]}
+            },
         },
     }
+    encryption = jwk.JWK.generate(kty="RSA", size=2048)
+    signer = jwk.JWK.generate(kty="RSA", size=2048)
 
     def run(context: str, namespace: str, *arguments: str) -> str:
         assert context == "explicit-context" and namespace == service
@@ -81,7 +87,17 @@ def test_operation_changes_only_selected_deployment(
         if arguments[:2] == ("get", "deployment"):
             return json.dumps(deployment)
         if arguments[:2] == ("get", "secret"):
-            return "presente"
+            return json.dumps(
+                {
+                    "data": {
+                        "LOGIN_ENCRYPTION_PRIVATE_KEY": base64.b64encode(
+                            encryption.export_to_pem(private_key=True, password=None)
+                        ).decode()
+                    }
+                }
+            )
+        if arguments[0] == "exec" and "jwks.json" in arguments[-1]:
+            return json.dumps({"keys": [json.loads(signer.export_public())]})
         return ""
 
     monkeypatch.setattr("scripts.configure_encrypted_login.kubectl", run)
@@ -89,8 +105,8 @@ def test_operation_changes_only_selected_deployment(
         context="explicit-context",
         service=service,
         action=action,
-        image="registry/new" if action == "prepare" else "registry/current",
-        expected_image="registry/current",
+        image="registry/new:2" if action == "prepare" else "registry/current:1",
+        expected_image="registry/current:1",
         secret_name="identidad-login-encryption",
     )
     configure(args)
@@ -130,7 +146,7 @@ def test_operation_propagates_failures(monkeypatch: pytest.MonkeyPatch, failure:
                         "replicas": 1,
                         "template": {
                             "spec": {
-                                "containers": [{"name": "identidad", "image": "registry/test"}]
+                                "containers": [{"name": "identidad", "image": "registry/test:1"}]
                             }
                         },
                     },
@@ -140,7 +156,98 @@ def test_operation_propagates_failures(monkeypatch: pytest.MonkeyPatch, failure:
 
     monkeypatch.setattr("scripts.configure_encrypted_login.kubectl", run)
     args = argparse.Namespace(
-        action="enable", service="identidad", context="test", image="registry/test"
+        action="enable", service="identidad", context="test", image="registry/test:1"
     )
     with pytest.raises(subprocess.CalledProcessError):
         configure(args)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "context",
+        "image",
+        "empty_tag",
+        "invalid_digest",
+        "mismatch",
+        "replicas",
+        "missing_key",
+        "invalid_key",
+        "small_key",
+        "public_key",
+        "shared_key",
+    ],
+)
+def test_runtime_guards_prevent_mutation_even_with_optimization(invalid: str) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-O",
+            "-c",
+            """
+import argparse
+import base64
+import json
+import sys
+from jwcrypto import jwk
+import scripts.configure_encrypted_login as operation
+invalid = sys.argv[1]
+signer = jwk.JWK.generate(kty="RSA", size=2048)
+key = signer if invalid == "shared_key" else jwk.JWK.generate(
+    kty="RSA", size=1024 if invalid == "small_key" else 2048
+)
+pem = key.export_to_pem() if invalid == "public_key" else key.export_to_pem(
+    private_key=True, password=None
+)
+if invalid == "invalid_key":
+    pem = b"invalid"
+deployment = {
+    "metadata": {
+        "resourceVersion": "1", "annotations": {"deployment.kubernetes.io/revision": "1"}
+    },
+    "spec": {
+        "replicas": 2 if invalid == "replicas" else 1,
+        "template": {"spec": {"containers": [{"name": "identidad", "image": "registry/test:1"}]}}
+    }
+}
+calls = []
+def kubectl(context, namespace, *arguments):
+    calls.append(arguments)
+    if arguments[:2] == ("get", "deployment"):
+        return json.dumps(deployment)
+    if arguments[:2] == ("get", "secret"):
+        return json.dumps({"data": {} if invalid == "missing_key" else {
+            "LOGIN_ENCRYPTION_PRIVATE_KEY": base64.b64encode(pem).decode()
+        }})
+    if arguments[0] == "exec":
+        return json.dumps({"keys": [json.loads(signer.export_public())]})
+    raise RuntimeError("Unexpected mutation")
+operation.kubectl = kubectl
+args = argparse.Namespace(
+    action="prepare", service="identidad", context="" if invalid == "context" else "explicit",
+    image={
+        "image": "registry/test:latest", "empty_tag": "registry/test:",
+        "invalid_digest": "registry/test@sha256:invalid"
+    }.get(invalid, "registry/new:2"),
+    expected_image="registry/other:1" if invalid == "mismatch" else "registry/test:1",
+    secret_name="identidad-login-encryption"
+)
+try:
+    operation.configure(args)
+except (ValueError, KeyError):
+    if any(call[0] in {"patch", "rollout"} for call in calls):
+        raise SystemExit("Mutated before validation")
+    print("Guard rejected invalid input before mutation")
+else:
+    raise SystemExit("Guard was bypassed")
+""",
+            invalid,
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Guard rejected invalid input before mutation" in result.stdout

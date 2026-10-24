@@ -1,9 +1,13 @@
 """Operación explícita de dos Deployments; nunca crea secretos ni ejecuta Terraform."""
 
 import argparse
+import base64
 import json
+import re
 import subprocess
 from typing import Any
+
+from jwcrypto import jwk
 
 IDENTITY_CHECK = """
 from datetime import UTC, datetime
@@ -17,7 +21,8 @@ r = Redis.from_url(c.redis_url, decode_responses=True, socket_timeout=2, socket_
 s = EncryptedLogin(c.login_encryption_private_key, c.jwt_private_key, r, lambda: datetime.now(UTC))
 issued = s.challenge()
 try:
-    assert 58 <= r.ttl(PREFIX + issued["desafioId"]) <= 60
+    if not 58 <= r.ttl(PREFIX + issued["desafioId"]) <= 60:
+        raise ValueError("TTL del desafio invalido")
     public = issued["clavePublica"]
     header = dict(alg="RSA-OAEP-256", enc="A256GCM", kid=public["kid"], typ="solventa-login+jwe")
     body = dict(
@@ -25,8 +30,10 @@ try:
     )
     envelope = jwe.JWE(json.dumps(body).encode(), protected=json.dumps(header))
     envelope.add_recipient(jwk.JWK(**public))
-    assert s.decrypt_and_consume(body["correo"], envelope.serialize(compact=True)) == "sintetica"
-    assert not r.exists(PREFIX + issued["desafioId"])
+    if s.decrypt_and_consume(body["correo"], envelope.serialize(compact=True)) != "sintetica":
+        raise ValueError("Credencial sintetica invalida")
+    if r.exists(PREFIX + issued["desafioId"]):
+        raise ValueError("El desafio no fue consumido")
 finally:
     r.delete(PREFIX + issued["desafioId"])
     r.close()
@@ -38,9 +45,10 @@ import json
 import os
 from urllib.request import urlopen
 with urlopen("http://127.0.0.1:8080/v1/sesiones/desafio", timeout=5) as response:
-    assert response.status == 200
-    assert response.headers["Cache-Control"] == "no-store"
-    assert set(json.load(response)) == {"desafioId", "clavePublica", "expiraEn"}
+    if response.status != 200 or response.headers["Cache-Control"] != "no-store":
+        raise ValueError("Respuesta de desafio invalida")
+    if set(json.load(response)) != {"desafioId", "clavePublica", "expiraEn"}:
+        raise ValueError("Cuerpo de desafio invalido")
 print("BFF obtiene desafio de identidad; falta comprobar gateway y login web por separado.")
 """
 
@@ -57,15 +65,30 @@ def kubectl(context: str, service: str, *arguments: str) -> str:
 
 
 def configure(args: argparse.Namespace) -> None:
+    if not args.context or args.context.strip() != args.context or args.context.startswith("-"):
+        raise ValueError("Se requiere un contexto explicito valido")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@-]*", args.image):
+        raise ValueError("Referencia de imagen invalida")
+    reference = args.image.rsplit("/", 1)[-1]
+    if not (
+        re.fullmatch(r"[^:@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", reference)
+        or re.fullmatch(r"[^:@]+@sha256:[0-9a-f]{64}", reference)
+    ) or args.image.endswith(":latest"):
+        raise ValueError("La imagen debe tener tag explicito o digest")
+    if args.service not in {"identidad", "bff-web"}:
+        raise ValueError("Servicio no permitido")
+
     def run(*arguments: str) -> str:
         return kubectl(args.context, args.service, *arguments)
 
     deployment: dict[str, Any] = json.loads(run("get", "deployment", args.service, "-o", "json"))
-    assert deployment["spec"]["replicas"] == 1, "Se requiere el perfil de una réplica"
+    if deployment["spec"]["replicas"] != 1:
+        raise ValueError("Se requiere el perfil de una réplica")
     containers = deployment["spec"]["template"]["spec"]["containers"]
     container = next(item for item in containers if item["name"] == args.service)
     expected = args.expected_image if args.action == "prepare" else args.image
-    assert expected and container["image"] == expected, "La imagen actual no coincide"
+    if not expected or container["image"] != expected:
+        raise ValueError("La imagen actual no coincide")
     revision = deployment["metadata"]["annotations"]["deployment.kubernetes.io/revision"]
     print(f"{args.service}: revisión previa {revision}; imagen {container['image']}", flush=True)
 
@@ -92,15 +115,42 @@ def configure(args: argparse.Namespace) -> None:
         {"name": "ENCRYPTED_LOGIN_ENABLED", "value": str(args.action == "enable").lower()}
     ]
     if args.action == "prepare" and args.service == "identidad":
-        assert args.secret_name, "--secret-name es obligatorio para preparar identidad"
-        present = run(
-            "get",
-            "secret",
-            args.secret_name,
-            "-o",
-            'go-template={{if index .data "LOGIN_ENCRYPTION_PRIVATE_KEY"}}presente{{end}}',
+        if not args.secret_name:
+            raise ValueError("--secret-name es obligatorio para preparar identidad")
+        secret = json.loads(run("get", "secret", args.secret_name, "-o", "json"))
+        private_pem = base64.b64decode(
+            secret["data"]["LOGIN_ENCRYPTION_PRIVATE_KEY"], validate=True
         )
-        assert present == "presente", "Falta LOGIN_ENCRYPTION_PRIVATE_KEY en el secreto dedicado"
+        key = jwk.JWK.from_pem(private_pem)
+        if key.get("kty") != "RSA" or not key.has_private:
+            raise ValueError("Se requiere RSA privada")
+        modulus = str(key.get("n"))
+        if (
+            int.from_bytes(
+                base64.urlsafe_b64decode(modulus + "=" * (-len(modulus) % 4)), "big"
+            ).bit_length()
+            < 2048
+        ):
+            raise ValueError("Se requiere RSA de al menos 2048 bits")
+        public_jwks = json.loads(
+            run(
+                "exec",
+                "deployment/identidad",
+                "-c",
+                "identidad",
+                "--",
+                "python",
+                "-c",
+                "from urllib.request import urlopen; "
+                'print(urlopen("http://127.0.0.1:8080/.well-known/jwks.json", timeout=5)'
+                ".read().decode())",
+            )
+        )
+        signing_keys = public_jwks["keys"]
+        if not signing_keys or any(
+            key.thumbprint() == jwk.JWK(**public).thumbprint() for public in signing_keys
+        ):
+            raise ValueError("La clave debe ser independiente de JWT")
         environment.append(
             {
                 "name": "LOGIN_ENCRYPTION_PRIVATE_KEY",
@@ -141,7 +191,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         configure(args)
-    except (AssertionError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+    except Exception as error:
         # No imprimir salida del pod ni contenidos de Secret en un fallo.
         raise SystemExit(
             f"Operación incompleta ({type(error).__name__}). "

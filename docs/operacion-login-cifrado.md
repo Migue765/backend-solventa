@@ -40,9 +40,11 @@ JWE, usuarios, gateway, migraciones o autenticación de socios.
 `deploy/codebuild/deploy.sh` actualiza imágenes pero no aplica estos Deployments.
 El operador ejecuta `scripts/configure_encrypted_login.py` con **contexto explícito**
 y referencias de imagen revisadas. Solo hace get/exec/patch/rollout en el Deployment
-seleccionado y consulta existencia del campo del Secret, nunca su valor.
+seleccionado. Antes de preparar identidad valida la clave del Secret en memoria
+y la compara con el JWKS público actual; nunca imprime ni persiste el PEM.
 No crea recursos, no modifica réplicas/HPA/RBAC/rutas y exige una réplica.
 Cada patch usa `resourceVersion`; un cambio concurrente hace fallar la operación.
+Las guardas son errores explícitos, también con `python -O`; no dependen de `assert`.
 Guardar la revisión previa que imprime cada operación. No continuar ante un fallo.
 
 Ejemplo desde raíz (sustituir marcadores, no ejecutar literalmente):
