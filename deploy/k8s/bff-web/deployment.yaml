@@ -43,6 +43,8 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: ENCRYPTED_LOGIN_ENABLED
+              value: "false"
             - name: AWS_REGION
               value: ${AWS_REGION}
             - name: WEB_CONCURRENCY

@@ -99,7 +99,12 @@ class HttpIdentityGateway:
         return _client_from_json(payload) if payload else None
 
     def _get(
-        self, path: str, correlation_id: str, *, internal: bool = True, allow_not_found: bool = False
+        self,
+        path: str,
+        correlation_id: str,
+        *,
+        internal: bool = True,
+        allow_not_found: bool = False,
     ) -> dict[str, Any]:
         if internal and not self._internal_api_token:
             raise IdentityUnavailableError()

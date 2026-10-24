@@ -364,6 +364,13 @@ resource "aws_apigatewayv2_route" "movil" {
 
 # ---- Rutas publicas (mas especificas que el proxy protegido) ----------------------------------
 # Autenticacion y registro, con throttling propio para frenar la fuerza bruta.
+resource "aws_apigatewayv2_route" "login_challenge" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "GET /v1/sesiones/desafio"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
 resource "aws_apigatewayv2_route" "login" {
   api_id    = aws_apigatewayv2_api.this.id
   route_key = "POST /v1/sesiones"
@@ -427,6 +434,12 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_rate_limit  = var.throttling_rate_limit
     throttling_burst_limit = var.throttling_burst_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.login_challenge.route_key
+    throttling_rate_limit  = var.auth_throttling_rate_limit
+    throttling_burst_limit = var.auth_throttling_burst_limit
   }
 
   route_settings {

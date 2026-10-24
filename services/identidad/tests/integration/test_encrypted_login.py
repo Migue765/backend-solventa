@@ -114,6 +114,42 @@ def test_valid_login_replay_refresh_and_revoke(encrypted_app: Flask) -> None:
     )
 
 
+def test_partner_encrypted_login_keeps_role_and_organizations(encrypted_app: Flask) -> None:
+    result = encrypted_app.test_cli_runner().invoke(
+        args=[
+            "create-partner-user",
+            "--name",
+            "Socio sintético",
+            "--email",
+            "socio@example.com",
+            "--partner-id",
+            "BANK-ENCRYPTED",
+            "--partner-name",
+            "Banco sintético",
+        ],
+        input=f"{PASSWORD}\n{PASSWORD}\n",
+    )
+    assert result.exit_code == 0, result.output
+    compact = encrypt(challenge(encrypted_app), email="socio@example.com")
+    response = encrypted_app.test_client().post(
+        "/oauth/token", json=body(compact, username="socio@example.com")
+    )
+    assert response.status_code == 200
+    assert response.get_json()["usuario"]["rol"] == "socio"
+    assert response.get_json()["usuario"]["socios"] == ["BANK-ENCRYPTED"]
+    refreshed = encrypted_app.test_client().post(
+        "/oauth/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": "web",
+            "refresh_token": response.get_json()["refresh_token"],
+        },
+    )
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["usuario"]["rol"] == "socio"
+    assert refreshed.get_json()["usuario"]["socios"] == ["BANK-ENCRYPTED"]
+
+
 def test_wrong_password_consumes_challenge(encrypted_app: Flask) -> None:
     issued = challenge(encrypted_app)
     client = encrypted_app.test_client()
