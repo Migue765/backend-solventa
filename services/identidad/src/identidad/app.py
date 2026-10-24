@@ -17,6 +17,7 @@ from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
 from identidad.config import Config
 from identidad.domain.auth import User
+from identidad.infrastructure.encrypted_login import EncryptedLogin
 from identidad.infrastructure.jwt_issuer import RsaJwtIssuer
 from identidad.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
 from identidad.infrastructure.passwords import hash_password
@@ -54,6 +55,13 @@ def create_app(
             active_config.max_attempts,
             active_config.attempt_window,
         )
+        if active_config.encrypted_login_enabled:
+            app.extensions["encrypted_login"] = EncryptedLogin(
+                active_config.login_encryption_private_key,
+                active_config.jwt_private_key,
+                redis_client,
+                active_clock,
+            )
 
     sessions = create_sessions(
         active_config.database_url,
@@ -149,6 +157,8 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
+        if request.path.startswith("/oauth/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.errorhandler(BadRequest)

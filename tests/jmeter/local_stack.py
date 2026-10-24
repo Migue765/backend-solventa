@@ -4,11 +4,14 @@ import argparse
 import logging
 import os
 import secrets
+import shutil
 import signal
 import threading
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import TracebackType
+from typing import cast
+from unittest.mock import patch
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config as MigrationConfig
@@ -32,6 +35,18 @@ from werkzeug.serving import BaseWSGIServer, WSGIRequestHandler, make_server
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _private_key_pem() -> str:
+    return (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
+
+
 class QuietHandler(WSGIRequestHandler):
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         # Request paths can contain personal identifiers; JTL contains safe labels instead.
@@ -39,8 +54,15 @@ class QuietHandler(WSGIRequestHandler):
 
 
 class LocalStack:
-    def __init__(self, directory: Path, web_port: int = 0, mobile_port: int = 0) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        web_port: int = 0,
+        mobile_port: int = 0,
+        encrypted_login_enabled: bool = False,
+    ) -> None:
         self.directory = directory
+        self.encrypted_login_enabled = encrypted_login_enabled
         self.ports = {"web": web_port, "mobile": mobile_port}
         self.servers: dict[str, BaseWSGIServer] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -92,24 +114,23 @@ class LocalStack:
         profiles.inicializar()
         profiles.engine.dispose()
         self.internal_token = secrets.token_urlsafe(32)
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        pem = private_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        ).decode()
+        pem = _private_key_pem()
         issuer = "https://identity.local.solventa.test"
         try:
+            identity_config = IdentityConfig(
+                database_url=self.databases["identidad"],
+                jwt_private_key=pem,
+                jwt_issuer=issuer,
+                internal_api_token=self.internal_token,
+                encrypted_login_enabled=self.encrypted_login_enabled,
+                redis_url="redis://local-fake-only" if self.encrypted_login_enabled else None,
+                login_encryption_private_key=(
+                    _private_key_pem() if self.encrypted_login_enabled else ""
+                ),
+            )
             identity = self.start(
                 "identity",
-                identity_app(
-                    IdentityConfig(
-                        database_url=self.databases["identidad"],
-                        jwt_private_key=pem,
-                        jwt_issuer=issuer,
-                        internal_api_token=self.internal_token,
-                    )
-                ),
+                self._identity_app(identity_config),
             )
             profile = self.start(
                 "profile",
@@ -144,6 +165,7 @@ class LocalStack:
                         jwt_issuer=issuer,
                         quote_service_url=quotes,
                         internal_api_token=self.internal_token,
+                        encrypted_login_enabled=self.encrypted_login_enabled,
                     )
                 ),
                 self.ports["web"],
@@ -157,6 +179,14 @@ class LocalStack:
             self.__exit__(None, None, None)
             raise
         return self
+
+    def _identity_app(self, config: IdentityConfig) -> Flask:
+        if not self.encrypted_login_enabled:
+            return cast(Flask, identity_app(config))
+        from fakeredis import FakeRedis
+
+        with patch("identidad.app.Redis.from_url", return_value=FakeRedis(decode_responses=True)):
+            return cast(Flask, identity_app(config))
 
     def __exit__(
         self,
@@ -187,19 +217,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--web-port", type=int, default=5000)
     parser.add_argument("--mobile-port", type=int, default=5001)
+    parser.add_argument(
+        "--encrypted-login",
+        action="store_true",
+        help="Enable web JWE login with an ephemeral dedicated key and shared local fake Redis.",
+    )
     args = parser.parse_args()
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     stopped = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
-    with TemporaryDirectory(prefix="solventa-e2e-") as directory:
-        with LocalStack(Path(directory), args.web_port, args.mobile_port) as stack:
+    directory = ROOT / "reports" / f"solventa-e2e-{uuid4().hex}"
+    try:
+        with LocalStack(directory, args.web_port, args.mobile_port, args.encrypted_login) as stack:
             print(f"BFF web: {stack.urls['web']}; BFF movil: {stack.urls['mobile']}", flush=True)
             print(
                 "SQLite temporal; JWT real; fuentes/pago/poliza academicos. Ctrl+C para cerrar.",
                 flush=True,
             )
             stopped.wait()
+    finally:
+        if directory.exists():
+            shutil.rmtree(directory)
 
 
 if __name__ == "__main__":

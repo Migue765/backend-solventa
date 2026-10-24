@@ -322,10 +322,37 @@ paths:
           $ref: "#/components/responses/DemasiadasSolicitudes"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/desafio:
+    get:
+      tags: [Sesiones]
+      summary: Obtiene un desafío de login cifrado, válido 60 segundos
+      operationId: obtenerDesafioLogin
+      security: []
+      description: >-
+        Requiere ENCRYPTED_LOGIN_ENABLED=true. Sin habilitar responde 503.
+        El BFF delega a identidad; no tiene clave privada ni almacén de desafíos.
+      responses:
+        "200":
+          description: Desafío de un solo uso; no almacenar en caché
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesafioLogin"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones:
     post:
       tags: [Sesiones]
       summary: Inicia una sesión de cliente
+      description: >-
+        Con ENCRYPTED_LOGIN_ENABLED=true solo acepta CredencialesCifradas; rechaza
+        contrasena y campos adicionales. Por defecto solo acepta Credenciales heredadas.
+        Nunca intenta el contrato heredado si falla el login cifrado.
       operationId: iniciarSesion
       security: []
       requestBody:
@@ -333,7 +360,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Credenciales"
+              oneOf:
+                - $ref: "#/components/schemas/Credenciales"
+                - $ref: "#/components/schemas/CredencialesCifradas"
       responses:
         "200":
           description: >-
@@ -1217,6 +1246,56 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+    DesafioLogin:
+      type: object
+      additionalProperties: false
+      required: [desafioId, clavePublica, expiraEn]
+      properties:
+        desafioId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+        expiraEn:
+          type: string
+          format: date-time
+        clavePublica:
+          type: object
+          additionalProperties: false
+          required: [kty, n, e, alg, use, kid]
+          properties:
+            kty:
+              type: string
+              const: RSA
+            n:
+              type: string
+            e:
+              type: string
+            alg:
+              type: string
+              const: RSA-OAEP-256
+            use:
+              type: string
+              const: enc
+            kid:
+              type: string
+              minLength: 1
+    CredencialesCifradas:
+      type: object
+      additionalProperties: false
+      required: [correo, credencialCifrada]
+      properties:
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        credencialCifrada:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: >-
+            JWE compacto con cabecera protegida exacta alg=RSA-OAEP-256, enc=A256GCM,
+            kid de clavePublica, typ=solventa-login+jwe. JSON cifrado exacto
+            {desafioId, correo, contrasena}; correo coincide con el exterior.
+            Desafío válido 60 segundos, consumido antes de verificar la contraseña.
     Credenciales:
       type: object
       additionalProperties: false

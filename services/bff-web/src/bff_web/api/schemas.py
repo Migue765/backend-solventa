@@ -12,6 +12,13 @@ class LoginRequest(BaseModel):
     contrasena: str = Field(min_length=8, max_length=128)
 
 
+class EncryptedLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correo: EmailStr = Field(max_length=254)
+    credencialCifrada: str = Field(min_length=1, max_length=8192, strict=True)
+
+
 class RegisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -5,3 +5,4 @@ pytest-cov==7.0.0
 PyYAML==6.0.3
 ruff==0.14.1
 types-PyYAML==6.0.12.20260906
+types-jwcrypto==1.6.1.20260928

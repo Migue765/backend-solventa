@@ -23,6 +23,8 @@ def test_defaults_match_the_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.attempt_window == timedelta(seconds=300)
     assert config.redis_url is None
     assert config.db_schema is None
+    assert config.encrypted_login_enabled is False
+    assert config.login_encryption_private_key == ""
 
 
 def test_issuer_trailing_slash_and_escaped_newlines_are_normalized(
@@ -89,3 +91,21 @@ def test_unknown_client_has_no_refresh_ttl() -> None:
 
     with pytest.raises(ValueError):
         config.refresh_ttl("otro")
+
+
+def test_encrypted_login_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_required(monkeypatch)
+    monkeypatch.setenv("ENCRYPTED_LOGIN_ENABLED", "true")
+    monkeypatch.setenv("LOGIN_ENCRYPTION_PRIVATE_KEY", "dedicated\\nkey")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    config = Config.from_environment()
+    assert config.encrypted_login_enabled
+    assert config.login_encryption_private_key == "dedicated\nkey"
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "enabled", ""])
+def test_invalid_encrypted_login_flag(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    set_required(monkeypatch)
+    monkeypatch.setenv("ENCRYPTED_LOGIN_ENABLED", value)
+    with pytest.raises(ValueError, match="ENCRYPTED_LOGIN_ENABLED"):
+        Config.from_environment()

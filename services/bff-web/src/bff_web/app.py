@@ -94,6 +94,8 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
+        if request.path.startswith("/v1/sesiones"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.errorhandler(BadRequest)
@@ -115,6 +117,7 @@ def create_app(
             detail="Intenta nuevamente en unos minutos.",
         )
         response.headers["Retry-After"] = "5"
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     return app

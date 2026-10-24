@@ -26,6 +26,8 @@ class Config:
     db_max_overflow: int = 5
     password_iterations: int = DEFAULT_ITERATIONS
     internal_api_token: str = ""
+    encrypted_login_enabled: bool = False
+    login_encryption_private_key: str = ""
 
     def __post_init__(self) -> None:
         if not self.database_url.strip():
@@ -36,6 +38,10 @@ class Config:
             raise ValueError("JWT_ISSUER es obligatorio y no puede terminar en '/'.")
         if self.db_schema is not None and not SCHEMA_PATTERN.fullmatch(self.db_schema):
             raise ValueError("DB_SCHEMA solo admite minúsculas, dígitos y guion bajo.")
+        if self.encrypted_login_enabled and (
+            not self.redis_url or not self.login_encryption_private_key.strip()
+        ):
+            raise ValueError("Encrypted login requiere REDIS_URL y LOGIN_ENCRYPTION_PRIVATE_KEY.")
 
     def refresh_ttl(self, client_id: str) -> timedelta:
         if client_id == "web":
@@ -47,6 +53,10 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            encrypted_login_enabled=_boolean("ENCRYPTED_LOGIN_ENABLED"),
+            login_encryption_private_key=normalize_pem(
+                os.getenv("LOGIN_ENCRYPTION_PRIVATE_KEY", "")
+            ),
             internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             database_url=_required("DATABASE_URL"),
             jwt_private_key=normalize_pem(_required("JWT_PRIVATE_KEY")),
@@ -66,6 +76,13 @@ class Config:
 
 def normalize_pem(value: str) -> str:
     return value.replace("\\n", "\n").strip()
+
+
+def _boolean(name: str) -> bool:
+    value = os.getenv(name, "false").strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} solo admite true o false.")
+    return value == "true"
 
 
 def _required(name: str) -> str:

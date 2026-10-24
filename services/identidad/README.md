@@ -28,6 +28,57 @@ La respuesta incluye `access_token`, `token_type: Bearer`, `expires_in: 3600`, `
 `refresh_expires_in`, `scope: cliente` y `usuario`. Los errores son siempre
 `application/problem+json` con `type`, `title`, `status`, `detail`, `code` y `correlationId`.
 
+## Login web cifrado (opt-in; no desplegado)
+
+`ENCRYPTED_LOGIN_ENABLED` acepta solo `true`/`false`, por defecto `false`.
+Habilitarlo en identidad exige `REDIS_URL` (Redis >= 6.2, por `GETDEL`) y
+`LOGIN_ENCRYPTION_PRIVATE_KEY`: PEM RSA privado persistente, mínimo 2048 bits,
+**distinto de `JWT_PRIVATE_KEY`**. No se generan claves automáticamente.
+Una clave ausente, inválida o compartida con JWT impide arrancar; Redis caído responde 503.
+La imagen instala `jwcrypto` desde el manifiesto; no hay lock adicional.
+
+- `GET /oauth/login-challenge` público emite `{desafioId, clavePublica, expiraEn}`,
+  con TTL de 60 segundos y `Cache-Control: no-store`; deshabilitado responde 503.
+- El BFF reenvía `POST /oauth/token` con
+  `{grant_type:"encrypted_password", client_id:"web", username, credencialCifrada}`.
+  La contraseña permanece cifrada en el salto BFF→identidad.
+- Solo se acepta JWE compacto con cabecera protegida exacta
+  `{alg:"RSA-OAEP-256", enc:"A256GCM", kid:<thumbprint JWK>, typ:"solventa-login+jwe"}`.
+  El contenido JSON exacto es `{desafioId, correo, contrasena}`; correo debe coincidir.
+  Máximos: cuerpo HTTP 16 KiB, JWE 8192 caracteres, JSON descifrado 1024 bytes,
+  contraseña 128 caracteres. No se permite compresión ni cabeceras adicionales.
+- Se valida autenticidad, esquema y correo **antes** de consumir el desafío mediante
+  `GETDEL` atómico. Se consume **antes** de comprobar contraseña/límite de intentos:
+  cada intento necesita un desafío nuevo, incluso tras 401/429.
+  Sobre inválido, expiración, desafío inexistente y replay responden 400.
+- Al habilitar, `password` con `client_id=web` se rechaza; móvil conserva su contrato.
+  Registro, refresh y revocación no cambian. No hay fallback a contraseña en claro.
+
+Solo el login está cubierto: **registro sigue enviando la contraseña sin este sobre**.
+HTTPS sigue siendo obligatorio, también internamente. Esto evita texto claro en el
+payload de login, no protege frente al dueño del navegador, extensiones o XSS.
+No registrar cuerpos de autenticación ni credenciales descifradas.
+
+Todas las réplicas deben compartir Redis y la misma clave de cifrado persistente.
+Solo se admite una clave activa: una rotación simultánea invalida desafíos en vuelo;
+no existe anillo multi-clave ni rotación sin interrupción. Coordinar un drenaje de 60 s
+y hacer que el cliente solicite un desafío nuevo. Limitar el endpoint público en el gateway
+antes de habilitarlo para evitar abuso de CPU/memoria; no se modifica infraestructura aquí.
+
+Para **pruebas locales**, generar dos claves efímeras independientes en memoria (no imprimir
+ni persistir las claves); en PowerShell con Python y el servicio instalados:
+
+```powershell
+python -c "from jwcrypto import jwk; import os; from identidad.config import Config; from identidad.app import create_app; os.environ['JWT_PRIVATE_KEY']=jwk.JWK.generate(kty='RSA',size=2048).export_to_pem(private_key=True,password=None).decode(); os.environ['LOGIN_ENCRYPTION_PRIVATE_KEY']=jwk.JWK.generate(kty='RSA',size=2048).export_to_pem(private_key=True,password=None).decode(); create_app(Config.from_environment()).run(host='127.0.0.1',port=8081)"
+```
+
+Configurar previamente `DATABASE_URL` (migrada), `JWT_ISSUER`, `REDIS_URL` y el flag.
+Este comando **no es configuración de producción**: pierde ambas claves al terminar.
+Para tests sin red, parchear `identidad.app.Redis.from_url` con un
+`fakeredis.FakeRedis(decode_responses=True)` compartido antes de `create_app`.
+Crear SQLite con `Base.metadata.create_all(create_engine(database_url))` y registrar
+un usuario sintético por `POST /v1/usuarios`. No usar cuentas ni claves reales.
+
 ## Tokens
 
 ### Usuarios de plataforma socio

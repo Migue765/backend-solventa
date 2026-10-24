@@ -99,11 +99,31 @@ Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
 entre servicios/SQLite con umbrales p95 250ms y p99 500ms. No acredita SLA AWS:
 medir tambien el gateway publico regional, con la ubicacion del generador,
 100 o mas muestras por producto, errores, cuotas y concurrencia entre socios.
+### Login cifrado (deshabilitado por defecto)
+
+Con `ENCRYPTED_LOGIN_ENABLED=true` en **BFF e identidad**, `GET /v1/sesiones/desafio`
+es público y devuelve `{desafioId, clavePublica, expiraEn}` de identidad, sin caché.
+`POST /v1/sesiones` acepta exclusivamente `{correo, credencialCifrada}` y rechaza
+`contrasena` y campos adicionales. El BFF no descifra: reenvía el sobre a
+`POST /oauth/token` con `grant_type=encrypted_password`, `client_id=web`,
+`username=correo`, `credencialCifrada`. No hay Redis ni claves privadas en el BFF.
+El cliente debe generar JWE `RSA-OAEP-256` + `A256GCM` y pedir un desafío nuevo
+por intento. Véase [identidad](../identidad/README.md#login-web-cifrado-opt-in-no-desplegado).
+
+Sin el flag, el login heredado sigue funcionando y el desafío responde 503.
+No hay fallback entre contratos. Refresh, logout, móvil y **registro** no cambian;
+registro aún envía su contraseña sin este sobre. HTTPS es imprescindible:
+esto no oculta la contraseña al dueño del navegador ni frente a XSS.
+
+La excepción pública `GET /v1/sesiones/desafio` está declarada con throttling de
+autenticación. La ruta interna de identidad no se publica en API Gateway.
+Ver [operación coordinada](../../docs/operacion-login-cifrado.md) antes de habilitar flags.
 
 | Método   | Ruta                              | Auth   | Descripción                                   |
 | -------- | --------------------------------- | ------ | --------------------------------------------- |
 | `POST`   | `/v1/usuarios`                    | No     | Registra un usuario cliente (proxy a identidad) |
 | `POST`   | `/v1/sesiones`                    | No     | Inicia sesión: access token + refresh token   |
+| `GET`    | `/v1/sesiones/desafio`            | No     | Desafío cifrado de un solo uso (opt-in)       |
 | `POST`   | `/v1/sesiones/renovar`            | No     | Rota el refresh token y emite nuevos tokens   |
 | `GET`    | `/v1/sesiones/actual`             | Bearer | Usuario y vencimiento tomados del JWT         |
 | `DELETE` | `/v1/sesiones/actual`             | Bearer | Cierra sesión; revoca el `refreshToken` si se envía |

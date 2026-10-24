@@ -191,6 +191,16 @@ class FakeIdentity:
     error: Exception | None = None
     clients: tuple[User, ...] = (USER,)
 
+    def login_challenge(self, correlation_id: str) -> dict[str, object]:
+        self._record("login_challenge", correlation_id)
+        return {"desafioId": "challenge", "clavePublica": {}, "expiraEn": "2026-10-24T12:00:00Z"}
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet:
+        self._record("encrypted_login", email, encrypted_credential, correlation_id)
+        return self._tokens()
+
     def _record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
         if self.error is not None:
