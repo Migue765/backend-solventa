@@ -27,6 +27,25 @@ terraform apply prod.tfplan
 Quien ejecuta debe ser el usuario IAM `Migue` (o estar en `eks_admin_principal_arns`): el provider de
 Helm usa esa identidad para entrar al cluster.
 
+## Pausa temporal de CodePipeline
+
+`cicd_automatic_triggers_enabled = false` (valor predeterminado en este ambiente)
+desactiva los disparadores por tags de los cinco pipelines: cotizacion, bff-web,
+bff-movil, identidad y polizas. `DetectChanges = "false"` se conserva para que
+los cambios de rama tampoco inicien ejecuciones. No se eliminan pipelines,
+proyectos de CodeBuild ni recursos de la aplicacion desplegada.
+
+Esta pausa solo evita nuevas ejecuciones automaticas: no detiene ejecuciones
+en curso y permite iniciar CodePipeline o CodeBuild manualmente, lo cual sigue
+consumiendo minutos. Antes de aplicar, revisar y detener ejecuciones pendientes
+si las hay, cuidando de no interrumpir migraciones o despliegues en curso.
+No revierte consumo ni cargos ya generados, ni elimina los costos de otros
+servicios de AWS.
+
+Para reactivar, establecer `cicd_automatic_triggers_enabled = true` en
+`terraform.tfvars`, revisar `terraform plan` y aplicar el plan aprobado.
+Los patrones de tags originales se conservan.
+
 ## Tamaños y costo mensual aproximado
 
 | Recurso | Tamaño | USD/mes |

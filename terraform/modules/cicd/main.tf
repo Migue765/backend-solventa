@@ -436,15 +436,19 @@ resource "aws_codepipeline" "this" {
     location = aws_s3_bucket.artifacts.bucket
   }
 
-  trigger {
-    provider_type = "CodeStarSourceConnection"
+  dynamic "trigger" {
+    for_each = var.automatic_triggers_enabled ? [1] : []
 
-    git_configuration {
-      source_action_name = "Source"
+    content {
+      provider_type = "CodeStarSourceConnection"
 
-      push {
-        tags {
-          includes = var.release_tag_patterns
+      git_configuration {
+        source_action_name = "Source"
+
+        push {
+          tags {
+            includes = var.release_tag_patterns
+          }
         }
       }
     }

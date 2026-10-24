@@ -50,6 +50,12 @@ variable "release_tag_patterns" {
   default     = ["v*"]
 }
 
+variable "automatic_triggers_enabled" {
+  description = "Habilita ejecuciones automaticas por tags. false conserva el pipeline solo para ejecuciones manuales."
+  type        = bool
+  default     = true
+}
+
 variable "require_manual_approval" {
   description = "Agrega una aprobacion manual entre el build y el despliegue."
   type        = bool
