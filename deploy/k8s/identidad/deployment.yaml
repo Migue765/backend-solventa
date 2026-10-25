@@ -43,6 +43,8 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: BIOMETRIC_LOGIN_ENABLED
+              value: "false"
             - name: ENCRYPTED_LOGIN_ENABLED
               value: "false"
             - name: LOGIN_ENCRYPTION_PRIVATE_KEY
