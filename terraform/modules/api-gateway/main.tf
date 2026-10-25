@@ -407,6 +407,20 @@ resource "aws_apigatewayv2_route" "movil_register" {
   target    = "integrations/${aws_apigatewayv2_integration.alb.id}"
 }
 
+resource "aws_apigatewayv2_route" "movil_biometric_challenge" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "POST /movil/v1/biometria/desafios"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "movil_biometric_login" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "POST /movil/v1/sesiones/biometria"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
 # Discovery OIDC y JWKS: los consume el authorizer del gateway y cualquier cliente que valide tokens.
 resource "aws_apigatewayv2_route" "oidc_discovery" {
   api_id    = aws_apigatewayv2_api.this.id
@@ -474,6 +488,18 @@ resource "aws_apigatewayv2_stage" "default" {
 
   route_settings {
     route_key              = aws_apigatewayv2_route.movil_register.route_key
+    throttling_rate_limit  = var.auth_throttling_rate_limit
+    throttling_burst_limit = var.auth_throttling_burst_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.movil_biometric_challenge.route_key
+    throttling_rate_limit  = var.auth_throttling_rate_limit
+    throttling_burst_limit = var.auth_throttling_burst_limit
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.movil_biometric_login.route_key
     throttling_rate_limit  = var.auth_throttling_rate_limit
     throttling_burst_limit = var.auth_throttling_burst_limit
   }

@@ -27,6 +27,7 @@ class NewRefreshToken:
     client_id: str
     created_at: datetime
     expires_at: datetime
+    biometric_credential_id: UUID | None = None
 
 
 class RotationOutcome(Enum):

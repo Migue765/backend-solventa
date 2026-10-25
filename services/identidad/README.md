@@ -79,6 +79,16 @@ Para tests sin red, parchear `identidad.app.Redis.from_url` con un
 Crear SQLite con `Base.metadata.create_all(create_engine(database_url))` y registrar
 un usuario sintético por `POST /v1/usuarios`. No usar cuentas ni claves reales.
 
+## Acceso con clave protegida por biometria (opt-in)
+
+Identidad verifica firmas P-256 de claves enroladas con bearer movil y
+reauth de contrasena del mismo titular. `BIOMETRIC_LOGIN_ENABLED=false` por
+defecto; al habilitar exige Redis compartido y migracion `0006`.
+No guarda biometria ni reemplaza el login convencional. No verifica attestation,
+identidad civil, selfie ni prueba de vida. El logout conserva la credencial;
+revocarla bloquea pruebas/refresh vinculados, no JWT ya emitidos.
+Contrato, bytes exactos, limites y operacion: [acceso biometrico](../../docs/acceso-biometrico.md).
+
 ## Tokens
 
 ### Usuarios de plataforma socio

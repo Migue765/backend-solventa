@@ -14,6 +14,9 @@ KNOWN_REJECTIONS = frozenset(
         "refresh_invalido",
         "correo_ya_registrado",
         "demasiados_intentos",
+        "sesion_invalida",
+        "acceso_denegado",
+        "credencial_ya_registrada",
     }
 )
 DEFAULT_RETRY_AFTER = 60
@@ -62,25 +65,81 @@ class HttpIdentityGateway:
         self._post("/oauth/revoke", {"refresh_token": refresh_token}, correlation_id)
 
     def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
+        return self._request("POST", path, body, None, correlation_id)
+
+    def biometric_login(self, proof: dict[str, object], correlation_id: str) -> TokenSet:
+        payload = self._request(
+            "POST",
+            "/oauth/token",
+            {
+                **proof,
+                "grant_type": "biometric_signature",
+                "client_id": self._client_id,
+            },
+            None,
+            correlation_id,
+            expected_status=200,
+        )
+        return _token_set_from_json(payload)
+
+    def biometric_request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+        bearer: str | None,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        expected_status = (
+            204 if method == "DELETE" else 201 if path == "/v1/biometria/enrolamientos" else 200
+        )
+        return self._request(method, path, body, bearer, correlation_id, expected_status)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+        bearer: str | None,
+        correlation_id: str,
+        expected_status: int | None = None,
+    ) -> dict[str, Any]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Correlation-ID": correlation_id,
+        }
+        if bearer is not None:
+            headers["Authorization"] = f"Bearer {bearer}"
         request = Request(
             f"{self._base_url}{path}",
-            data=json.dumps(body).encode("utf-8"),
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "X-Correlation-ID": correlation_id,
-            },
+            data=json.dumps(body).encode("utf-8") if body is not None else None,
+            method=method,
+            headers=headers,
         )
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+                if expected_status is not None and response.status != expected_status:
+                    raise IdentityUnavailableError()
+                # urllib suppresses a 204 body, so reject its framing before reading.
+                if expected_status == 204 and (
+                    response.headers.get("Content-Length", "0") != "0"
+                    or response.headers.get("Transfer-Encoding") is not None
+                ):
+                    raise IdentityUnavailableError()
                 raw = response.read()
         except HTTPError as error:
             raise _rejection_from(error) from error
         except (URLError, OSError, TimeoutError) as error:
             raise IdentityUnavailableError() from error
 
+        if expected_status == 204:
+            if raw:
+                raise IdentityUnavailableError()
+            return {}
         if not raw:
+            if expected_status is not None:
+                raise IdentityUnavailableError()
             return {}
         try:
             payload = json.loads(raw)

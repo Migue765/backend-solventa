@@ -33,6 +33,7 @@ disable_error_code = ["import-untyped"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [
+    "services/bff-movil/src",
     "services/bff-web/src",
     "services/identidad/src",
     "services/cotizacion/src",
