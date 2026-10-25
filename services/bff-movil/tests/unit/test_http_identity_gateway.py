@@ -209,9 +209,7 @@ def test_biometric_json_operation_rejects_empty_or_malformed_response(
 
 
 @pytest.mark.parametrize("status", [200, 201, 202, 204, 206])
-def test_biometric_oauth_grant_requires_200(
-    identity_server: IdentityServer, status: int
-) -> None:
+def test_biometric_oauth_grant_requires_200(identity_server: IdentityServer, status: int) -> None:
     identity_server.respond("POST", "/oauth/token", status, token_response())
     gateway = HttpIdentityGateway(identity_server.url)
     if status == 200:
