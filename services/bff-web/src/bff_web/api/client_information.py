@@ -4,7 +4,7 @@ from uuid import UUID
 from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from bff_web.api.security import partner_claims
+from bff_web.api.security import audit_rejected_response, partner_claims
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
@@ -13,6 +13,7 @@ from bff_web.domain.quote_errors import QuoteServiceUnavailableError
 from bff_web.problems import problem_response
 
 bp = Blueprint("client_information", __name__, url_prefix="/v1/socios")
+bp.after_request(audit_rejected_response)
 
 
 class ClientInformationPayload(BaseModel):
@@ -49,6 +50,7 @@ def consult() -> tuple[Response, int] | Response:
             "Socio no autorizado",
             "La cuenta no pertenece al socio.",
         )
+    g.audit_partner_id = payload.socioId
     try:
         products = cast(QuoteGateway, current_app.extensions["quote_gateway"]).list_products()
     except QuoteServiceUnavailableError:
