@@ -8,8 +8,13 @@ import pytest
 from perfilamiento.adapters import FuenteMock
 from perfilamiento.app import Config, create_app
 from perfilamiento.application import ConsultarPerfil
+from perfilamiento.client_information import (
+    ConsultarInformacionCliente,
+    ConsultarInformacionComando,
+)
 from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConsentimiento, Fuente
 from perfilamiento.persistence import (
+    ConsultaInformacionModel,
     ConsultaModel,
     EventoConsentimientoModel,
     PerfilModel,
@@ -99,6 +104,153 @@ def test_consentimiento_solicitado_debe_coincidir(repo: RepositorioPerfiles) -> 
 
     with Session(repo.engine) as session:
         assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
+
+
+def test_consulta_informacion_minimiza_y_es_idempotente(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    servicio = ConsultarInformacionCliente(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    comando = ConsultarInformacionComando(
+        operation_id=uuid4(),
+        socio_id="BANCO-001",
+        actor_id=uuid4(),
+        cliente_id=cliente_id,
+        producto_id="mortgage-life",
+        finalidad="cotizacion",
+        datos_solicitados=("indicador_riesgo", "movimientos", "saldo"),
+    )
+
+    consulta = servicio.ejecutar(comando, "corr-hu44")
+    reintento = servicio.ejecutar(comando, "corr-reintento")
+
+    assert reintento == consulta
+    assert consulta.datos == {"indicadorRiesgo": "0.50"}
+    assert {evidencia.fuente for evidencia in consulta.evidencia_fuentes} == {
+        "open_finance",
+        "open_data",
+    }
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 1
+        auditorias = list(
+            session.scalars(
+                select(ConsultaModel).where(
+                    ConsultaModel.contenido["operationId"].as_string() == str(comando.operation_id)
+                )
+            )
+        )
+        assert {auditoria.contenido["fuente"] for auditoria in auditorias} == {
+            "open_finance",
+            "open_data",
+        }
+        assert all(auditoria.contenido["resultado"] == "consultada" for auditoria in auditorias)
+
+
+def test_consulta_informacion_rechaza_reuso_con_otros_datos(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    servicio = ConsultarInformacionCliente(
+        repo,
+        ConsentimientosPrueba(cliente_id),
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    comando = ConsultarInformacionComando(
+        uuid4(),
+        "BANCO-001",
+        uuid4(),
+        cliente_id,
+        "mortgage-life",
+        "cotizacion",
+        ("indicador_riesgo",),
+    )
+    servicio.ejecutar(comando, "corr-original")
+
+    with pytest.raises(ErrorPerfilamiento, match="conflicto_idempotencia"):
+        servicio.ejecutar(
+            ConsultarInformacionComando(**{**comando.__dict__, "producto_id": "life"}),
+            "corr-conflicto",
+        )
+
+
+def test_consulta_revocada_bloquea_antes_de_consultar_fuentes(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    assert consentimientos.actual is not None
+    consentimientos.actual = consentimientos.actual.model_copy(update={"estado": "revocado"})
+
+    class FuenteProhibida:
+        nombre = "open_finance"
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            pytest.fail("No se consulta una fuente despues de la revocacion.")
+
+    servicio = ConsultarInformacionCliente(
+        repo, consentimientos, (FuenteProhibida(),), lambda: AHORA
+    )
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.ejecutar(
+            ConsultarInformacionComando(
+                uuid4(),
+                "BANCO-001",
+                uuid4(),
+                cliente_id,
+                "mortgage-life",
+                "cotizacion",
+                ("indicador_riesgo",),
+            ),
+            "corr-revocado",
+        )
+
+
+def test_fuente_fallida_abre_circuito_sin_respuesta_parcial(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+
+    class FuenteFallida:
+        nombre = "open_finance"
+        llamadas = 0
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            self.llamadas += 1
+            raise ErrorPerfilamiento("fuente_no_disponible", 503)
+
+    fuente = FuenteFallida()
+    consentimiento = ConsentimientosPrueba(cliente_id)
+    assert consentimiento.actual is not None
+    consentimiento.actual = consentimiento.actual.model_copy(
+        update={"alcances": ("open_finance",), "fuentes": ("open_finance",)}
+    )
+    servicio = ConsultarInformacionCliente(repo, consentimiento, (fuente,), lambda: AHORA)
+
+    for expected in ("fuente_no_disponible", "fuente_no_disponible", "circuito_abierto"):
+        with pytest.raises(ErrorPerfilamiento, match=expected):
+            servicio.ejecutar(
+                ConsultarInformacionComando(
+                    uuid4(),
+                    "BANCO-001",
+                    uuid4(),
+                    cliente_id,
+                    "mortgage-life",
+                    "cotizacion",
+                    ("indicador_riesgo",),
+                ),
+                "corr-falla",
+            )
+
+    assert fuente.llamadas == 2
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
 
 
 @pytest.mark.parametrize(
