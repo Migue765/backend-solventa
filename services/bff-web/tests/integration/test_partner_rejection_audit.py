@@ -1,4 +1,5 @@
 import json
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -7,9 +8,20 @@ from bff_web.domain.mortgage_profiling import MortgageProfilingError
 from flask import Flask
 from support import USER, KeyPair, sign_token
 
-from .test_client_information_api import ClientInformationGatewayStub
-from .test_mortgage_profiling_api import ADVISOR, MortgageGatewayStub, _payload
-from .test_partner_quotes_api import PARTNER, PATH, PartnerGateway, payload
+from .test_client_information_api import (  # type: ignore[import-not-found]
+    ClientInformationGatewayStub,
+)
+from .test_mortgage_profiling_api import (  # type: ignore[import-not-found]
+    ADVISOR,
+    MortgageGatewayStub,
+    _payload,
+)
+from .test_partner_quotes_api import (  # type: ignore[import-not-found]
+    PARTNER,
+    PATH,
+    PartnerGateway,
+    payload,
+)
 
 CORRELATION_ID = "338995c8-770f-45c5-a420-60e50de46363"
 RECOVERY = f"{PATH}/{uuid4()}?socioId=BANCO-001"
@@ -408,12 +420,15 @@ def test_client_information_success_and_replay_add_no_rejection_or_context_leak(
     app: Flask, keypair: KeyPair, caplog: pytest.LogCaptureFixture
 ) -> None:
     gateway = ClientInformationGatewayStub()
-    result = gateway.consult(
-        {
-            **information_payload(),
-            "actorId": str(PARTNER.user_id),
-        },
-        CORRELATION_ID,
+    result = cast(
+        ClientInformationResult,
+        gateway.consult(
+            {
+                **information_payload(),
+                "actorId": str(PARTNER.user_id),
+            },
+            CORRELATION_ID,
+        ),
     )
     calls: list[dict[str, object]] = []
 
