@@ -32,7 +32,18 @@ JWT del canal web, con `scope: socio` y claim `socios` obtenido de Identidad.
 Login y `/v1/sesiones/actual` incluyen `usuario.socios` para estos operadores.
 `GET /v1/socios/actual` devuelve `apiVersion: "1"`, `usuario`, `socios` (cada
 organizacion con `socioId` y los IDs de productos disponibles del catalogo) y
-`alcances: ["perfilamientos:crear"]`. No hay registro publico de socios.
+`alcances: ["perfilamientos:crear", "clientes:consultar"]`. No hay registro publico de socios.
+
+`POST /v1/socios/consultas-informacion-cliente` implementa HU44. Requiere
+`Idempotency-Key` igual a `operationId`, toma el actor del JWT y valida la pertenencia
+al socio, el cliente registrado y el producto disponible antes de delegar a
+Perfilamiento. Solo solicita y devuelve datos cubiertos por el consentimiento
+autoritativo vigente. Un fallo o circuito abierto de cualquier fuente requerida
+responde `503` sin datos parciales ni fallback. La respuesta incluye la versión del
+consentimiento y evidencia por fuente, y usa `Cache-Control: no-store`.
+
+Configurar `PERFILAMIENTO_SERVICE_URL` con la URL interna de Perfilamiento. El BFF
+limita esta dependencia a 800 ms.
 
 `POST /v1/socios/solicitudes-cotizacion` integra **todos los productos actuales**
 con el motor y la persistencia principales, no una simulacion paralela:

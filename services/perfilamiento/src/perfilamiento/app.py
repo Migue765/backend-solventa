@@ -12,6 +12,10 @@ from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from perfilamiento.adapters import ConsentimientosHttp, FuenteMock
 from perfilamiento.application import ConsultarPerfil
+from perfilamiento.client_information import (
+    ConsultarInformacionCliente,
+    ConsultarInformacionComando,
+)
 from perfilamiento.domain import ErrorPerfilamiento, EventoConsentimiento
 from perfilamiento.persistence import RepositorioPerfiles
 from perfilamiento.ports import Consentimientos, FuentePerfilamiento
@@ -62,6 +66,19 @@ class ConsultaRequest(BaseModel):
         return self
 
 
+class ConsultaInformacionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    operation_id: UUID = Field(alias="operationId")
+    socio_id: str = Field(alias="socioId", min_length=1, max_length=50)
+    actor_id: UUID = Field(alias="actorId")
+    cliente_id: UUID = Field(alias="clienteId")
+    producto_id: str = Field(alias="productoId", min_length=1, max_length=64)
+    finalidad: str = Field(min_length=1, max_length=40)
+    datos_solicitados: tuple[str, ...] = Field(
+        alias="datosSolicitados", min_length=1, max_length=20
+    )
+
+
 def create_app(
     config: Config | None = None,
     consentimientos: Consentimientos | None = None,
@@ -80,8 +97,19 @@ def create_app(
             FuenteMock("open_data", config.mock_escenario),
         ),
     )
+    servicio_informacion = ConsultarInformacionCliente(
+        repositorio,
+        consentimientos or ConsentimientosHttp(config.identidad_url, config.internal_api_token),
+        fuentes
+        if fuentes is not None
+        else (
+            FuenteMock("open_finance", config.mock_escenario),
+            FuenteMock("open_data", config.mock_escenario),
+        ),
+    )
     app.extensions["perfiles"] = repositorio
     app.extensions["consultar_perfil"] = servicio
+    app.extensions["consultar_informacion"] = servicio_informacion
 
     @app.cli.command("init-db")
     def init_db() -> None:
@@ -121,6 +149,26 @@ def create_app(
             payload.consentimiento_version,
         )
         return jsonify(perfil.model_dump(mode="json", by_alias=True)), 201
+
+    @app.post("/v1/consultas-informacion-cliente")
+    def consultar_informacion() -> tuple[Response, int]:
+        try:
+            payload = ConsultaInformacionRequest.model_validate(request.get_json())
+        except (ValidationError, BadRequest, UnsupportedMediaType):
+            return jsonify(error="solicitud_invalida"), 400
+        consulta = servicio_informacion.ejecutar(
+            ConsultarInformacionComando(
+                operation_id=payload.operation_id,
+                socio_id=payload.socio_id,
+                actor_id=payload.actor_id,
+                cliente_id=payload.cliente_id,
+                producto_id=payload.producto_id,
+                finalidad=payload.finalidad,
+                datos_solicitados=payload.datos_solicitados,
+            ),
+            g.correlation_id,
+        )
+        return jsonify(consulta.model_dump(mode="json", by_alias=True)), 201
 
     @app.post("/v1/eventos/consentimientos")
     def aplicar_consentimiento() -> tuple[Response, int] | Response:

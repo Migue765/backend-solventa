@@ -10,6 +10,7 @@ class Config:
     jwks_url: str | None = None
     identity_timeout_seconds: float = 5
     quote_service_url: str = "http://localhost:5000"
+    profiling_service_url: str = "http://localhost:5003"
     internal_api_token: str = ""
     encrypted_login_enabled: bool = False
 
@@ -36,6 +37,9 @@ class Config:
             jwks_url=os.getenv("JWKS_URL") or None,
             identity_timeout_seconds=_positive_float("IDENTIDAD_TIMEOUT_SECONDS", 5),
             quote_service_url=os.getenv("QUOTE_SERVICE_URL", "http://localhost:5000").rstrip("/"),
+            profiling_service_url=os.getenv(
+                "PERFILAMIENTO_SERVICE_URL", "http://localhost:5003"
+            ).rstrip("/"),
         )
 
 

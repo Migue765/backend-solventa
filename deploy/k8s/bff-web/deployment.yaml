@@ -53,6 +53,8 @@ spec:
               value: "2"
             - name: QUOTE_SERVICE_URL
               value: http://cotizacion.cotizacion.svc.cluster.local:8080
+            - name: PERFILAMIENTO_SERVICE_URL
+              value: http://perfilamiento.perfilamiento.svc.cluster.local:8080
             - name: IDENTIDAD_URL
               value: http://identidad.identidad.svc.cluster.local:8080
             - name: INTERNAL_API_TOKEN

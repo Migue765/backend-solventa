@@ -63,7 +63,7 @@ def current_partner() -> Response:
         apiVersion="1",
         usuario=user_to_json(claims.user),
         socios=[{"socioId": partner, "productos": products} for partner in claims.user.partner_ids],
-        alcances=["perfilamientos:crear"],
+        alcances=["perfilamientos:crear", "clientes:consultar"],
     )
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"

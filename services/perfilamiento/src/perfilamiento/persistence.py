@@ -8,7 +8,13 @@ from sqlalchemy import JSON, String, UniqueConstraint, create_engine, func, sele
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConsentimiento, Perfil
+from perfilamiento.domain import (
+    Consentimiento,
+    ConsultaInformacionCliente,
+    ErrorPerfilamiento,
+    EventoConsentimiento,
+    Perfil,
+)
 
 
 class Base(DeclarativeBase):
@@ -39,6 +45,16 @@ class ConsultaModel(Base):
 
     consulta_id: Mapped[UUID] = mapped_column(primary_key=True)
     contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
+class ConsultaInformacionModel(Base):
+    __tablename__ = "consultas_informacion_cliente"
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+    hash_contenido: Mapped[str] = mapped_column(String(64))
 
 
 class EventoConsentimientoModel(Base):
@@ -122,6 +138,41 @@ class RepositorioPerfiles:
     def auditar(self, auditoria: dict[str, object]) -> None:
         with self._sesiones.begin() as sesion:
             sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
+
+    def buscar_consulta_informacion(
+        self, socio_id: str, operation_id: UUID
+    ) -> tuple[ConsultaInformacionCliente, str] | None:
+        with self._sesiones() as sesion:
+            fila = sesion.get(
+                ConsultaInformacionModel,
+                {"socio_id": socio_id, "operation_id": operation_id},
+            )
+            if fila is None:
+                return None
+            if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
+                raise ErrorPerfilamiento("consulta_no_integra", 503)
+            return (
+                ConsultaInformacionCliente.model_validate(fila.contenido),
+                fila.request_fingerprint,
+            )
+
+    def guardar_consulta_informacion(
+        self, consulta: ConsultaInformacionCliente, request_fingerprint: str
+    ) -> None:
+        contenido = consulta.model_dump(mode="json", by_alias=True)
+        try:
+            with self._sesiones.begin() as sesion:
+                sesion.add(
+                    ConsultaInformacionModel(
+                        socio_id=consulta.socio_id,
+                        operation_id=consulta.operation_id,
+                        request_fingerprint=request_fingerprint,
+                        contenido=contenido,
+                        hash_contenido=_hash(contenido),
+                    )
+                )
+        except IntegrityError as error:
+            raise ErrorPerfilamiento("conflicto_idempotencia", 409) from error
 
     def aplicar_consentimiento(self, evento: EventoConsentimiento) -> dict[str, object]:
         contenido = evento.model_dump(mode="json", by_alias=True)

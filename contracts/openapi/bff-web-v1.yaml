@@ -51,13 +51,52 @@ paths:
                   alcances:
                     type: array
                     items:
-                      const: "perfilamientos:crear"
+                      enum: ["perfilamientos:crear", "clientes:consultar"]
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "403":
           description: alcance_insuficiente; cliente y asesor no son socios
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/consultas-informacion-cliente:
+    post:
+      tags: [Socios]
+      operationId: consultarInformacionCliente
+      summary: Consulta información mínima autorizada de un cliente
+      description: >-
+        Requiere JWT de socio, socioId autorizado y consentimiento vigente del
+        cliente para el producto, finalidad, fuentes y datos solicitados.
+        operationId debe coincidir con Idempotency-Key. Un reintento idéntico
+        devuelve la consulta persistida. Si falla una fuente autorizada, la
+        operación falla sin devolver ni persistir datos parciales.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsultaInformacionCliente"
+      responses:
+        "201":
+          description: Consulta autorizada, minimizada y auditada por fuente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InformacionClienteAutorizada"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio, producto, finalidad o consentimiento no autorizado
+        "404":
+          description: cliente_no_encontrado
+        "409":
+          description: idempotencia_conflicto
+        "503":
+          description: Dependencia o fuente no disponible; no contiene datos parciales
   /v1/socios/solicitudes-cotizacion:
     post:
       tags: [Socios]
@@ -893,6 +932,97 @@ components:
         correo:
           type: string
           format: email
+    ConsultaInformacionCliente:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, clienteId, productoId, finalidad, datosSolicitados]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 50
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        finalidad:
+          const: cotizacion
+        datosSolicitados:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+    InformacionClienteAutorizada:
+      type: object
+      additionalProperties: false
+      required:
+        - operationId
+        - socioId
+        - actorId
+        - clienteId
+        - productoId
+        - finalidad
+        - estado
+        - consentimientoId
+        - consentimientoVersion
+        - datos
+        - evidenciaFuentes
+        - consultadaEn
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        actorId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        finalidad:
+          const: cotizacion
+        estado:
+          const: completada
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+        datos:
+          type: object
+          additionalProperties:
+            type: string
+          description: Solo contiene la intersección entre datos solicitados y consentidos.
+        evidenciaFuentes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, version, consultadaEn, simulada]
+            properties:
+              fuente:
+                enum: [open_finance, open_data]
+              version:
+                type: string
+              consultadaEn:
+                type: string
+                format: date-time
+              simulada:
+                type: boolean
+        consultadaEn:
+          type: string
+          format: date-time
     NuevaSolicitudSocio:
       type: object
       additionalProperties: false
