@@ -7,7 +7,12 @@ from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
-from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.api.security import (
+    audit_rejected_response,
+    authenticate,
+    bearer_token,
+    invalid_session_response,
+)
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.ports import IdentityGateway
 from bff_web.domain.auth import AccessClaims, User
@@ -22,6 +27,7 @@ from bff_web.domain.mortgage_profiling import (
 from bff_web.problems import problem_response
 
 bp = Blueprint("mortgage_profiling", __name__, url_prefix="/v1")
+bp.after_request(audit_rejected_response)
 
 
 class _Payload(BaseModel):
@@ -96,6 +102,7 @@ def start() -> tuple[Response, int] | Response:
             "Socio no autorizado",
             "La cuenta no esta autorizada para operar en este socio.",
         )
+    g.audit_partner_id = payload.partner_id
     identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
     selected = identity.get_client(payload.client.client_id, str(g.correlation_id))
     if selected is None:
@@ -124,9 +131,14 @@ def _advisor_claims() -> AccessClaims | None:
     try:
         claims = authenticate()
     except InvalidAccessTokenError:
+        g.audit_rejection_reason = (
+            "credencial_ausente" if bearer_token() is None else "credencial_invalida"
+        )
         return None
     if claims.scope != "asesor" or claims.user.role != "asesor":
+        g.audit_rejection_reason = "alcance_insuficiente"
         return None
+    g.audit_actor_id = str(claims.user.user_id)
     return claims
 
 
