@@ -155,6 +155,60 @@ ni desplegado esta configuracion**; antes de habilitar en produccion hay que
 coordinar su despliegue autorizado y comprobar ambas rutas publicas y la frontera
 protegida. No se han cambiado permisos, recursos AWS ni rutas desplegadas.
 
+## Habilitacion en el entorno real
+
+Los manifiestos de Identidad y BFF movil declaran `BIOMETRIC_LOGIN_ENABLED="false"`.
+`deploy/codebuild/deploy.sh` solo ejecuta el Job de migracion y `kubectl set image`:
+no reaplica variables, asi que activar la bandera es un paso explicito del operador.
+Orden, sin saltar pasos. Ante cualquier fallo o resultado inesperado, detenerse y
+no habilitar:
+
+1. **Terraform.** Desde `terraform/environments/prod/primary`, ejecutar
+   `terraform plan -out=plan.tfplan` completo, sin `-target` ni
+   omitir recursos. El stack prod incluye otros modulos (perfilamiento, polizas,
+   CI/CD): revisar el plan entero. Debe agregar las dos rutas biometricas y sus
+   integraciones; cualquier otro cambio o drift se aclara antes de aplicar. Aplicar
+   solo ese plan guardado y con autorizacion.
+2. **Despliegue con imagen de `develop`.** Identidad con `MIGRATE=true` (Job
+   `alembic upgrade head`, espera `--timeout=300s`) y BFF movil con `MIGRATE=false`,
+   mediante `deploy/codebuild/deploy.sh`, que revierte si el rollout falla.
+3. **Migracion realmente aplicada.** El exito del Job no basta:
+   `kubectl -n identidad exec deploy/identidad -- alembic current` debe mostrar
+   `0006 (head)` (la tabla de version es `alembic_version_identidad`, esquema `identidad`).
+4. **Redis sin revelar el secreto.** Un `PING` desde el pod que no imprime la URL:
+   `kubectl -n identidad exec deploy/identidad -- python -c "import os,redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()"`
+   (sin salida y codigo 0 si responde). Si falla, no activar.
+5. **Issuer exacto.** `JWT_ISSUER` de ambos servicios debe ser identico al
+   `terraform output -raw jwt_issuer` y al `issuer` de `/.well-known/openid-configuration`
+   (sin barra final); Android firma el hash de ese valor exacto.
+6. **Activar.** Primero Identidad, luego BFF movil:
+   `kubectl -n identidad set env deployment/identidad BIOMETRIC_LOGIN_ENABLED=true`
+   y `kubectl -n identidad rollout status deployment/identidad --timeout=300s`; despues
+   lo mismo con `-n bff-movil` y `deployment/bff-movil`. Si un rollout falla,
+   `kubectl rollout undo` de ese Deployment y volver a pasos 3-5.
+7. **Smoke** (con una cuenta existente y autorizada; no registrar ni mostrar tokens
+   o contrasenas, solo codigos de estado):
+   - Login convencional con esa cuenta: 200, igual que antes de activar.
+   - `POST /movil/v1/biometria/desafios` y `POST /movil/v1/sesiones/biometria` con
+     credencial inexistente o firma invalida: 401, no 404 ni 503.
+   - `POST .../biometria/enrolamientos/desafio`, `GET .../biometria/credenciales`
+     y `DELETE .../biometria/credenciales/{credencialId}` sin JWT: 401.
+   - Con sesion valida: enrolar un P-256 propio de prueba, login firmado 200, replay
+     del mismo desafio 401, firma alterada 401, revocar 204 y login con esa
+     credencial 401. Revocar solo la credencial creada en la prueba.
+
+**Desactivar o revertir.** Primero BFF movil
+(`kubectl -n bff-movil set env deployment/bff-movil BIOMETRIC_LOGIN_ENABLED=false`),
+luego Identidad, esperando `rollout status` en cada uno. Los endpoints responden 503 y el
+login convencional sigue. Desactivar la bandera no revoca las credenciales ni las
+familias de refresh biometricas: las sesiones ya emitidas conservan su renovacion
+y cierre por las rutas convencionales, y el access token vigente dura hasta su
+expiracion (60 min). La gestion de credenciales biometricas no esta disponible
+mientras la bandera esta desactivada; no se borran tablas para deshabilitarla.
+
+Un `kubectl apply` posterior de los manifiestos vuelve la bandera a `false`; tras
+reaplicar hay que repetir el paso 6.
+
 ## Evidencia local y alcance de pruebas
 
 Pruebas unitarias/integracion cubren vector fijo, SPKI/DER/base64 canonicos,

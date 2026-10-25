@@ -49,6 +49,8 @@ spec:
               value: "2"
             - name: GUNICORN_THREADS
               value: "2"
+            - name: BIOMETRIC_LOGIN_ENABLED
+              value: "false"
             - name: IDENTIDAD_URL
               value: http://identidad.identidad.svc.cluster.local:8080
             - name: JWT_ISSUER
