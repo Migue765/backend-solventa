@@ -127,25 +127,25 @@ class ConsultarInformacionCliente:
                 max((fuente.indicador_riesgo for fuente in fuentes), default=Decimal("0"))
             )
         consulta = ConsultaInformacionCliente(
-            operationId=comando.operation_id,
-            socioId=comando.socio_id,
-            actorId=comando.actor_id,
-            clienteId=comando.cliente_id,
-            productoId=comando.producto_id,
+            operation_id=comando.operation_id,
+            socio_id=comando.socio_id,
+            actor_id=comando.actor_id,
+            cliente_id=comando.cliente_id,
+            producto_id=comando.producto_id,
             finalidad="cotizacion",
-            consentimientoId=consentimiento.consentimiento_id,
-            consentimientoVersion=consentimiento.version,
+            consentimiento_id=consentimiento.consentimiento_id,
+            consentimiento_version=consentimiento.version,
             datos=datos,
-            evidenciaFuentes=tuple(
+            evidencia_fuentes=tuple(
                 EvidenciaFuente(
                     fuente=fuente.nombre,
                     version=fuente.version,
-                    consultadaEn=fuente.consultada_en,
+                    consultada_en=fuente.consultada_en,
                     simulada=fuente.simulada,
                 )
                 for fuente in fuentes
             ),
-            consultadaEn=ahora,
+            consultada_en=ahora,
         )
         self._repositorio.guardar_consulta_informacion(consulta, fingerprint)
         return consulta
