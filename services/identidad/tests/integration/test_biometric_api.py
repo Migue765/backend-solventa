@@ -2,7 +2,7 @@ import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import fakeredis
@@ -69,14 +69,17 @@ def register_login(client: Any, email: str = "ana@solventa.co") -> dict[str, Any
         },
     )
     assert login.status_code == 200
-    return login.get_json()
+    return cast(dict[str, Any], login.get_json())
 
 
 @pytest.fixture
 def biometric_app(make_app: Any, monkeypatch: pytest.MonkeyPatch) -> Flask:
     redis = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr("identidad.app.Redis.from_url", lambda *args, **kwargs: redis)
-    return make_app(biometric_login_enabled=True, redis_url="redis://synthetic", max_attempts=50)
+    return cast(
+        Flask,
+        make_app(biometric_login_enabled=True, redis_url="redis://synthetic", max_attempts=50),
+    )
 
 
 def enroll(client: Any, key: ec.EllipticCurvePrivateKey, tokens: dict[str, Any]) -> str:
@@ -96,13 +99,13 @@ def enroll(client: Any, key: ec.EllipticCurvePrivateKey, tokens: dict[str, Any])
     )
     assert response.status_code == 201, response.get_json()
     assert "access_token" not in response.get_json()
-    return challenge["credencialId"]
+    return cast(str, challenge["credencialId"])
 
 
 def login_challenge(client: Any, credential_id: str) -> dict[str, Any]:
     response = client.post("/v1/biometria/desafios", json={"credencialId": credential_id})
     assert response.status_code == 200, response.get_json()
-    return response.get_json()
+    return cast(dict[str, Any], response.get_json())
 
 
 def test_enroll_login_rotate_logout_revoke_and_audit(

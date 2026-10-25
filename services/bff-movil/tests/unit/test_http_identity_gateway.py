@@ -231,7 +231,7 @@ def test_legacy_operations_keep_their_existing_success_semantics(
     identity_server.respond("POST", "/v1/usuarios", 202, {"usuario": token_response()["usuario"]})
     assert gateway.register("Ana", "a@s.co", "Solventa123!", CID) == USER
     identity_server.respond("POST", "/oauth/revoke", 202)
-    assert gateway.revoke("refresh", CID) is None
+    gateway.revoke("refresh", CID)
 
 
 def test_slow_identity_times_out_as_unavailable(identity_server: IdentityServer) -> None:
