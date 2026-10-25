@@ -1,7 +1,8 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from cotizacion.app import create_app
@@ -241,3 +242,67 @@ def test_old_worker_cannot_finalize_replaced_reservation(database_url):
         with pytest.raises(AdmisionRechazada):
             validar_reserva(session, "BANK", operation, old_token)
         validar_reserva(session, "BANK", operation, new_token)
+
+
+@pytest.mark.parametrize(
+    "code,status",
+    [("cuota_socio_excedida", 429), ("socio_ocupado", 429), ("operacion_en_curso", 409)],
+)
+def test_admission_audit_is_structured_without_payload_identity(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    code: str,
+    status: int,
+) -> None:
+    app = app_for(database_url)
+
+    def reject(*args: object, **kwargs: object) -> UUID:
+        raise AdmisionRechazada(code, status, 12)
+
+    monkeypatch.setattr(app.extensions["admision_socios"], "_adquirir", reject)
+    body = payload()
+    correlation_id = str(uuid4())
+    response = app.test_client().post(
+        PATH,
+        json=body,
+        headers={
+            "Authorization": "Bearer " + INTERNAL_TOKEN,
+            "Idempotency-Key": body["operationId"],
+            "X-Correlation-ID": correlation_id,
+        },
+    )
+    assert response.status_code == status
+    assert response.get_json() == {"error": code, "correlationId": correlation_id}
+    assert response.headers["Retry-After"] == "12"
+    records = [record for record in caplog.records if getattr(record, "event", None)]
+    assert len(records) == 1
+    fields = records[0].__dict__
+    assert fields["event"] == "sol325.rechazo"
+    assert json.loads(records[0].getMessage()) == {
+        key: fields[key]
+        for key in ("event", "code", "reason", "status", "correlationId", "endpoint")
+    }
+    assert fields["code"] == fields["reason"] == code
+    assert fields["status"] == status
+    assert fields["correlationId"] == response.headers["X-Correlation-ID"]
+    assert "actorId" not in fields and "socioId" not in fields
+    for value in (
+        *(
+            body[key]
+            for key in (
+                "socioId",
+                "usuarioId",
+                "clienteId",
+                "correo",
+                "identificacion",
+                "telefono",
+                "consentimientoId",
+                "operationId",
+            )
+        ),
+        body["datosProducto"]["vehiclePlate"],
+        INTERNAL_TOKEN,
+    ):
+        assert str(value) not in repr(fields)
+    assert fields["exc_info"] is None
