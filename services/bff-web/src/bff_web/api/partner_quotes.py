@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from bff_web.api.mortgage_profiling import _error_response
 from bff_web.api.quotes import QuoteRequestPayload
 from bff_web.api.schemas import user_to_json
-from bff_web.api.security import partner_claims
+from bff_web.api.security import audit_rejected_response, partner_claims
 from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.document_types import validate_identification
@@ -17,6 +17,7 @@ from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGa
 from bff_web.problems import problem_response
 
 bp = Blueprint("partner_quotes", __name__, url_prefix="/v1/socios")
+bp.after_request(audit_rejected_response)
 
 
 class PartnerClientPayload(BaseModel):
@@ -63,7 +64,7 @@ def current_partner() -> Response:
         apiVersion="1",
         usuario=user_to_json(claims.user),
         socios=[{"socioId": partner, "productos": products} for partner in claims.user.partner_ids],
-        alcances=["perfilamientos:crear"],
+        alcances=["perfilamientos:crear", "clientes:consultar"],
     )
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"
@@ -88,6 +89,7 @@ def start() -> tuple[Response, int] | Response:
         )
     if payload.socioId not in claims.user.partner_ids:
         return _partner_error()
+    g.audit_partner_id = payload.socioId
     identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
     client = identity.get_client(payload.cliente.clienteId, str(g.correlation_id))
     if client is None:
@@ -132,6 +134,7 @@ def get(operation_id: UUID) -> Response:
     partner_id = request.args.get("socioId", "")
     if partner_id not in claims.user.partner_ids:
         return _partner_error()
+    g.audit_partner_id = partner_id
     try:
         result = _gateway().get(partner_id, operation_id, str(g.correlation_id))
     except MortgageProfilingError as error:

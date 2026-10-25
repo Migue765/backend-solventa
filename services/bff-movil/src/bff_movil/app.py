@@ -4,7 +4,8 @@ from uuid import UUID, uuid4
 from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_movil.api import health, sessions, users
+from bff_movil.api import biometrics, health, sessions, users
+from bff_movil.application.biometric_ports import BiometricGateway
 from bff_movil.application.ports import IdentityGateway, TokenVerifier
 from bff_movil.config import Config
 from bff_movil.domain.auth import CHANNEL
@@ -18,11 +19,15 @@ def create_app(
     config: Config | None = None,
     identity_gateway: IdentityGateway | None = None,
     token_verifier: TokenVerifier | None = None,
+    biometric_gateway: BiometricGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
 
     app.extensions["bff_config"] = active_config
+    app.extensions["biometric_gateway"] = biometric_gateway or HttpIdentityGateway(
+        active_config.identity_url, active_config.identity_timeout_seconds
+    )
     app.extensions["clock"] = lambda: datetime.now(UTC)
     app.extensions["identity_gateway"] = identity_gateway or HttpIdentityGateway(
         active_config.identity_url,
@@ -40,6 +45,7 @@ def create_app(
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
+    app.register_blueprint(biometrics.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
@@ -48,6 +54,10 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
+        if request.path.startswith("/movil/v1/biometria/") or (
+            request.path == "/movil/v1/sesiones/biometria"
+        ):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.errorhandler(BadRequest)

@@ -164,6 +164,76 @@ def test_unreachable_identity_is_unavailable() -> None:
         HttpIdentityGateway(closed_port_url(), timeout_seconds=1).login("a@s.co", "x" * 8, CID)
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("POST", "/v1/biometria/enrolamientos/desafio", 200),
+        ("POST", "/v1/biometria/enrolamientos", 201),
+        ("POST", "/v1/biometria/desafios", 200),
+        ("GET", "/v1/biometria/credenciales", 200),
+        ("DELETE", f"/v1/biometria/credenciales/{CID}", 204),
+    ],
+)
+@pytest.mark.parametrize("status", [200, 201, 202, 204, 206])
+def test_biometric_operations_require_exact_wire_status(
+    identity_server: IdentityServer, method: str, path: str, expected: int, status: int
+) -> None:
+    body = None if status == 204 else {"resultado": "inesperado"}
+    identity_server.respond(method, path, status, body)
+    gateway = HttpIdentityGateway(identity_server.url)
+    if status == expected:
+        assert gateway.biometric_request(method, path, None, None, CID) == (body or {})
+    else:
+        with pytest.raises(IdentityUnavailableError):
+            gateway.biometric_request(method, path, None, None, CID)
+
+
+@pytest.mark.parametrize("body", [b"{}", b" ", b'{"estado":"revocada"}'])
+def test_biometric_delete_rejects_204_with_body(
+    identity_server: IdentityServer, body: bytes
+) -> None:
+    path = f"/v1/biometria/credenciales/{CID}"
+    identity_server.respond_raw("DELETE", path, 204, body)
+    with pytest.raises(IdentityUnavailableError):
+        HttpIdentityGateway(identity_server.url).biometric_request("DELETE", path, None, None, CID)
+
+
+@pytest.mark.parametrize("body", [b"", b"[]", b"not json"])
+def test_biometric_json_operation_rejects_empty_or_malformed_response(
+    identity_server: IdentityServer, body: bytes
+) -> None:
+    path = "/v1/biometria/desafios"
+    identity_server.respond_raw("POST", path, 200, body)
+    with pytest.raises(IdentityUnavailableError):
+        HttpIdentityGateway(identity_server.url).biometric_request("POST", path, {}, None, CID)
+
+
+@pytest.mark.parametrize("status", [200, 201, 202, 204, 206])
+def test_biometric_oauth_grant_requires_200(identity_server: IdentityServer, status: int) -> None:
+    identity_server.respond("POST", "/oauth/token", status, token_response())
+    gateway = HttpIdentityGateway(identity_server.url)
+    if status == 200:
+        assert gateway.biometric_login({"firma": "proof"}, CID).user == USER
+        assert identity_server.requests[-1]["body"]["grant_type"] == "biometric_signature"
+    else:
+        with pytest.raises(IdentityUnavailableError):
+            gateway.biometric_login({"firma": "proof"}, CID)
+
+
+def test_legacy_operations_keep_their_existing_success_semantics(
+    identity_server: IdentityServer,
+) -> None:
+    gateway = HttpIdentityGateway(identity_server.url)
+    identity_server.respond("POST", "/oauth/token", 201, token_response())
+    assert gateway.login("a@s.co", "Solventa123!", CID).user == USER
+    identity_server.respond("POST", "/oauth/token", 202, token_response())
+    assert gateway.refresh("refresh", CID).user == USER
+    identity_server.respond("POST", "/v1/usuarios", 202, {"usuario": token_response()["usuario"]})
+    assert gateway.register("Ana", "a@s.co", "Solventa123!", CID) == USER
+    identity_server.respond("POST", "/oauth/revoke", 202)
+    gateway.revoke("refresh", CID)
+
+
 def test_slow_identity_times_out_as_unavailable(identity_server: IdentityServer) -> None:
     identity_server.respond("POST", "/oauth/token", 200, token_response(), delay=1)
 

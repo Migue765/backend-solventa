@@ -27,6 +27,7 @@ class Config:
     password_iterations: int = DEFAULT_ITERATIONS
     internal_api_token: str = ""
     encrypted_login_enabled: bool = False
+    biometric_login_enabled: bool = False
     login_encryption_private_key: str = ""
 
     def __post_init__(self) -> None:
@@ -42,6 +43,8 @@ class Config:
             not self.redis_url or not self.login_encryption_private_key.strip()
         ):
             raise ValueError("Encrypted login requiere REDIS_URL y LOGIN_ENCRYPTION_PRIVATE_KEY.")
+        if self.biometric_login_enabled and not self.redis_url:
+            raise ValueError("Biometric login requiere REDIS_URL para limites compartidos.")
 
     def refresh_ttl(self, client_id: str) -> timedelta:
         if client_id == "web":
@@ -53,6 +56,7 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            biometric_login_enabled=_boolean("BIOMETRIC_LOGIN_ENABLED"),
             encrypted_login_enabled=_boolean("ENCRYPTED_LOGIN_ENABLED"),
             login_encryption_private_key=normalize_pem(
                 os.getenv("LOGIN_ENCRYPTION_PRIVATE_KEY", "")

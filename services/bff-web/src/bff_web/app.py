@@ -5,6 +5,7 @@ from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import (
+    client_information,
     consents,
     health,
     mortgage_profiling,
@@ -13,6 +14,7 @@ from bff_web.api import (
     sessions,
     users,
 )
+from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.profiling_ports import ProfilingGateway
@@ -21,6 +23,9 @@ from bff_web.config import Config
 from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
 from bff_web.domain.profiling import ProfilingError
+from bff_web.infrastructure.http_client_information_gateway import (
+    HttpClientInformationGateway,
+)
 from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
 from bff_web.infrastructure.http_mortgage_profiling_gateway import (
     HttpMortgageProfilingGateway,
@@ -39,6 +44,7 @@ def create_app(
     token_verifier: TokenVerifier | None = None,
     profiling_gateway: ProfilingGateway | None = None,
     mortgage_profiling_gateway: MortgageProfilingGateway | None = None,
+    client_information_gateway: ClientInformationGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -77,6 +83,13 @@ def create_app(
     app.extensions["partner_quote_gateway"] = HttpPartnerQuoteGateway(
         active_config.quote_service_url, active_config.internal_api_token
     )
+    app.extensions["client_information_gateway"] = (
+        client_information_gateway
+        or HttpClientInformationGateway(
+            active_config.profiling_service_url,
+            active_config.internal_api_token,
+        )
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
@@ -86,6 +99,7 @@ def create_app(
     app.register_blueprint(quotes.bp)
     app.register_blueprint(mortgage_profiling.bp)
     app.register_blueprint(partner_quotes.bp)
+    app.register_blueprint(client_information.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

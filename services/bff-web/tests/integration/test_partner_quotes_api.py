@@ -84,7 +84,7 @@ def test_real_partner_context_and_authoritative_client(
     assert current.status_code == 200
     assert current.get_json()["usuario"]["rol"] == "socio"
     assert current.get_json()["usuario"]["socios"] == ["BANCO-001"]
-    assert current.get_json()["alcances"] == ["perfilamientos:crear"]
+    assert current.get_json()["alcances"] == ["perfilamientos:crear", "clientes:consultar"]
 
 
 @pytest.mark.parametrize(

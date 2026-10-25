@@ -41,6 +41,12 @@ class TokenService:
         self._dummy_hash = hash_password("not-a-real-password", iterations=iterations)
 
     def password_grant(self, email: str, password: str, client_id: str) -> IssuedTokens:
+        user = self.authenticate_password(email, password)
+        stored, issued = self.prepare_session(user, client_id)
+        self._refresh_tokens.add(stored)
+        return issued
+
+    def authenticate_password(self, email: str, password: str) -> User:
         now = self._clock()
         normalized_email = email.strip().casefold()
         attempt_key = f"login:{normalized_email}"
@@ -54,19 +60,26 @@ class TokenService:
             raise InvalidCredentialsError()
 
         self._attempt_limiter.reset(attempt_key)
+        return credential.user
+
+    def prepare_session(
+        self, user: User, client_id: str, biometric_credential_id: UUID | None = None
+    ) -> tuple[NewRefreshToken, IssuedTokens]:
+        now = self._clock()
         refresh_token = _new_refresh_token()
         ttl = self._refresh_ttl(client_id)
-        self._refresh_tokens.add(
+        return (
             NewRefreshToken(
                 token_hash=_hash(refresh_token),
-                user_id=credential.user.user_id,
+                user_id=user.user_id,
                 family_id=self._id_factory(),
                 client_id=client_id,
                 created_at=now,
                 expires_at=now + ttl,
-            )
+                biometric_credential_id=biometric_credential_id,
+            ),
+            self._issued(user, client_id, refresh_token, ttl),
         )
-        return self._issued(credential.user, client_id, refresh_token, ttl)
 
     def refresh_grant(self, refresh_token: str, client_id: str) -> IssuedTokens:
         now = self._clock()

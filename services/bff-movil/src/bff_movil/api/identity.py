@@ -7,6 +7,9 @@ from bff_movil.domain.errors import IdentityRejectedError
 from bff_movil.problems import problem_response
 
 REJECTIONS = {
+    "sesion_invalida": ("Sesion no valida", "Inicia sesion nuevamente."),
+    "acceso_denegado": ("Acceso denegado", "Esta operacion requiere una cuenta cliente."),
+    "credencial_ya_registrada": ("Credencial ya registrada", "Registra una clave nueva."),
     "solicitud_invalida": ("Solicitud inválida", "Revisa los datos enviados."),
     "credenciales_invalidas": (
         "No fue posible iniciar sesión",
@@ -33,6 +36,8 @@ def correlation_id() -> str:
 def rejection_response(error: IdentityRejectedError) -> Response:
     title, detail = REJECTIONS[error.code]
     response = problem_response(status=error.status, code=error.code, title=title, detail=detail)
+    if error.code == "sesion_invalida":
+        response.headers["WWW-Authenticate"] = "Bearer"
     if error.retry_after is not None:
         response.headers["Retry-After"] = str(error.retry_after)
     return response

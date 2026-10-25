@@ -18,6 +18,7 @@ API interna con Bearer; `/health` no requiere autenticacion:
 | Metodo | Ruta | Entrada |
 |---|---|---|
 | POST | `/v1/perfiles` | `clienteId` y `referenciaId` UUID de la cotizacion |
+| POST | `/v1/consultas-informacion-cliente` | Contexto autorizado de HU44 e identificador idempotente |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
 
@@ -58,10 +59,23 @@ El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 422 
 409 por version concurrente y 503 por dependencia o integridad fallida. No se entregan perfiles
 parciales, ni un fallback que parezca exitoso.
 
-El adaptador de Identidad limita cada llamada a 700 ms. No existe cache Redis de perfiles,
-batch ni proyeccion analitica en este recorrido: no se inventan consumidores ni se acredita
-propagacion hacia ellos. Tampoco hay circuit breaker ni fallback automatico. No se contempla
-conectar proveedores reales. El hash local detecta alteraciones del contenido, pero no
-sustituye WORM ni una firma. El chequeo previo al uso no es una transaccion distribuida con
-Identidad; con las fuentes locales simuladas no hay divulgacion externa, y estas pruebas no
-demuestran la propiedad de cero divulgaciones para un adaptador real.
+El adaptador de Identidad limita cada llamada a 700 ms. En la generación de perfiles no existe
+cache Redis, batch, proyección analítica, circuit breaker ni fallback automático: no se inventan
+consumidores ni se acredita propagación hacia ellos. No se contempla conectar proveedores reales.
+El hash local detecta alteraciones del contenido, pero no sustituye WORM ni una firma. El chequeo
+previo al uso no es una transacción distribuida con Identidad; con las fuentes locales simuladas
+no hay divulgación externa, y estas pruebas no demuestran la propiedad de cero divulgaciones para
+un adaptador real.
+
+## Consulta autorizada HU44
+
+La consulta de información usa `socioId + operationId` como clave idempotente,
+minimiza por intersección entre `datosSolicitados` y los datos consentidos y registra
+por fuente la operación, actor, cliente, producto, finalidad, fecha y resultado.
+Consulta el consentimiento autoritativo en cada intento, por lo que una revocación
+bloquea inmediatamente nuevas consultas.
+
+Cada fuente tiene un circuit breaker que abre tras dos fallos y vuelve a probar a los
+30 segundos. La política es fail-closed: una fuente lenta, fallida o con circuito
+abierto cancela la consulta completa; no se persiste ni devuelve una respuesta
+parcial y no se reutilizan datos históricos como fallback.

@@ -32,7 +32,18 @@ JWT del canal web, con `scope: socio` y claim `socios` obtenido de Identidad.
 Login y `/v1/sesiones/actual` incluyen `usuario.socios` para estos operadores.
 `GET /v1/socios/actual` devuelve `apiVersion: "1"`, `usuario`, `socios` (cada
 organizacion con `socioId` y los IDs de productos disponibles del catalogo) y
-`alcances: ["perfilamientos:crear"]`. No hay registro publico de socios.
+`alcances: ["perfilamientos:crear", "clientes:consultar"]`. No hay registro publico de socios.
+
+`POST /v1/socios/consultas-informacion-cliente` implementa HU44. Requiere
+`Idempotency-Key` igual a `operationId`, toma el actor del JWT y valida la pertenencia
+al socio, el cliente registrado y el producto disponible antes de delegar a
+Perfilamiento. Solo solicita y devuelve datos cubiertos por el consentimiento
+autoritativo vigente. Un fallo o circuito abierto de cualquier fuente requerida
+responde `503` sin datos parciales ni fallback. La respuesta incluye la versión del
+consentimiento y evidencia por fuente, y usa `Cache-Control: no-store`.
+
+Configurar `PERFILAMIENTO_SERVICE_URL` con la URL interna de Perfilamiento. El BFF
+limita esta dependencia a 800 ms.
 
 `POST /v1/socios/solicitudes-cotizacion` integra **todos los productos actuales**
 con el motor y la persistencia principales, no una simulacion paralela:
@@ -87,12 +98,52 @@ Admision persistente de Cotizacion devuelve `429 cuota_socio_excedida` o
 Fallos de dependencias devuelven `503`, nunca una cotizacion artificial.
 Respuestas llevan `Cache-Control: no-store` y `X-Correlation-ID`.
 
+Los rechazos 400/401/403/409/429 de socios y asesor generan un registro WARNING
+`sol325.rechazo` con campos estructurados `event`, `code`, `reason`, `status`,
+`correlationId` y `endpoint`, tanto en el mensaje JSON como en `extra` del logging.
+`code` conserva el codigo publico; `reason` distingue
+credencial ausente, invalida (incluida vencida) y alcance insuficiente, incluso
+cuando asesor conserva su respuesta 401. `actorId` solo se incluye tras validar
+JWT, rol y alcance; `socioId`, despues de comprobar la pertenencia. No se registra
+el socio rechazado del cuerpo o query, tokens, cabeceras, datos del cliente ni
+errores completos. Cotizacion registra el mismo evento para rechazos de admision,
+sin atribuir actor o socio a partir del cuerpo interno. Ambos registros se enlazan
+por `correlationId`; no constituyen dos operaciones ni cambian `Retry-After`.
+Estos campos usan el logging existente; su almacenamiento y retencion dependen
+del colector de logs del entorno.
+
+El mismo evento cubre los rechazos 400/401/403/409 de
+`POST /v1/socios/consultas-informacion-cliente` (HU44), incluido el conflicto
+idempotente y el consentimiento denegado. Su `socioId` solo se atribuye despues de
+validar pertenencia; la auditoria por fuente de Perfilamiento permanece separada.
+Esto no agrega cuota de consultas ni cambia su replay, circuit breaker o contrato.
+Los rechazos previos del Gateway no pasan necesariamente por este hook del BFF.
+
+La contraparte de HU42-BE/SOL-325 es HU42-FE/SOL-194: el portal consume
+`GET /v1/socios/actual` con `API-Version: 1` y la sesion autenticada, no un socio
+fijo ni un contexto enviado por el navegador. `usuario` coincide con
+`/v1/sesiones/actual`; las organizaciones salen del JWT verificado. Cambiar un
+`socioId` en la query no cambia ese contexto. La lectura no consume la cuota de
+creacion: agotar esa cuota no impide volver al portal.
+
+`tests/test_partner_flow.py -k "not latency"` cubre por HTTP local el contrato
+del contexto para dos socios, alternancia de sesiones, credencial ausente,
+invalida o vencida, rol no autorizado y version incompatible, ademas de los
+rechazos auditables, cuota, aislamiento e idempotencia. Usa JWT reales emitidos
+por Identidad y bases temporales; no verifica el navegador ni retencion de logs.
+Que el portal FE este listo no acredita por si solo el cierre de SOL-325 ni
+aislamiento fisico de CPU entre organizaciones.
+
 HU46 conserva `/v1/perfilamientos-hipotecarios` y `/v1/asesor/clientes` para asesor.
 Para socio, vida hipotecaria se cotiza en la ruta generica usando
 `productoId: "mortgage-life"` y los datos del producto del catalogo.
 La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
 permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
 siempre debe pasar por autenticacion del BFF.
+El preflight CORS lo responde API Gateway, no Flask. El contrato versionado permite
+`GET`/`OPTIONS` y los headers `Authorization`, `API-Version` y `X-Correlation-ID`;
+expone `API-Version`, `X-Correlation-ID` y `Retry-After`. La prueba local comprueba
+esa configuracion declarada, no los origenes ni el preflight del entorno desplegado.
 
 Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
 `RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones automotrices por HTTP local

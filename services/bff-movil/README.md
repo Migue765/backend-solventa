@@ -36,6 +36,16 @@ hay CORS. Los errores usan `application/problem+json`; si identidad o su JWKS no
 respuesta es `503 servicio_no_disponible` (nunca `401`) para no cerrar una sesión válida por una
 caída. Un `429` conserva `Retry-After`.
 
+## Acceso con clave protegida por biometria
+
+Seis rutas nuevas bajo `/movil/v1/biometria/...` y
+`POST /movil/v1/sesiones/biometria` delegan a Identidad, sin estado en el BFF.
+`BIOMETRIC_LOGIN_ENABLED` acepta `true`/`false`, por defecto `false`.
+El alta exige bearer movil y contrasena actual; login verifica firma P-256,
+no un booleano local. El formato de sesion, refresh y logout no cambia.
+No se certifican hardware, identidad civil, selfie ni prueba de vida.
+Ver [contrato y limites](../../docs/acceso-biometrico.md).
+
 ## Configuración
 
 | Variable                    | Default                                    | Descripción                    |

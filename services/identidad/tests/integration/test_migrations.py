@@ -44,6 +44,7 @@ def test_migrations_create_both_tables_with_their_own_version_table(
         "expira_en",
         "revocado_en",
         "reemplazado_por",
+        "credencial_biometrica_id",
     }
 
     command.downgrade(config, "base")
@@ -117,3 +118,51 @@ def test_upgrade_preserves_legacy_evidence_without_granting_new_permissions(
         }
 
     assert ConsentOutbox(sessions, confirm).deliver() == (2, 0)
+
+
+def test_biometric_migration_preserves_existing_users_and_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = f"sqlite:///{tmp_path / 'biometric-migration.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.delenv("DB_SCHEMA", raising=False)
+    config = AlembicConfig(str(SERVICE_DIR / "alembic.ini"))
+    command.upgrade(config, "0005")
+    engine = create_engine(url)
+    users = Table("usuarios", MetaData(), autoload_with=engine)
+    refresh = Table("refresh_tokens", MetaData(), autoload_with=engine)
+    user_id, family_id = uuid4().hex, uuid4().hex
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            users.insert().values(
+                usuario_id=user_id,
+                nombre="Legado",
+                correo="legado@example.com",
+                rol="cliente",
+                password_hash="hash-existente",
+            )
+        )
+        connection.execute(
+            refresh.insert().values(
+                token_hash="a" * 64,
+                usuario_id=user_id,
+                family_id=family_id,
+                client_id="movil",
+                creado_en=now,
+                expira_en=now + timedelta(days=30),
+            )
+        )
+    command.upgrade(config, "head")
+    upgraded = Table("refresh_tokens", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        row = connection.execute(upgraded.select()).mappings().one()
+        assert row["token_hash"] == "a" * 64 and row["family_id"] == family_id
+        assert row["credencial_biometrica_id"] is None
+        assert (
+            connection.execute(users.select()).mappings().one()["password_hash"] == "hash-existente"
+        )
+    command.downgrade(config, "0005")
+    with engine.connect() as connection:
+        row = connection.execute(refresh.select()).mappings().one()
+        assert row["token_hash"] == "a" * 64 and row["family_id"] == family_id
