@@ -4,6 +4,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import ValidationError
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from identidad.api.biometrics import biometric_token
 from identidad.api.request_body import read_body
 from identidad.api.schemas import EncryptedTokenRequest, RevokeRequest, TokenRequest, tokens_to_json
 from identidad.api.users import too_many_attempts
@@ -36,6 +37,8 @@ def token() -> Response:
     payload: TokenRequest | EncryptedTokenRequest
     try:
         body = read_body(allow_form=True)
+        if body.get("grant_type") == "biometric_signature":
+            return biometric_token(body)
         if isinstance(body, dict) and body.get("grant_type") == "encrypted_password":
             if not _config().encrypted_login_enabled:
                 return _unavailable()

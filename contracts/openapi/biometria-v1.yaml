@@ -1,0 +1,310 @@
+openapi: 3.1.0
+info:
+  title: Solventa acceso con clave de dispositivo
+  version: 1.0.0
+  description: >-
+    Componentes compartidos de Identidad y BFF movil. Prueba posesion de una clave
+    previamente vinculada a una cuenta autenticada, no attestation remota,
+    identidad civil, selfie ni prueba de vida. BIOMETRIC_LOGIN_ENABLED=false
+    por defecto. Respuestas no-store; cuerpos JSON estrictos de hasta 8192 bytes.
+paths:
+  /enrolamientos/desafio:
+    post:
+      summary: Reautentica y prepara el enrolamiento explicito
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Alta"
+      responses:
+        "200":
+          $ref: "#/components/responses/Desafio"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Limite"
+        "503":
+          $ref: "#/components/responses/Error"
+  /enrolamientos:
+    post:
+      summary: Activa la clave tras comprobar posesion y mismo titular autenticado
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Prueba"
+      responses:
+        "201":
+          description: Credencial activa; no crea usuario ni sesion
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [credencialId, estado]
+                properties:
+                  credencialId:
+                    $ref: "#/components/schemas/Uuid"
+                  estado:
+                    const: activa
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Limite"
+        "503":
+          $ref: "#/components/responses/Error"
+  /desafios:
+    post:
+      summary: Emite nonce de login de un solo uso para credencial activa
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [credencialId]
+              properties:
+                credencialId:
+                  $ref: "#/components/schemas/Uuid"
+      responses:
+        "200":
+          $ref: "#/components/responses/Desafio"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Limite"
+        "503":
+          $ref: "#/components/responses/Error"
+  /sesiones:
+    post:
+      summary: Verifica firma y emite la sesion movil existente
+      description: >-
+        Firma DER ECDSA SHA-256 sobre los bytes decodificados de mensaje.
+        Replay, expiracion o credencial revocada responden credenciales_invalidas.
+        No hay tokens parciales; prueba, familia refresh y auditoria se confirman
+        atomicamente. No requiere bearer ni transmite contrasena.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Prueba"
+      responses:
+        "200":
+          description: Sesion movil convencional; JWT RS256 y refresh opaco rotatorio
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-movil-v1.yaml#/components/schemas/SesionIniciada"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Limite"
+        "503":
+          $ref: "#/components/responses/Error"
+  /credenciales:
+    get:
+      summary: Lista exclusivamente las credenciales del titular
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sin claves publicas, plantillas ni identificadores de hardware
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [credenciales]
+                properties:
+                  credenciales:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [credencialId, creadaEn, ultimoUsoEn, estado]
+                      properties:
+                        credencialId:
+                          $ref: "#/components/schemas/Uuid"
+                        creadaEn:
+                          type: string
+                          format: date-time
+                        ultimoUsoEn:
+                          type: [string, "null"]
+                          format: date-time
+                        estado:
+                          enum: [activa, revocada]
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /credenciales/{credencialId}:
+    parameters:
+      - name: credencialId
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/Uuid"
+    delete:
+      summary: Revoca credencial propia, desafios y refresh vinculados
+      description: >-
+        Idempotente tambien para identificadores ausentes/ajenos, sin revelar
+        titular. JWT previamente emitidos conservan su expiracion. Logout normal
+        no revoca la credencial; Android elimina la clave al deshabilitar.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Operacion confirmada sin borrar evidencia
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    Nonce:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{43}$'
+      description: Base64url canonico sin padding de 32 bytes aleatorios
+    Firma:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{8,96}$'
+      description: Base64url sin padding de firma ASN.1 DER ECDSA P-256; no JOSE raw r||s
+    Alta:
+      type: object
+      additionalProperties: false
+      required: [contrasena, clavePublica]
+      properties:
+        contrasena:
+          type: string
+          minLength: 8
+          maxLength: 128
+          format: password
+        clavePublica:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{122}$'
+          description: SPKI DER P-256 canonico de 91 bytes, base64url sin padding
+    Prueba:
+      type: object
+      additionalProperties: false
+      required: [credencialId, desafioId, firma]
+      properties:
+        credencialId:
+          $ref: "#/components/schemas/Uuid"
+        desafioId:
+          $ref: "#/components/schemas/Nonce"
+        firma:
+          $ref: "#/components/schemas/Firma"
+    SolicitudTokenBiometrico:
+      type: object
+      additionalProperties: false
+      required: [grant_type, client_id, credencialId, desafioId, firma]
+      properties:
+        grant_type:
+          const: biometric_signature
+        client_id:
+          const: movil
+        credencialId:
+          $ref: "#/components/schemas/Uuid"
+        desafioId:
+          $ref: "#/components/schemas/Nonce"
+        firma:
+          $ref: "#/components/schemas/Firma"
+    Desafio:
+      type: object
+      additionalProperties: false
+      required: [credencialId, desafioId, proposito, algoritmo, mensaje, expiraEn]
+      properties:
+        credencialId:
+          $ref: "#/components/schemas/Uuid"
+        desafioId:
+          $ref: "#/components/schemas/Nonce"
+        proposito:
+          enum: [enrolar, login]
+        algoritmo:
+          const: ECDSA_P256_SHA256_DER
+        mensaje:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,683}$'
+          description: >-
+            Base64url de UTF8 de nueve lineas separadas por LF sin LF final:
+            SOLVENTA-BIOMETRIC-V1, proposito, movil, b64u(SHA256(UTF8(JWT_ISSUER
+            exacto configurado))), desafioId, credencialId, usuarioId,
+            b64u(SHA256(SPKI DER canonico)), expiracion epoch decimal.
+            Firmar bytes decodificados, no texto base64 ni digest previo.
+        expiraEn:
+          type: string
+          format: date-time
+          description: UTC; vence a los 60 segundos, sin gracia
+  responses:
+    Error:
+      description: >-
+        solicitud_invalida (400), sesion_invalida o credenciales_invalidas (401),
+        acceso_denegado (403), credencial_ya_registrada (409) o
+        servicio_no_disponible (503, incluye flag apagado).
+        No distingue firma erronea, replay, vencimiento o clave desconocida.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "./identidad-v1.yaml#/components/schemas/Problema"
+    Limite:
+      description: demasiados_intentos; cuotas compartidas entre replicas sin fallback memoria
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "./identidad-v1.yaml#/components/schemas/Problema"
+    Desafio:
+      description: Desafio persistido, proposito y cuenta fijados por Identidad
+      headers:
+        Cache-Control:
+          schema:
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Desafio"

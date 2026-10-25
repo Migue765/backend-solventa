@@ -9,6 +9,18 @@ tags:
   - name: Usuarios
   - name: Sesiones
 paths:
+  /v1/biometria/enrolamientos/desafio:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos~1desafio"
+  /v1/biometria/enrolamientos:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos"
+  /v1/biometria/desafios:
+    $ref: "./biometria-v1.yaml#/paths/~1desafios"
+  /v1/biometria/credenciales:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales"
+  /v1/biometria/credenciales/{credencialId}:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
+  /v1/sesiones/biometria:
+    $ref: "./biometria-v1.yaml#/paths/~1sesiones"
   /v1/usuarios:
     post:
       tags: [Usuarios]

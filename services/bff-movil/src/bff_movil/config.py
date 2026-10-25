@@ -9,6 +9,7 @@ class Config:
     jwt_audience: str = "solventa-api"
     jwks_url: str | None = None
     identity_timeout_seconds: float = 5
+    biometric_login_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.identity_url.strip():
@@ -24,7 +25,11 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> "Config":
+        biometric = os.getenv("BIOMETRIC_LOGIN_ENABLED", "false").strip().lower()
+        if biometric not in {"true", "false"}:
+            raise ValueError("BIOMETRIC_LOGIN_ENABLED solo admite true o false.")
         return cls(
+            biometric_login_enabled=biometric == "true",
             identity_url=_required("IDENTIDAD_URL").rstrip("/"),
             jwt_issuer=_required("JWT_ISSUER"),
             jwt_audience=os.getenv("JWT_AUDIENCE", "solventa-api"),

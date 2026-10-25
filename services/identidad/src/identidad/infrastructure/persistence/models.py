@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -61,6 +61,47 @@ class RefreshTokenModel(Base):
     expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revocado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reemplazado_por: Mapped[str | None] = mapped_column(String(64))
+    credencial_biometrica_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("credenciales_biometricas.credencial_id"), index=True
+    )
+
+
+class BiometricCredentialModel(Base):
+    __tablename__ = "credenciales_biometricas"
+
+    credencial_id: Mapped[UUID] = mapped_column(primary_key=True)
+    usuario_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"), index=True)
+    clave_publica: Mapped[bytes] = mapped_column(LargeBinary(91))
+    clave_hash: Mapped[str] = mapped_column(String(43), unique=True)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ultimo_uso_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revocada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BiometricChallengeModel(Base):
+    __tablename__ = "desafios_biometricos"
+
+    desafio_id: Mapped[str] = mapped_column(String(43), primary_key=True)
+    credencial_id: Mapped[UUID] = mapped_column(index=True)
+    usuario_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"))
+    proposito: Mapped[str] = mapped_column(String(10))
+    clave_publica: Mapped[bytes] = mapped_column(LargeBinary(91))
+    mensaje: Mapped[bytes] = mapped_column(LargeBinary(512))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumida_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BiometricAuditModel(Base):
+    __tablename__ = "auditoria_biometrica"
+
+    evento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    correlation_id: Mapped[str] = mapped_column(String(36))
+    operacion: Mapped[str] = mapped_column(String(20))
+    resultado: Mapped[str] = mapped_column(String(40))
+    usuario_id: Mapped[UUID | None] = mapped_column()
+    credencial_id: Mapped[UUID | None] = mapped_column()
 
 
 class ConsentModel(Base):
