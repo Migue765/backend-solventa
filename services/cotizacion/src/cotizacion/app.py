@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import timedelta
 from uuid import uuid4
@@ -163,7 +164,15 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.errorhandler(AdmisionRechazada)
     def admision_rechazada(error: AdmisionRechazada) -> tuple[Response, int]:
-        logger.info("Admision: %s", error.codigo, extra={"correlationId": g.correlation_id})
+        details = {
+            "event": "sol325.rechazo",
+            "code": error.codigo,
+            "reason": error.codigo,
+            "status": error.status,
+            "correlationId": g.correlation_id,
+            "endpoint": request.endpoint,
+        }
+        logger.warning(json.dumps(details), extra=details)
         response = jsonify(error=error.codigo, correlationId=g.correlation_id)
         response.headers["Retry-After"] = str(error.retry_after)
         return response, error.status

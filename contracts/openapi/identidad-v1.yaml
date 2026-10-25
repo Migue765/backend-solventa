@@ -14,6 +14,16 @@ tags:
   - name: Consentimientos
   - name: Asesores
 paths:
+  /v1/biometria/enrolamientos/desafio:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos~1desafio"
+  /v1/biometria/enrolamientos:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos"
+  /v1/biometria/desafios:
+    $ref: "./biometria-v1.yaml#/paths/~1desafios"
+  /v1/biometria/credenciales:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales"
+  /v1/biometria/credenciales/{credencialId}:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
   /v1/clientes:
     get:
       tags: [Asesores]
@@ -139,8 +149,11 @@ paths:
   /oauth/token:
     post:
       tags: [OAuth]
-      summary: Emite tokens (password, encrypted_password o refresh_token)
+      summary: Emite tokens (password, encrypted_password, biometric_signature o refresh_token)
       description: >-
+        biometric_signature acepta solo JSON estricto, client_id=movil y
+        credencialId/desafioId/firma; usa los bytes de mensaje del desafio,
+        nunca una confirmacion biometrica booleana. Rol no cliente responde403.
         Con `grant_type=password` autentica al usuario. Con `grant_type=refresh_token`
         rota el refresh token: el presentado queda revocado y se emite uno nuevo en la misma
         familia. Presentar un refresh token ya rotado revoca toda la familia.
@@ -159,6 +172,7 @@ paths:
               oneOf:
                 - $ref: "#/components/schemas/SolicitudToken"
                 - $ref: "#/components/schemas/SolicitudTokenCifrado"
+                - $ref: "./biometria-v1.yaml#/components/schemas/SolicitudTokenBiometrico"
           application/x-www-form-urlencoded:
             schema:
               oneOf:
@@ -180,6 +194,8 @@ paths:
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutenticado"
+        "403":
+          $ref: "./biometria-v1.yaml#/components/responses/Error"
         "429":
           $ref: "#/components/responses/DemasiadosIntentos"
         "503":
