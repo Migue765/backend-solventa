@@ -81,9 +81,12 @@ DB, PVC y datos. No tocar preview ni otros workloads, rutas o capacidad.
 Registrar inventario antes/despues y comprobar de nuevo que no reaparezcan.
 
 Los manifiestos ya no apuntan a HU11 y `deploy/codebuild/deploy.sh` rechaza ese
-namespace antes de cualquier operacion AWS/Kubernetes. No existe pipeline de
-Perfilamiento en la infraestructura actual: futuros despliegues deben usar
-`SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true` para SOL-326.
+namespace antes de cualquier operacion AWS/Kubernetes. Terraform define un pipeline
+y repositorio ECR propios para Perfilamiento, con tag `perfilamiento-v*`, namespace
+`perfilamiento` y migraciones habilitadas. Los recursos solo existen tras una
+aplicacion Terraform aprobada; los disparadores automaticos heredan la politica
+global y permanecen pausados por defecto. El pipeline usa el build/deploy existente
+con `SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true` para SOL-326.
 El nuevo `migrate-job.yaml` ejecuta `init-db` sobre la base existente y agrega la
 tabla de eventos sin borrar perfiles ni auditoria. No reactivar manifiestos demo externos.
 El guard no es una politica de admision: revisar tambien automatizaciones
