@@ -8,7 +8,7 @@ from alembic.config import Config as AlembicConfig
 from identidad.consent_outbox import ConsentOutbox
 from identidad.domain.consent import Consent
 from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
-from identidad.infrastructure.persistence.models import ConsentModel, UsuarioModel
+from identidad.infrastructure.persistence.models import ConsentModel
 from sqlalchemy import MetaData, Table, create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
@@ -75,10 +75,11 @@ def test_upgrade_preserves_legacy_evidence_without_granting_new_permissions(
         mode="json", by_alias=True, exclude={"actor_id", "fuentes", "datos", "version_terminos"}
     )
     legacy_outbox = Table("outbox_consentimientos", MetaData(), autoload_with=engine)
+    legacy_users = Table("usuarios", MetaData(), autoload_with=engine)
     with sessions.begin() as session:
-        session.add(
-            UsuarioModel(
-                usuario_id=user_id,
+        session.execute(
+            legacy_users.insert().values(
+                usuario_id=user_id.hex,
                 correo="legacy@solventa.co",
                 nombre="Legacy",
                 rol="cliente",

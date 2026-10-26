@@ -11,6 +11,8 @@ class User:
     email: str
     role: str
     partner_ids: tuple[str, ...] = ()
+    document_type: str | None = None
+    identification: str | None = None
 
 
 @dataclass(frozen=True)

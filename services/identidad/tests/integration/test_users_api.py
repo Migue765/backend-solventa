@@ -44,6 +44,34 @@ def test_duplicate_email_returns_conflict_ignoring_case(client: FlaskClient) -> 
     assert duplicate.content_type == "application/problem+json"
 
 
+def test_registers_normalized_optional_document_and_rejects_duplicates(
+    client: FlaskClient,
+) -> None:
+    created = client.post(
+        "/v1/usuarios",
+        json={
+            **NEW_USER,
+            "tipoDocumento": "passport",
+            "numeroDocumento": " ab12345 ",
+        },
+    )
+    duplicate = client.post(
+        "/v1/usuarios",
+        json={
+            **NEW_USER,
+            "correo": "otra@solventa.co",
+            "tipoDocumento": "passport",
+            "numeroDocumento": "AB12345",
+        },
+    )
+
+    assert created.status_code == 201
+    assert body(created)["usuario"]["tipoDocumento"] == "passport"
+    assert body(created)["usuario"]["numeroDocumento"] == "AB12345"
+    assert duplicate.status_code == 409
+    assert body(duplicate)["code"] == "documento_ya_registrado"
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -52,6 +80,9 @@ def test_duplicate_email_returns_conflict_ignoring_case(client: FlaskClient) -> 
         {**NEW_USER, "correo": "no-es-correo"},
         {**NEW_USER, "nombre": ""},
         {**NEW_USER, "rol": "admin"},
+        {**NEW_USER, "tipoDocumento": "cc"},
+        {**NEW_USER, "numeroDocumento": "123456789"},
+        {**NEW_USER, "tipoDocumento": "cc", "numeroDocumento": "ABC123"},
         {"correo": "ana@solventa.co"},
     ],
 )

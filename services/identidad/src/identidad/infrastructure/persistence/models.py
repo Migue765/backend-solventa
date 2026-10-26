@@ -1,7 +1,16 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -11,12 +20,22 @@ class Base(DeclarativeBase):
 
 class UsuarioModel(Base):
     __tablename__ = "usuarios"
+    __table_args__ = (
+        CheckConstraint(
+            "(tipo_documento IS NULL AND numero_documento IS NULL) OR "
+            "(tipo_documento IS NOT NULL AND numero_documento IS NOT NULL)",
+            name="ck_usuarios_documento_completo",
+        ),
+        UniqueConstraint("tipo_documento", "numero_documento", name="uq_usuarios_documento"),
+    )
 
     usuario_id: Mapped[UUID] = mapped_column(primary_key=True)
     correo: Mapped[str] = mapped_column(String(254), unique=True)
     nombre: Mapped[str] = mapped_column(String(120))
     rol: Mapped[str] = mapped_column(String(20))
     password_hash: Mapped[str] = mapped_column(String(255))
+    tipo_documento: Mapped[str | None] = mapped_column(String(16))
+    numero_documento: Mapped[str | None] = mapped_column(String(16))
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
