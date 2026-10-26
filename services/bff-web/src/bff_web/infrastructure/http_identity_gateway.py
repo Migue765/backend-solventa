@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -225,6 +226,8 @@ def _user_from_json(data: dict[str, Any]) -> User:
             data["rol"],
             document_type=_text(document_type) if document_type is not None else "cc",
             identification=_text(identification) if identification is not None else "1234567890",
+            phone=_optional_phone(data.get("telefono")),
+            birth_date=_optional_date(data.get("fechaNacimiento")),
             partner_ids=tuple(partners),
         )
     except (KeyError, TypeError, ValueError) as error:
@@ -251,6 +254,8 @@ def _client_from_json(data: object) -> User:
             *common,
             document_type=_text(document_type),
             identification=_text(identification),
+            phone=_optional_phone(data.get("telefono")),
+            birth_date=_optional_date(data.get("fechaNacimiento")),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IdentityUnavailableError() from error
@@ -279,3 +284,18 @@ def _seconds(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("segundos inválidos")
     return value
+
+
+def _optional_phone(value: object) -> str | None:
+    if value is None:
+        return None
+    phone = _text(value)
+    if len(phone) != 13 or not phone.startswith("+57") or not phone[3:].isdigit():
+        raise ValueError("telefono invalido")
+    return phone
+
+
+def _optional_date(value: object) -> date | None:
+    if value is None:
+        return None
+    return date.fromisoformat(_text(value))

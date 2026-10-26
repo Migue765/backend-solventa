@@ -6,7 +6,6 @@ from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from bff_web.api.mortgage_profiling import _error_response
-from bff_web.api.quotes import QuoteRequestPayload
 from bff_web.api.schemas import user_to_json
 from bff_web.api.security import audit_rejected_response, partner_claims
 from bff_web.application.ports import IdentityGateway
@@ -30,7 +29,6 @@ class PartnerClientPayload(BaseModel):
     tipoCliente: Literal["persona_natural"]
     tipoDocumento: Literal["cc", "ce", "passport", "ppt"]
     numeroDocumento: str
-    telefono: str = Field(pattern=r"^\+57[0-9]{10}$")
 
     @model_validator(mode="after")
     def validate_document(self) -> "PartnerClientPayload":
@@ -38,10 +36,19 @@ class PartnerClientPayload(BaseModel):
         return self
 
 
-class PartnerQuotePayload(QuoteRequestPayload):
+class PartnerMortgageData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mortgage_balance: str = Field(alias="mortgageBalance", pattern=r"^[1-9][0-9]{0,15}$")
+
+
+class PartnerQuotePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     operationId: UUID
     socioId: str = Field(min_length=1, max_length=50)
     product_id: Literal["mortgage-life"] = Field(alias="productoId")
+    product_data: PartnerMortgageData = Field(alias="datosProducto")
     cliente: PartnerClientPayload
 
 
@@ -129,17 +136,27 @@ def start() -> tuple[Response, int] | Response:
     if isinstance(resolved, Response):
         return resolved
     client, consent = resolved
+    if client.phone is None or client.birth_date is None:
+        return problem_response(
+            422,
+            "datos_cliente_incompletos",
+            "Datos del cliente incompletos",
+            "El cliente no tiene telefono o fecha de nacimiento registrados.",
+        )
     body: dict[str, object] = {
         "operationId": str(key),
         "socioId": payload.socioId,
         "usuarioId": str(claims.user.user_id),
         "productoId": payload.product_id,
-        "datosProducto": payload.product_data,
+        "datosProducto": {
+            "birthDate": client.birth_date.isoformat(),
+            "mortgageBalance": payload.product_data.mortgage_balance,
+        },
         "clienteId": str(client.user_id),
         "tipoCliente": payload.cliente.tipoCliente,
         "tipoDocumento": payload.cliente.tipoDocumento,
         "identificacion": payload.cliente.numeroDocumento,
-        "telefono": payload.cliente.telefono,
+        "telefono": client.phone,
         "correo": client.email,
         "consentimientoId": str(consent.consentimientoId),
         "consentimientoVersion": consent.version,

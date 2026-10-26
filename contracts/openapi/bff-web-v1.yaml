@@ -1114,11 +1114,17 @@ components:
         productoId:
           const: mortgage-life
         datosProducto:
-          $ref: "#/components/schemas/DatosProducto"
+          type: object
+          additionalProperties: false
+          required: [mortgageBalance]
+          properties:
+            mortgageBalance:
+              type: string
+              pattern: "^[1-9][0-9]{0,15}$"
         cliente:
           type: object
           additionalProperties: false
-          required: [tipoCliente, tipoDocumento, numeroDocumento, telefono]
+          required: [tipoCliente, tipoDocumento, numeroDocumento]
           properties:
             tipoCliente:
               const: persona_natural
@@ -1127,13 +1133,10 @@ components:
             numeroDocumento:
               type: string
               description: cc 6-10 digitos; ce 6-12; passport 5-16 A-Z/0-9; ppt 7-10 digitos.
-            telefono:
-              type: string
-              pattern: "^\\+57[0-9]{10}$"
     OperacionSocio:
       type: object
       additionalProperties: false
-      required: [operationId, socioId, clienteId, productoId, estado, perfilamientoReferencia, solicitudId, cotizacionId, recibidaEn]
+      required: [operationId, socioId, clienteId, productoId, estado, perfilamientoReferencia, solicitudId, cotizacionId, recibidaEn, oferta]
       properties:
         operationId:
           type: string
@@ -1155,6 +1158,8 @@ components:
         cotizacionId:
           type: string
           format: uuid
+        oferta:
+          $ref: "#/components/schemas/Oferta"
         recibidaEn:
           type: string
           format: date-time

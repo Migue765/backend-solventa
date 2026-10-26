@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from flask import Flask
-from support import USER, FakeJwks, KeyPair, StubQuoteGateway, bearer, sign_token
+from support import CLIENT_PROFILE, USER, FakeJwks, KeyPair, StubQuoteGateway, bearer, sign_token
 from werkzeug.test import TestResponse
 
 REQUEST = {
@@ -195,7 +195,7 @@ def test_creates_all_variants_with_authenticated_identity(
     assert body(response)["datosProducto"] == data
     assert body(response)["identificacion"] == USER.identification
     assert body(response)["correo"] == USER.email
-    assert body(response)["telefono"] == USER.phone
+    assert body(response)["telefono"] == CLIENT_PROFILE.phone
     assert quotes.user_ids == [USER.user_id]
     read = client.get(f"/v1/solicitudes-cotizacion/{body(response)['id']}", headers=bearer(token))
     assert body(read) == body(response)

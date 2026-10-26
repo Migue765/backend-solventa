@@ -136,7 +136,9 @@ aislamiento fisico de CPU entre organizaciones.
 
 HU46 conserva `/v1/perfilamientos-hipotecarios` y `/v1/asesor/clientes` para asesor.
 Para socio, vida hipotecaria se cotiza en la ruta generica usando
-`productoId: "mortgage-life"` y los datos del producto del catalogo.
+`productoId: "mortgage-life"`. El navegador solo envia documento y saldo hipotecario;
+Identidad aporta telefono y fecha de nacimiento maestros, y el BFF resuelve UUID y
+consentimiento. La respuesta incluye la oferta recomendada calculada por Cotizacion.
 La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
 permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
 siempre debe pasar por autenticacion del BFF.

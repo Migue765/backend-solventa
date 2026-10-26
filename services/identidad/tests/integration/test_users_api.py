@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from werkzeug.test import TestResponse
 
 NEW_USER = {"nombre": "Ana Cliente", "correo": "Ana@Solventa.co", "contrasena": "Solventa123!"}
+MASTER_DATA = {"telefono": "+573001234567", "fechaNacimiento": "1985-02-10"}
 
 
 def body(response: TestResponse) -> dict[str, Any]:
@@ -53,6 +54,7 @@ def test_registers_normalized_optional_document_and_rejects_duplicates(
             **NEW_USER,
             "tipoDocumento": "passport",
             "numeroDocumento": " ab12345 ",
+            **MASTER_DATA,
         },
     )
     duplicate = client.post(
@@ -62,12 +64,15 @@ def test_registers_normalized_optional_document_and_rejects_duplicates(
             "correo": "otra@solventa.co",
             "tipoDocumento": "passport",
             "numeroDocumento": "AB12345",
+            **MASTER_DATA,
         },
     )
 
     assert created.status_code == 201
     assert body(created)["usuario"]["tipoDocumento"] == "passport"
     assert body(created)["usuario"]["numeroDocumento"] == "AB12345"
+    assert body(created)["usuario"]["telefono"] == "+573001234567"
+    assert body(created)["usuario"]["fechaNacimiento"] == "1985-02-10"
     assert duplicate.status_code == 409
     assert body(duplicate)["code"] == "documento_ya_registrado"
 
@@ -83,6 +88,8 @@ def test_registers_normalized_optional_document_and_rejects_duplicates(
         {**NEW_USER, "tipoDocumento": "cc"},
         {**NEW_USER, "numeroDocumento": "123456789"},
         {**NEW_USER, "tipoDocumento": "cc", "numeroDocumento": "ABC123"},
+        {**NEW_USER, "tipoDocumento": "cc", "numeroDocumento": "123456789"},
+        {**NEW_USER, **MASTER_DATA},
         {"correo": "ana@solventa.co"},
     ],
 )

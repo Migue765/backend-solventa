@@ -9,7 +9,16 @@ INTERNAL_TOKEN = "internal-test-token"
 
 
 def _register_client(client: FlaskClient, with_document: bool = False) -> str:
-    document = {"tipoDocumento": "cc", "numeroDocumento": "1012345678"} if with_document else {}
+    document = (
+        {
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1012345678",
+            "telefono": "+573001234567",
+            "fechaNacimiento": "1985-02-10",
+        }
+        if with_document
+        else {}
+    )
     response = client.post(
         "/v1/usuarios",
         json={
@@ -120,6 +129,8 @@ def test_internal_client_lookup_by_document_is_exact_and_authorized(make_app: An
         "correo": "ana@solventa.co",
         "tipoDocumento": "cc",
         "numeroDocumento": "1012345678",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "1985-02-10",
     }
     assert missing.status_code == 404
     assert missing.get_json()["code"] == "cliente_no_encontrado"

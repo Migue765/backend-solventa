@@ -107,6 +107,9 @@ def test_catalog_products_persist_and_replay_across_instances(
     assert retry.get_json() == first.get_json()
     assert profiling.created == 1
     result = first.get_json()
+    assert result["oferta"]["recomendada"] is True
+    assert result["oferta"]["estado"] == "disponible"
+    assert result["oferta"]["prima"]["moneda"] == "COP"
     get = restarted.test_client().get(
         f"{PATH}/{body['operationId']}?socioId=BANCO-001",
         headers={"Authorization": "Bearer " + INTERNAL_TOKEN},

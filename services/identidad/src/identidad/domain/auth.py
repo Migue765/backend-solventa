@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from uuid import UUID
 
@@ -13,6 +13,8 @@ class User:
     partner_ids: tuple[str, ...] = ()
     document_type: str | None = None
     identification: str | None = None
+    phone: str | None = None
+    birth_date: date | None = None
 
 
 @dataclass(frozen=True)

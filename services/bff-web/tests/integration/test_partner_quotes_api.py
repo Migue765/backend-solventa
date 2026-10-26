@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from bff_web.domain.auth import User
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
-from bff_web.domain.partner_operation import PartnerOperation
+from bff_web.domain.partner_operation import PartnerOffer, PartnerOperation
 from bff_web.domain.quotes import InsuranceProduct
 from flask import Flask
 from support import USER, FakeIdentity, KeyPair, sign_token
@@ -21,12 +21,11 @@ def payload() -> dict[str, Any]:
         "operationId": str(uuid4()),
         "socioId": "BANCO-001",
         "productoId": "mortgage-life",
-        "datosProducto": {"birthDate": "1985-02-10", "mortgageBalance": "180000000"},
+        "datosProducto": {"mortgageBalance": "180000000"},
         "cliente": {
             "tipoCliente": "persona_natural",
             "tipoDocumento": "cc",
             "numeroDocumento": "1234567890",
-            "telefono": "+573001234567",
         },
     }
 
@@ -70,6 +69,27 @@ class PartnerGateway:
             solicitudId="AQT-2026-123",
             cotizacionId=uuid4(),
             recibidaEn=datetime.now(UTC),
+            oferta=PartnerOffer.model_validate(
+                {
+                    "id": str(uuid4()),
+                    "version": 1,
+                    "nombre": "Plan recomendado",
+                    "descripcion": "Proteccion para el saldo hipotecario.",
+                    "prima": {"monto": "99000.00", "moneda": "COP"},
+                    "periodicidad": "mensual",
+                    "primaMensual": {"monto": "99000.00", "moneda": "COP"},
+                    "coberturaPrincipal": "Saldo hipotecario",
+                    "deducible": "Sin deducible",
+                    "vigencia": "12 meses",
+                    "responsabilidadCivil": "No aplica",
+                    "coberturas": ["Fallecimiento"],
+                    "condiciones": ["Consentimiento vigente"],
+                    "beneficiosAdicionales": [],
+                    "recomendada": True,
+                    "estado": "disponible",
+                    "vigenteHasta": "2099-10-25T23:00:00Z",
+                }
+            ),
         )
 
 
@@ -97,6 +117,11 @@ def test_real_partner_context_and_authoritative_client(
     assert gateway.body is not None
     assert gateway.body["usuarioId"] == str(PARTNER.user_id)
     assert gateway.body["correo"] == USER.email
+    assert gateway.body["telefono"] == identity.clients[0].phone
+    assert gateway.body["datosProducto"] == {
+        "birthDate": "1985-02-10",
+        "mortgageBalance": "180000000",
+    }
     assert identity.calls[-1][0] == "get_client_by_document"
     assert gateway.body["consentimientoVersion"] == 2
 

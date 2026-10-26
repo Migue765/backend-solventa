@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -46,6 +46,16 @@ USER = User(
     "cliente",
     document_type="cc",
     identification="1234567890",
+)
+CLIENT_PROFILE = User(
+    USER.user_id,
+    USER.name,
+    USER.email,
+    USER.role,
+    document_type=USER.document_type,
+    identification=USER.identification,
+    phone="+573001234567",
+    birth_date=date(1985, 2, 10),
 )
 PASSWORD = "Solventa123!"
 ACCESS_TTL = 3600
@@ -194,7 +204,7 @@ class FakeJwks:
 class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
-    clients: tuple[User, ...] = (USER,)
+    clients: tuple[User, ...] = (CLIENT_PROFILE,)
 
     def login_challenge(self, correlation_id: str) -> dict[str, object]:
         self._record("login_challenge", correlation_id)
