@@ -46,8 +46,9 @@ paths:
                           type: string
                         productos:
                           type: array
+                          description: Vida hipotecaria es el único producto habilitado para socios.
                           items:
-                            type: string
+                            const: mortgage-life
                   alcances:
                     type: array
                     items:
@@ -97,6 +98,63 @@ paths:
           description: idempotencia_conflicto
         "503":
           description: Dependencia o fuente no disponible; no contiene datos parciales
+  /v1/socios/clientes/por-documento:
+    get:
+      tags: [Socios]
+      operationId: buscarClienteSocioPorDocumento
+      summary: Identifica al cliente y muestra solo el estado util de su consentimiento
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: tipoDocumento
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cc, ce, passport, ppt]
+        - name: numeroDocumento
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cliente identificado sin exponer UUID ni version de consentimiento
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - nombre
+                  - tipoDocumento
+                  - numeroDocumentoEnmascarado
+                  - consentimientoEstado
+                properties:
+                  nombre:
+                    type: string
+                  tipoDocumento:
+                    type: string
+                    enum: [cc, ce, passport, ppt]
+                  numeroDocumentoEnmascarado:
+                    type: string
+                  consentimientoEstado:
+                    type: string
+                    enum: [vigente, vencido, revocado, rechazado, ausente]
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado
+        "404":
+          description: cliente_no_encontrado
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/socios/solicitudes-cotizacion:
     post:
       tags: [Socios]
@@ -1044,7 +1102,7 @@ components:
     NuevaSolicitudSocio:
       type: object
       additionalProperties: false
-      required: [operationId, socioId, productoId, datosProducto, cliente, consentimientoId, consentimientoVersion]
+      required: [operationId, socioId, productoId, datosProducto, cliente]
       properties:
         operationId:
           type: string
@@ -1054,18 +1112,14 @@ components:
           minLength: 1
           maxLength: 50
         productoId:
-          type: string
-          enum: [automotive, travel, life, device-protection, parametric, parametric-weather, payment-protection, mortgage-life]
+          const: mortgage-life
         datosProducto:
           $ref: "#/components/schemas/DatosProducto"
         cliente:
           type: object
           additionalProperties: false
-          required: [clienteId, tipoCliente, tipoDocumento, numeroDocumento, telefono]
+          required: [tipoCliente, tipoDocumento, numeroDocumento, telefono]
           properties:
-            clienteId:
-              type: string
-              format: uuid
             tipoCliente:
               const: persona_natural
             tipoDocumento:
@@ -1076,12 +1130,6 @@ components:
             telefono:
               type: string
               pattern: "^\\+57[0-9]{10}$"
-        consentimientoId:
-          type: string
-          format: uuid
-        consentimientoVersion:
-          type: integer
-          minimum: 1
     OperacionSocio:
       type: object
       additionalProperties: false
