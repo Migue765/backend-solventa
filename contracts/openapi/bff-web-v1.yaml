@@ -935,7 +935,16 @@ components:
     ConsultaInformacionCliente:
       type: object
       additionalProperties: false
-      required: [operationId, socioId, clienteId, productoId, finalidad, datosSolicitados]
+      required: [operationId, socioId, productoId, finalidad, datosSolicitados]
+      oneOf:
+        - required: [clienteId]
+          not:
+            anyOf:
+              - required: [tipoDocumento]
+              - required: [numeroDocumento]
+        - required: [tipoDocumento, numeroDocumento]
+          not:
+            required: [clienteId]
       properties:
         operationId:
           type: string
@@ -947,6 +956,15 @@ components:
         clienteId:
           type: string
           format: uuid
+          description: Identificador interno para clientes heredados sin documento maestro.
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          minLength: 5
+          maxLength: 16
+          description: cc 6-10 digitos; ce 6-12; passport 5-16 A-Z/0-9; ppt 7-10 digitos.
         productoId:
           type: string
           minLength: 1

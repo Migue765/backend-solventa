@@ -14,6 +14,10 @@ class EmailAlreadyRegisteredError(Exception):
     """Ya existe un usuario con ese correo."""
 
 
+class DocumentAlreadyRegisteredError(Exception):
+    """Ya existe un cliente con ese documento."""
+
+
 class TooManyAttemptsError(Exception):
     def __init__(self, retry_after: int) -> None:
         super().__init__("Se superó el límite de intentos.")

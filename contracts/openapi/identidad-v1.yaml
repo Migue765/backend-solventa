@@ -27,24 +27,41 @@ paths:
   /v1/clientes:
     get:
       tags: [Asesores]
-      summary: Lista clientes registrados para consumo interno del BFF
+      summary: Lista clientes o busca uno por documento para consumo interno del BFF
       security:
         - TokenInterno: []
+      parameters:
+        - name: tipoDocumento
+          in: query
+          schema:
+            type: string
+            enum: [cc, ce, passport, ppt]
+        - name: numeroDocumento
+          in: query
+          schema:
+            type: string
+            minLength: 5
+            maxLength: 16
+          description: Debe enviarse junto con tipoDocumento para una busqueda exacta.
       responses:
         "200":
-          description: Datos mínimos para seleccionar al titular
+          description: Catalogo o cliente exacto cuando se envia el documento
           content:
             application/json:
               schema:
-                type: object
-                required: [clientes]
-                properties:
-                  clientes:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ClienteRegistrado"
+                oneOf:
+                  - type: object
+                    required: [clientes]
+                    properties:
+                      clientes:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ClienteRegistrado"
+                  - $ref: "#/components/schemas/ClienteRegistrado"
         "401":
           description: Token interno invalido
+        "404":
+          description: No existe un cliente con el documento exacto.
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes/{clienteId}/consentimiento-perfilamiento:
@@ -302,6 +319,9 @@ components:
       type: object
       additionalProperties: false
       required: [nombre, correo, contrasena]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento]
+        numeroDocumento: [tipoDocumento]
       properties:
         nombre:
           type: string
@@ -316,10 +336,20 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          minLength: 5
+          maxLength: 16
     Usuario:
       type: object
       additionalProperties: false
       required: [id, nombre, correo, rol]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento]
+        numeroDocumento: [tipoDocumento]
       properties:
         id:
           type: string
@@ -338,10 +368,18 @@ components:
           description: Socios activos autorizados; presente para rol asesor o socio.
           items:
             type: string
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
     ClienteRegistrado:
       type: object
       additionalProperties: false
       required: [clienteId, nombre, correo]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento]
+        numeroDocumento: [tipoDocumento]
       properties:
         clienteId:
           type: string
@@ -351,6 +389,11 @@ components:
         correo:
           type: string
           format: email
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
     UsuarioCreado:
       type: object
       additionalProperties: false

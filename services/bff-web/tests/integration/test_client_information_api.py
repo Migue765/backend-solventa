@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from bff_web.domain.auth import User
 from bff_web.domain.client_information import ClientInformationResult
 from flask import Flask
-from support import USER, KeyPair, sign_token
+from support import USER, FakeIdentity, KeyPair, sign_token
 
 PARTNER = User(
     UUID("5323bf51-1899-4a3e-9547-b8ccb9c2c84f"),
@@ -78,6 +78,81 @@ def test_partner_consults_only_for_authorized_context(app: Flask, keypair: KeyPa
     assert gateway.payload is not None
     assert gateway.payload["actorId"] == str(PARTNER.user_id)
     assert gateway.payload["clienteId"] == str(USER.user_id)
+
+
+def test_partner_resolves_client_by_document_before_consulting(
+    app: Flask, keypair: KeyPair
+) -> None:
+    gateway = ClientInformationGatewayStub()
+    app.extensions["client_information_gateway"] = gateway
+    identity: FakeIdentity = app.extensions["identity_gateway"]
+    operation_id = uuid4()
+
+    response = app.test_client().post(
+        "/v1/socios/consultas-informacion-cliente",
+        json={
+            "operationId": str(operation_id),
+            "socioId": "BANCO-001",
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1234567890",
+            "productoId": "automotive",
+            "finalidad": "cotizacion",
+            "datosSolicitados": ["indicador_riesgo"],
+        },
+        headers={
+            "Authorization": f"Bearer {_token(keypair)}",
+            "Idempotency-Key": str(operation_id),
+        },
+    )
+
+    assert response.status_code == 201
+    assert gateway.payload is not None
+    assert gateway.payload["clienteId"] == str(USER.user_id)
+    assert identity.calls[-1][0] == "get_client_by_document"
+    assert identity.calls[-1][1][:2] == ("cc", "1234567890")
+
+
+def test_client_identifier_modes_are_exclusive_and_missing_document_is_not_found(
+    app: Flask, keypair: KeyPair
+) -> None:
+    identity: FakeIdentity = app.extensions["identity_gateway"]
+    operation_id = uuid4()
+    base = {
+        "operationId": str(operation_id),
+        "socioId": "BANCO-001",
+        "productoId": "automotive",
+        "finalidad": "cotizacion",
+        "datosSolicitados": ["indicador_riesgo"],
+    }
+    headers = {
+        "Authorization": f"Bearer {_token(keypair)}",
+        "Idempotency-Key": str(operation_id),
+    }
+
+    mixed = app.test_client().post(
+        "/v1/socios/consultas-informacion-cliente",
+        json={
+            **base,
+            "clienteId": str(USER.user_id),
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1234567890",
+        },
+        headers=headers,
+    )
+    identity.clients = ()
+    missing = app.test_client().post(
+        "/v1/socios/consultas-informacion-cliente",
+        json={
+            **base,
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1099999999",
+        },
+        headers=headers,
+    )
+
+    assert mixed.status_code == 400
+    assert missing.status_code == 404
+    assert missing.get_json()["code"] == "cliente_no_encontrado"
 
 
 def test_partner_cannot_consult_for_another_organization(app: Flask, keypair: KeyPair) -> None:

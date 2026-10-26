@@ -1,14 +1,15 @@
-from typing import Literal, cast
+from typing import Literal, Self, cast
 from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from bff_web.api.security import audit_rejected_response, partner_claims
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.client_information import ClientInformationError
+from bff_web.domain.document_types import validate_identification
 from bff_web.domain.quote_errors import QuoteServiceUnavailableError
 from bff_web.problems import problem_response
 
@@ -21,10 +22,25 @@ class ClientInformationPayload(BaseModel):
 
     operationId: UUID
     socioId: str = Field(min_length=1, max_length=50)
-    clienteId: UUID
+    clienteId: UUID | None = None
+    tipoDocumento: Literal["cc", "ce", "passport", "ppt"] | None = None
+    numeroDocumento: str | None = Field(default=None, min_length=5, max_length=16)
     productoId: str = Field(min_length=1, max_length=64)
     finalidad: Literal["cotizacion"]
     datosSolicitados: tuple[str, ...] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_client_identifier(self) -> Self:
+        has_document = self.tipoDocumento is not None or self.numeroDocumento is not None
+        if (self.tipoDocumento is None) != (self.numeroDocumento is None):
+            raise ValueError("Tipo y numero de documento deben enviarse juntos.")
+        if (self.clienteId is None) == (not has_document):
+            raise ValueError("Envia clienteId o el documento, pero no ambos.")
+        if self.tipoDocumento is not None and self.numeroDocumento is not None:
+            self.numeroDocumento = validate_identification(
+                self.tipoDocumento, self.numeroDocumento.strip().upper()
+            )
+        return self
 
 
 @bp.post("/consultas-informacion-cliente")
@@ -65,7 +81,15 @@ def consult() -> tuple[Response, int] | Response:
             "El producto no esta disponible para el socio.",
         )
     identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
-    client = identity.get_client(payload.clienteId, str(g.correlation_id))
+    if payload.clienteId is not None:
+        client = identity.get_client(payload.clienteId, str(g.correlation_id))
+    else:
+        assert payload.tipoDocumento is not None and payload.numeroDocumento is not None
+        client = identity.get_client_by_document(
+            payload.tipoDocumento,
+            payload.numeroDocumento,
+            str(g.correlation_id),
+        )
     if client is None:
         return problem_response(
             404,
