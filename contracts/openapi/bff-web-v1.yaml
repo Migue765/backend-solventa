@@ -182,6 +182,76 @@ paths:
             GET no reanuda; para reintentar se necesita POST con el cuerpo original.
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion/{operationId}/oferta:
+    parameters:
+      - name: operationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: socioId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 50
+      - $ref: "#/components/parameters/ApiVersion"
+    post:
+      tags: [Socios]
+      operationId: calcularOfertaSocio
+      summary: Calcula y persiste la oferta explicable de una operacion del socio (SOL-330)
+      description: >-
+        Requiere rol y scope socio y socioId presente en el JWT. Combina el rating
+        persistido de la cotizacion con el riesgo individualizado vigente, sin volver
+        a aplicar el score. Revalida cotizacion, perfil, fuentes, consentimiento e
+        integridad de la decision; si alguna entrada esta ausente, vencida o es
+        inconsistente no se genera oferta. La oferta queda persistida con fuentes,
+        variables, regla y versiones. Un reintento devuelve la misma oferta sin
+        recalcular ni consultar el perfil.
+      responses:
+        "201":
+          description: Oferta persistida, incluyendo reintentos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OfertaSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
+        "404":
+          description: operacion_no_encontrada dentro del socio autorizado
+        "422":
+          description: >-
+            entradas_vencidas (cotizacion, perfil o fuente) u oferta_no_disponible
+            (decision inconsistente o sin tarificacion); nunca devuelve una oferta parcial
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    get:
+      tags: [Socios]
+      operationId: recuperarOfertaSocio
+      summary: Recupera la oferta persistida sin recalcular ni consultar fuentes
+      responses:
+        "200":
+          description: Misma oferta persistida; estado vencida al superar vigenteHasta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OfertaSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente o socio_no_autorizado
+        "404":
+          description: operacion_no_encontrada u oferta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/asesor/clientes:
     get:
       tags: [Asesores]
@@ -1110,6 +1180,202 @@ components:
         recibidaEn:
           type: string
           format: date-time
+    OfertaSocio:
+      type: object
+      additionalProperties: false
+      required: [ofertaId, operationId, socioId, clienteId, productoId, solicitudId, cotizacionId, estado, calculadaEn, vigenteHasta, decision, riesgo, fuentes, variables, ofertas, hashContenido]
+      properties:
+        ofertaId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        solicitudId:
+          type: string
+        cotizacionId:
+          type: string
+          format: uuid
+        estado:
+          type: string
+          enum: [vigente, vencida]
+        calculadaEn:
+          type: string
+          format: date-time
+        vigenteHasta:
+          type: string
+          format: date-time
+        decision:
+          type: object
+          additionalProperties: false
+          required: [hashDecision, modelo, reglaId, reglaVersion]
+          properties:
+            hashDecision:
+              type: string
+              pattern: "^[0-9a-f]{64}$"
+            modelo:
+              type: string
+              description: academico-v1 o clima-v1
+            reglaId:
+              type: string
+              format: uuid
+            reglaVersion:
+              type: string
+        riesgo:
+          type: object
+          additionalProperties: false
+          required: [perfilId, version, modeloVersion, score, nivel, consentimientoId, consentimientoVersion, calculadoEn, vigenteHasta, fallbackUsed]
+          properties:
+            perfilId:
+              type: string
+              format: uuid
+            version:
+              type: integer
+              minimum: 1
+            modeloVersion:
+              type: string
+            score:
+              type: string
+              description: Decimal entre 0 y 1; mayor implica mayor riesgo.
+            nivel:
+              type: string
+              enum: [A, B, C]
+            consentimientoId:
+              type: string
+              format: uuid
+            consentimientoVersion:
+              type: integer
+              minimum: 1
+            calculadoEn:
+              type: string
+              format: date-time
+            vigenteHasta:
+              type: string
+              format: date-time
+            fallbackUsed:
+              type: boolean
+        fuentes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            properties:
+              nombre:
+                type: string
+                enum: [open_finance, open_data]
+              version:
+                type: string
+              consultadaEn:
+                type: string
+                format: date-time
+              vigenteHasta:
+                type: string
+                format: date-time
+              simulada:
+                type: boolean
+              indicadorRiesgo:
+                type: string
+        variables:
+          type: object
+          additionalProperties: false
+          required: [baseAsegurada, duracion, periodicidad, tasa, factorPerfil, score, moneda]
+          properties:
+            baseAsegurada:
+              type: string
+            duracion:
+              type: integer
+              minimum: 1
+            periodicidad:
+              type: string
+              enum: [mensual, por_viaje, por_vuelo, por_periodo]
+            tasa:
+              type: string
+            factorPerfil:
+              type: string
+            score:
+              type: string
+            moneda:
+              const: COP
+        ofertas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/PlanOfertaSocio"
+        hashContenido:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    PlanOfertaSocio:
+      type: object
+      additionalProperties: false
+      required: [ofertaId, version, nombre, descripcion, prima, periodicidad, recomendada, coberturaPrincipal, deducible, vigencia, coberturas, condiciones, beneficiosAdicionales, factores]
+      properties:
+        ofertaId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        nombre:
+          type: string
+        descripcion:
+          type: string
+        prima:
+          type: object
+          additionalProperties: false
+          required: [monto, moneda]
+          properties:
+            monto:
+              type: string
+              pattern: "^[0-9]+\\.[0-9]{2}$"
+            moneda:
+              const: COP
+        periodicidad:
+          type: string
+          enum: [mensual, por_viaje, por_vuelo, por_periodo]
+        recomendada:
+          type: boolean
+        coberturaPrincipal:
+          type: string
+        deducible:
+          type: string
+        vigencia:
+          type: string
+        coberturas:
+          type: array
+          items:
+            type: string
+        condiciones:
+          type: array
+          items:
+            type: string
+        beneficiosAdicionales:
+          type: array
+          items:
+            type: string
+        factores:
+          type: array
+          minItems: 1
+          description: Factores explicativos que reproducen la prima del plan.
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, descripcion, valor]
+            properties:
+              codigo:
+                type: string
+              descripcion:
+                type: string
+              valor:
+                type: string
     IniciarPerfilamientoHipotecario:
       type: object
       additionalProperties: false

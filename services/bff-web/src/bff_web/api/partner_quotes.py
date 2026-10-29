@@ -12,6 +12,7 @@ from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.document_types import validate_identification
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
+from bff_web.domain.partner_offer import PartnerOffer
 from bff_web.domain.quote_errors import QuoteServiceUnavailableError
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
 from bff_web.problems import problem_response
@@ -143,6 +144,69 @@ def get(operation_id: UUID) -> Response:
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"
     return response
+
+
+@bp.post("/solicitudes-cotizacion/<uuid:operation_id>/oferta")
+def calculate_offer(operation_id: UUID) -> tuple[Response, int] | Response:
+    partner_id = _offer_partner()
+    if isinstance(partner_id, Response):
+        return partner_id
+    try:
+        offer = _gateway().calculate_offer(partner_id, operation_id, str(g.correlation_id))
+    except MortgageProfilingError as error:
+        return _offer_error_response(error)
+    return _offer_response(offer), 201
+
+
+@bp.get("/solicitudes-cotizacion/<uuid:operation_id>/oferta")
+def get_offer(operation_id: UUID) -> Response:
+    partner_id = _offer_partner()
+    if isinstance(partner_id, Response):
+        return partner_id
+    try:
+        offer = _gateway().get_offer(partner_id, operation_id, str(g.correlation_id))
+    except MortgageProfilingError as error:
+        return _offer_error_response(error)
+    return _offer_response(offer)
+
+
+def _offer_partner() -> str | Response:
+    claims = partner_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.headers.get("API-Version", "1") != "1":
+        return _version_error()
+    partner_id = request.args.get("socioId", "")
+    if partner_id not in claims.user.partner_ids:
+        return _partner_error()
+    g.audit_partner_id = partner_id
+    return partner_id
+
+
+def _offer_response(offer: PartnerOffer) -> Response:
+    response = jsonify(offer.model_dump(mode="json"))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
+def _offer_error_response(error: MortgageProfilingError) -> Response:
+    public = {
+        "operacion_no_encontrada": ("operacion_no_encontrada", "Operacion no encontrada"),
+        "oferta_no_encontrada": ("oferta_no_encontrada", "Oferta no encontrada"),
+        "cotizacion_vencida": ("entradas_vencidas", "Entradas vencidas"),
+        "perfil_vencido": ("entradas_vencidas", "Entradas vencidas"),
+        "fuente_vencida": ("entradas_vencidas", "Entradas vencidas"),
+        "decision_inconsistente": ("oferta_no_disponible", "Oferta no disponible"),
+        "decision_sin_tarificacion": ("oferta_no_disponible", "Oferta no disponible"),
+        "cotizacion_no_disponible": ("oferta_no_disponible", "Oferta no disponible"),
+        "modelo_no_soportado": ("oferta_no_disponible", "Oferta no disponible"),
+        "consentimiento_ausente": ("consentimiento_invalido", "Consentimiento invalido"),
+        "consentimiento_no_vigente": ("consentimiento_invalido", "Consentimiento invalido"),
+    }
+    code, title = public.get(error.code, ("servicio_no_disponible", "Servicio no disponible"))
+    status = error.status if error.code in public else 503
+    return problem_response(status, code, title, "No fue posible obtener la oferta.")
 
 
 def _gateway() -> HttpPartnerQuoteGateway:
