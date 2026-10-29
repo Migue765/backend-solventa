@@ -6,12 +6,13 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import Field, ValidationError
 
 from cotizacion.api.operaciones_hipotecarias import _authorized
-from cotizacion.api.schemas import RegistrarSolicitudRequest
+from cotizacion.api.schemas import RegistrarSolicitudRequest, resultado_ofertas_a_json
 from cotizacion.application.iniciar_solicitud_socio import (
     IniciarSolicitudSocio,
     OperacionSocio,
     SolicitudSocioComando,
 )
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.infrastructure.persistence.admision_socios import AdmisionSocios
 from cotizacion.infrastructure.persistence.repositorio_operaciones_socios import (
     RepositorioOperacionesSociosSql,
@@ -85,6 +86,24 @@ def consultar(operation_id: UUID) -> tuple[Response, int] | Response:
 
 
 def _a_json(operacion: OperacionSocio) -> dict[str, object]:
+    resultado = resultado_ofertas_a_json(
+        _ofertas().listar(operacion.solicitud_id, operacion.cliente_id)
+    )
+    ofertas = resultado["ofertas"]
+    if not isinstance(ofertas, list):
+        raise ValueError("Respuesta de ofertas invalida.")
+    oferta = next(
+        (
+            item
+            for item in ofertas
+            if isinstance(item, dict)
+            and item.get("recomendada") is True
+            and item.get("estado") == "disponible"
+        ),
+        None,
+    )
+    if oferta is None:
+        raise ValueError("La cotizacion no produjo una oferta recomendada disponible.")
     return dict(
         operationId=str(operacion.operation_id),
         socioId=operacion.socio_id,
@@ -95,4 +114,9 @@ def _a_json(operacion: OperacionSocio) -> dict[str, object]:
         solicitudId=operacion.solicitud_id,
         cotizacionId=str(operacion.cotizacion_id),
         recibidaEn=operacion.creada_en.isoformat().replace("+00:00", "Z"),
+        oferta=oferta,
     )
+
+
+def _ofertas() -> GestionarOfertas:
+    return cast(GestionarOfertas, current_app.extensions["gestionar_ofertas"])

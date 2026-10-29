@@ -149,12 +149,16 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
             )
         )
         client = bff.test_client()
-        registered = client.post(
+        registered = identity.test_client().post(
             "/v1/usuarios",
             json={
                 "nombre": "Cliente integrado",
                 "correo": "integracion@solventa.co",
                 "contrasena": "Solventa123!",
+                "tipoDocumento": "cc",
+                "numeroDocumento": "1012345678",
+                "telefono": "+573001234567",
+                "fechaNacimiento": "1990-01-01",
             },
         )
         assert registered.status_code == 201
@@ -417,9 +421,17 @@ def test_real_jwt_payment_recovery_ownership_and_saga(flow: Flow) -> None:
     assert updated["estado"] == "aprobada"
     # Otra sesión JWT real no puede cambiar ownership mediante query ni body.
     password = "Integration123!"
-    registered = flow.client.post(
+    registered = flow.identity.test_client().post(
         "/v1/usuarios",
-        json={"nombre": "Otro cliente", "correo": "otro-pago@solventa.co", "contrasena": password},
+        json={
+            "nombre": "Otro cliente",
+            "correo": "otro-pago@solventa.co",
+            "contrasena": password,
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1098765432",
+            "telefono": "+573009876543",
+            "fechaNacimiento": "1992-02-02",
+        },
     )
     assert registered.status_code == 201
     login = flow.client.post(

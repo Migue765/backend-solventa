@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     LargeBinary,
@@ -36,6 +37,8 @@ class UsuarioModel(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     tipo_documento: Mapped[str | None] = mapped_column(String(16))
     numero_documento: Mapped[str | None] = mapped_column(String(16))
+    telefono: Mapped[str | None] = mapped_column(String(13))
+    fecha_nacimiento: Mapped[date | None] = mapped_column(Date)
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

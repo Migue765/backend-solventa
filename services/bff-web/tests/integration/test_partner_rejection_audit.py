@@ -1,4 +1,5 @@
 import json
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,6 +24,23 @@ TARGETS = [
     ("GET", "/v1/asesor/clientes", True),
     ("POST", INFORMATION, False),
 ]
+
+
+@pytest.fixture(autouse=True)
+def valid_partner_consent(app: Flask) -> None:
+    profiling = Mock()
+    profiling.get_consent.return_value = {
+        "consentimientoId": str(uuid4()),
+        "clienteId": str(USER.user_id),
+        "version": 2,
+        "estado": "autorizado",
+        "vigenteHasta": "2099-10-25T23:00:00Z",
+        "actorId": str(USER.user_id),
+        "fuentes": ["open_finance", "open_data"],
+        "datos": ["indicador_riesgo"],
+        "versionTerminos": "1.0",
+    }
+    app.extensions["profiling_gateway"] = profiling
 
 
 def information_payload() -> dict[str, object]:
