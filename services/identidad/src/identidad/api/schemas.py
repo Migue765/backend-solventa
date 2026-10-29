@@ -33,9 +33,7 @@ class RegisterRequest(BaseModel):
         if any(value is not None for value in master_values) and any(
             value is None for value in master_values
         ):
-            raise ValueError(
-                "Documento, telefono y fecha de nacimiento deben enviarse juntos."
-            )
+            raise ValueError("Documento, telefono y fecha de nacimiento deben enviarse juntos.")
         if self.tipo_documento is not None and self.numero_documento is not None:
             self.tipo_documento, self.numero_documento = normalize_document(
                 self.tipo_documento, self.numero_documento
