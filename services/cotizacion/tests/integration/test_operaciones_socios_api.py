@@ -1,5 +1,7 @@
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
 from uuid import UUID, uuid4
@@ -7,13 +9,20 @@ from uuid import UUID, uuid4
 import pytest
 from cotizacion.app import create_app
 from cotizacion.config import Config
+from cotizacion.domain.errors import ErrorConsultaPerfil
+from cotizacion.domain.productos import buscar_producto
 from cotizacion.infrastructure.persistence.admision_socios import (
     AdmisionRechazada,
     AdmisionSocios,
     validar_reserva,
 )
 from cotizacion.infrastructure.persistence.database import crear_sesiones
-from cotizacion.infrastructure.persistence.models import CotizacionModel, OperacionSocioModel
+from cotizacion.infrastructure.persistence.models import (
+    CotizacionModel,
+    InstantaneaDecisionModel,
+    OfertaHipotecariaModel,
+    OperacionSocioModel,
+)
 from sqlalchemy import func, select
 
 from .test_operaciones_hipotecarias_api import INTERNAL_TOKEN, ProfilingServiceStub
@@ -132,6 +141,116 @@ def test_catalog_products_persist_and_replay_across_instances(
     assert profiling.created == 1
 
 
+def test_mortgage_offer_persists_explanation_and_complete_decision(database_url, monkeypatch):
+    profiling = ProfilingServiceStub()
+    monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
+    app = app_for(database_url)
+    body = {
+        **payload(),
+        "productoId": "mortgage-life",
+        "datosProducto": {
+            "birthDate": "1985-02-10",
+            "mortgageBalance": "310000000",
+        },
+    }
+
+    first = post(app, body)
+
+    assert first.status_code == 201
+    offer = first.get_json()["oferta"]
+    assert offer["prima"]["monto"] == "165850.00"
+    assert offer["coberturaPrincipal"] == "Fallecimiento. Base asegurada: $310.000.000 COP"
+    assert "prima mensual" in offer["explicacion"]["resumen"]
+    assert [factor["nombre"] for factor in offer["explicacion"]["factoresDeterminantes"]] == [
+        "Saldo hipotecario",
+        "Perfil de riesgo autorizado",
+        "Regla y plan",
+    ]
+    assert offer["trazabilidad"]["perfilVersion"] == 1
+    assert offer["trazabilidad"]["modeloPerfilVersion"] == "perfil-mock-1"
+    assert offer["trazabilidad"]["reglaVersion"] == "academico-v1"
+    assert offer["trazabilidad"]["fuentes"] == [
+        {"nombre": "open_finance", "version": "mock-1"},
+        {"nombre": "open_data", "version": "mock-1"},
+    ]
+
+    with crear_sesiones(database_url)() as session:
+        persisted = session.scalar(select(OfertaHipotecariaModel))
+        snapshot = session.scalar(select(InstantaneaDecisionModel))
+        assert persisted is not None and snapshot is not None
+        assert persisted.operation_id == UUID(body["operationId"])
+        assert persisted.contenido == offer
+        assert persisted.evidencia_decision == snapshot.contenido
+        assert persisted.hash_decision == snapshot.hash_decision
+        assert (
+            persisted.hash_oferta
+            == hashlib.sha256(
+                json.dumps(
+                    offer,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+        )
+        evidence = persisted.evidencia_decision
+        assert evidence["tarificacion"]["datosProducto"] == body["datosProducto"]
+        assert evidence["perfil"]["evidencia"]["fuentes"]
+        assert evidence["regla"]["version"] == "academico-v1"
+        assert evidence["resultado"]["primaEstimada"] == offer["prima"]["monto"]
+
+    restarted = app_for(database_url)
+    monkeypatch.setattr(
+        restarted.extensions["gestionar_ofertas"],
+        "listar",
+        lambda *_: (_ for _ in ()).throw(AssertionError("No recalcular la oferta persistida")),
+    )
+    recovered = restarted.test_client().get(
+        f"{PATH}/{body['operationId']}?socioId=BANCO-001",
+        headers={"Authorization": "Bearer " + INTERNAL_TOKEN},
+    )
+    assert recovered.status_code == 200
+    assert recovered.get_json() == first.get_json()
+
+
+@pytest.mark.parametrize("failure", ["missing-profile", "inactive-product"])
+def test_mortgage_offer_failure_does_not_persist_partial_results(
+    database_url, monkeypatch, failure
+):
+    profiling = ProfilingServiceStub()
+    monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
+    app = app_for(database_url)
+    body = {
+        **payload(),
+        "productoId": "mortgage-life",
+        "datosProducto": {
+            "birthDate": "1985-02-10",
+            "mortgageBalance": "310000000",
+        },
+    }
+    registrar = app.extensions["registrar_solicitud"]
+    if failure == "missing-profile":
+        monkeypatch.setattr(
+            registrar._generador_perfiles,
+            "generar",
+            lambda *_args: (_ for _ in ()).throw(ErrorConsultaPerfil("perfil_no_encontrado", 404)),
+        )
+    else:
+        product = buscar_producto("mortgage-life")
+        assert product is not None
+        monkeypatch.setattr(
+            "cotizacion.application.registrar_solicitud.buscar_producto",
+            lambda _: replace(product, disponible=False),
+        )
+
+    response = post(app, body)
+
+    assert response.status_code == (404 if failure == "missing-profile" else 422)
+    with crear_sesiones(database_url)() as session:
+        for model in (CotizacionModel, OperacionSocioModel, OfertaHipotecariaModel):
+            assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
 def test_quota_override_is_persistent_and_does_not_block_other_partner(database_url, monkeypatch):
     profiling = ProfilingServiceStub()
     monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
@@ -202,7 +321,14 @@ def test_failed_attempt_can_retry_but_cannot_change_body(database_url, monkeypat
     profiling = ProfilingServiceStub()
     monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
     app = app_for(database_url)
-    body = payload()
+    body = {
+        **payload(),
+        "productoId": "mortgage-life",
+        "datosProducto": {
+            "birthDate": "1985-02-10",
+            "mortgageBalance": "310000000",
+        },
+    }
     repository = app.extensions["operaciones_socios"]
     save = repository.guardar
     failures = 0
@@ -219,6 +345,8 @@ def test_failed_attempt_can_retry_but_cannot_change_body(database_url, monkeypat
     assert post(app, {**body, "telefono": "+573009999999"}).status_code == 409
     assert post(app, body).status_code == 201
     assert profiling.created == 1
+    with crear_sesiones(database_url)() as session:
+        assert session.scalar(select(func.count()).select_from(OfertaHipotecariaModel)) == 1
 
 
 def test_expired_reservation_and_window_can_recover(database_url):

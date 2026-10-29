@@ -86,6 +86,26 @@ def consultar(operation_id: UUID) -> tuple[Response, int] | Response:
 
 
 def _a_json(operacion: OperacionSocio) -> dict[str, object]:
+    oferta = (
+        operacion.oferta_hipotecaria.contenido
+        if operacion.oferta_hipotecaria is not None
+        else _oferta_recomendada(operacion)
+    )
+    return dict(
+        operationId=str(operacion.operation_id),
+        socioId=operacion.socio_id,
+        clienteId=str(operacion.cliente_id),
+        productoId=operacion.producto_id,
+        estado="completada",
+        perfilamientoReferencia=operacion.perfilamiento_referencia,
+        solicitudId=operacion.solicitud_id,
+        cotizacionId=str(operacion.cotizacion_id),
+        recibidaEn=operacion.creada_en.isoformat().replace("+00:00", "Z"),
+        oferta=oferta,
+    )
+
+
+def _oferta_recomendada(operacion: OperacionSocio) -> dict[str, object]:
     resultado = resultado_ofertas_a_json(
         _ofertas().listar(operacion.solicitud_id, operacion.cliente_id)
     )
@@ -104,18 +124,7 @@ def _a_json(operacion: OperacionSocio) -> dict[str, object]:
     )
     if oferta is None:
         raise ValueError("La cotizacion no produjo una oferta recomendada disponible.")
-    return dict(
-        operationId=str(operacion.operation_id),
-        socioId=operacion.socio_id,
-        clienteId=str(operacion.cliente_id),
-        productoId=operacion.producto_id,
-        estado="completada",
-        perfilamientoReferencia=operacion.perfilamiento_referencia,
-        solicitudId=operacion.solicitud_id,
-        cotizacionId=str(operacion.cotizacion_id),
-        recibidaEn=operacion.creada_en.isoformat().replace("+00:00", "Z"),
-        oferta=oferta,
-    )
+    return oferta
 
 
 def _ofertas() -> GestionarOfertas:

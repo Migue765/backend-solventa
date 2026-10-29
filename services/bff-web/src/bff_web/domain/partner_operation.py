@@ -47,3 +47,41 @@ class PartnerOffer(BaseModel):
     recomendada: Literal[True]
     estado: Literal["disponible"]
     vigenteHasta: datetime
+    explicacion: "PartnerOfferExplanation"
+    trazabilidad: "PartnerOfferTraceability"
+
+
+class PartnerOfferFactor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nombre: str = Field(min_length=1)
+    valor: str = Field(min_length=1)
+    impacto: str = Field(min_length=1)
+
+
+class PartnerOfferExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resumen: str = Field(min_length=1)
+    factoresDeterminantes: tuple[PartnerOfferFactor, ...] = Field(min_length=1)
+
+
+class PartnerOfferSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nombre: Literal["open_finance", "open_data"]
+    version: str = Field(min_length=1)
+
+
+class PartnerOfferTraceability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    esquemaDecision: int = Field(ge=1)
+    hashDecision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    hashContenido: str = Field(pattern=r"^[0-9a-f]{64}$")
+    perfilId: UUID
+    perfilVersion: int = Field(ge=1)
+    modeloPerfilVersion: str = Field(min_length=1)
+    reglaId: UUID
+    reglaVersion: str = Field(min_length=1)
+    fuentes: tuple[PartnerOfferSource, ...] = Field(min_length=1)

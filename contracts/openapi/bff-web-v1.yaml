@@ -1159,7 +1159,7 @@ components:
           type: string
           format: uuid
         oferta:
-          $ref: "#/components/schemas/Oferta"
+          $ref: "#/components/schemas/OfertaHipotecariaSocio"
         recibidaEn:
           type: string
           format: date-time
@@ -2056,6 +2056,92 @@ components:
         vigenteHasta:
           type: string
           format: date-time
+        explicacion:
+          $ref: "#/components/schemas/ExplicacionOfertaHipotecaria"
+        trazabilidad:
+          $ref: "#/components/schemas/TrazabilidadOfertaHipotecaria"
+    OfertaHipotecariaSocio:
+      allOf:
+        - $ref: "#/components/schemas/Oferta"
+        - type: object
+          required: [explicacion, trazabilidad]
+    ExplicacionOfertaHipotecaria:
+      type: object
+      additionalProperties: false
+      required: [resumen, factoresDeterminantes]
+      properties:
+        resumen:
+          type: string
+          minLength: 1
+        factoresDeterminantes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, valor, impacto]
+            properties:
+              nombre:
+                type: string
+                minLength: 1
+              valor:
+                type: string
+                minLength: 1
+              impacto:
+                type: string
+                minLength: 1
+    TrazabilidadOfertaHipotecaria:
+      type: object
+      additionalProperties: false
+      required:
+        - esquemaDecision
+        - hashDecision
+        - hashContenido
+        - perfilId
+        - perfilVersion
+        - modeloPerfilVersion
+        - reglaId
+        - reglaVersion
+        - fuentes
+      properties:
+        esquemaDecision:
+          type: integer
+          minimum: 1
+        hashDecision:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        hashContenido:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        perfilId:
+          type: string
+          format: uuid
+        perfilVersion:
+          type: integer
+          minimum: 1
+        modeloPerfilVersion:
+          type: string
+          minLength: 1
+        reglaId:
+          type: string
+          format: uuid
+        reglaVersion:
+          type: string
+          minLength: 1
+        fuentes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, version]
+            properties:
+              nombre:
+                type: string
+                enum: [open_finance, open_data]
+              version:
+                type: string
+                minLength: 1
     ResultadoOfertas:
       type: object
       additionalProperties: false

@@ -139,6 +139,10 @@ Para socio, vida hipotecaria se cotiza en la ruta generica usando
 `productoId: "mortgage-life"`. El navegador solo envia documento y saldo hipotecario;
 Identidad aporta telefono y fecha de nacimiento maestros, y el BFF resuelve UUID y
 consentimiento. La respuesta incluye la oferta recomendada calculada por Cotizacion.
+Para HU49, esa oferta se recupera por `operationId` sin recalcular y añade
+`explicacion.factoresDeterminantes` y `trazabilidad` con las versiones del perfil,
+fuentes y regla. El BFF valida estrictamente esa estructura, pero no recibe ni expone
+la evidencia completa usada para reconstruir la decisión, que permanece en Cotizacion.
 La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
 permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
 siempre debe pasar por autenticacion del BFF.
@@ -148,7 +152,7 @@ expone `API-Version`, `X-Correlation-ID` y `Retry-After`. La prueba local compru
 esa configuracion declarada, no los origenes ni el preflight del entorno desplegado.
 
 Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
-`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones automotrices por HTTP local
+`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones de vida hipotecaria por HTTP local
 entre servicios/SQLite con umbrales p95 250ms y p99 500ms. No acredita SLA AWS:
 medir tambien el gateway publico regional, con la ubicacion del generador,
 100 o mas muestras por producto, errores, cuotas y concurrencia entre socios.
