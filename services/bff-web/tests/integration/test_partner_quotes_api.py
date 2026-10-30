@@ -88,6 +88,30 @@ class PartnerGateway:
                     "recomendada": True,
                     "estado": "disponible",
                     "vigenteHasta": "2099-10-25T23:00:00Z",
+                    "explicacion": {
+                        "resumen": "La prima protege el saldo hipotecario.",
+                        "factoresDeterminantes": [
+                            {
+                                "nombre": "Saldo hipotecario",
+                                "valor": "$180.000.000 COP",
+                                "impacto": "Define la suma asegurada.",
+                            }
+                        ],
+                    },
+                    "trazabilidad": {
+                        "esquemaDecision": 1,
+                        "hashDecision": "a" * 64,
+                        "hashContenido": "b" * 64,
+                        "perfilId": str(uuid4()),
+                        "perfilVersion": 1,
+                        "modeloPerfilVersion": "perfil-v1",
+                        "reglaId": str(uuid4()),
+                        "reglaVersion": "academico-v1",
+                        "fuentes": [
+                            {"nombre": "open_finance", "version": "v1"},
+                            {"nombre": "open_data", "version": "v1"},
+                        ],
+                    },
                 }
             ),
         )
@@ -113,6 +137,8 @@ def test_real_partner_context_and_authoritative_client(
     response = app.test_client().post(PATH, json=body, headers=headers(keypair, body))
     assert response.status_code == 201
     assert response.get_json()["productoId"] == "mortgage-life"
+    assert response.get_json()["oferta"]["explicacion"]["factoresDeterminantes"]
+    assert response.get_json()["oferta"]["trazabilidad"]["reglaVersion"] == "academico-v1"
     assert response.headers["Cache-Control"] == "no-store"
     assert gateway.body is not None
     assert gateway.body["usuarioId"] == str(PARTNER.user_id)

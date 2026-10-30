@@ -14,6 +14,7 @@ from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
     AdmisionSocioModel,
     CotizacionModel,
+    OfertaHipotecariaModel,
     OperacionSocioModel,
     ReservaOperacionModel,
     SeleccionOfertaModel,
@@ -219,6 +220,17 @@ def test_partner_login_consent_profile_quote_persistence_and_recovery(flow: Flow
     post_headers = {**headers, "Idempotency-Key": body["operationId"], "API-Version": "1"}
     first = flow.client.post(PATH, json=body, headers=post_headers)
     assert first.status_code == 201, first.get_json()
+    offer = first.get_json()["oferta"]
+    assert [factor["nombre"] for factor in offer["explicacion"]["factoresDeterminantes"]] == [
+        "Saldo hipotecario",
+        "Perfil de riesgo autorizado",
+        "Regla y plan",
+    ]
+    assert offer["trazabilidad"]["reglaVersion"] == "academico-v1"
+    assert {source["nombre"] for source in offer["trazabilidad"]["fuentes"]} == {
+        "open_finance",
+        "open_data",
+    }
     retry = flow.client.post(PATH, json=body, headers=post_headers)
     assert retry.get_json() == first.get_json()
     recovered = flow.client.get(f"{PATH}/{body['operationId']}?socioId=BANK-E2E", headers=headers)
@@ -226,6 +238,7 @@ def test_partner_login_consent_profile_quote_persistence_and_recovery(flow: Flow
     with crear_sesiones(flow.quote_database)() as session:
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
         assert session.scalar(select(func.count()).select_from(OperacionSocioModel)) == 1
+        assert session.scalar(select(func.count()).select_from(OfertaHipotecariaModel)) == 1
     request_id = first.get_json()["solicitudId"]
     customer_view = flow.client.get(
         f"/v1/solicitudes-cotizacion/{request_id}", headers=flow.headers

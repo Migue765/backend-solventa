@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -77,6 +78,27 @@ class OperacionSocioModel(Base):
     )
     perfilamiento_referencia: Mapped[str] = mapped_column(String(64))
     fingerprint: Mapped[str] = mapped_column(String(64))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OfertaHipotecariaModel(Base):
+    __tablename__ = "ofertas_hipotecarias"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["socio_id", "operation_id"],
+            ["operaciones_socios.socio_id", "operaciones_socios.operation_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    oferta_id: Mapped[UUID] = mapped_column(unique=True)
+    version: Mapped[int] = mapped_column(Integer)
+    contenido: Mapped[dict[str, Any]] = mapped_column(JSON)
+    evidencia_decision: Mapped[dict[str, Any]] = mapped_column(JSON)
+    hash_oferta: Mapped[str] = mapped_column(String(64), index=True)
+    hash_decision: Mapped[str] = mapped_column(String(64), index=True)
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
