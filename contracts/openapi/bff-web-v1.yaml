@@ -366,6 +366,142 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance:
+    get:
+      tags: [Asesores]
+      summary: Lista excepciones Open Finance pendientes del socio
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor. socioId debe estar incluido
+        en el claim socios. La bandeja solo devuelve excepciones pendientes.
+        La aprobación no modifica ni sustituye el consentimiento del cliente.
+      operationId: listarExcepcionesOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      responses:
+        "200":
+          description: Excepciones pendientes del socio autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BandejaExcepcionesOpenFinance"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado o alcance_insuficiente
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance/{excepcionId}:
+    get:
+      tags: [Asesores]
+      summary: Consulta el detalle de una excepción Open Finance
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
+        claim socios. Solo expone la referencia, bloqueo, consentimiento y
+        trazabilidad mínimos; una excepción de otro socio se oculta como 404.
+      operationId: consultarExcepcionOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: excepcionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      responses:
+        "200":
+          description: Detalle trazable de la excepción
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExcepcionOpenFinance"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado o alcance_insuficiente
+        "404":
+          description: excepcion_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance/{excepcionId}/resolver:
+    post:
+      tags: [Asesores]
+      summary: Aprueba o rechaza una excepción Open Finance
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
+        claim socios. El actorId se deriva de sub; no se acepta en el cuerpo.
+        motivo es obligatorio. Aprobar revalida el consentimiento vigente y la
+        versión exacta antes de persistir, y no amplía fuentes, datos ni finalidad.
+        La respuesta 200 solo se devuelve tras confirmar atómicamente la decisión
+        y su evento de trazabilidad. El proceso solicitante debe volver a validar
+        el consentimiento antes de continuar.
+      operationId: resolverExcepcionOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: excepcionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolverExcepcionOpenFinance"
+      responses:
+        "200":
+          description: Decisión y evento confirmados por el backend
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExcepcionOpenFinanceResuelta"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: >-
+            socio_no_autorizado, alcance_insuficiente, consentimiento_ausente
+            o consentimiento_no_vigente. Ante error de consentimiento no se
+            cambia el estado de la excepción.
+        "404":
+          description: excepcion_no_encontrada
+        "409":
+          description: excepcion_ya_resuelta o conflicto_idempotencia
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/perfilamientos-hipotecarios:
     post:
       tags: [Asesores]
@@ -1574,6 +1710,175 @@ components:
         recibidaEn:
           type: string
           format: date-time
+    BandejaExcepcionesOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [excepciones]
+      properties:
+        excepciones:
+          type: array
+          description: Solo contiene excepciones con estado pendiente.
+          items:
+            $ref: "#/components/schemas/ExcepcionOpenFinance"
+    ExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required:
+        - excepcionId
+        - operationId
+        - socioId
+        - clienteId
+        - codigo
+        - motivoBloqueo
+        - alcance
+        - finalidad
+        - datos
+        - consentimiento
+        - estado
+        - estadoAnterior
+        - creadoEn
+        - correlationId
+        - trazabilidad
+      properties:
+        excepcionId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        codigo:
+          type: string
+          enum: [fuente_no_disponible, fuente_vencida, regla_no_aplicable]
+        motivoBloqueo:
+          type: string
+          minLength: 3
+          maxLength: 500
+        alcance:
+          type: string
+          const: open_finance
+          description: Alcance de la excepción, no concesión de consentimiento.
+        finalidad:
+          type: string
+          const: cotizacion
+        datos:
+          type: array
+          items:
+            type: string
+            const: indicador_riesgo
+        consentimiento:
+          $ref: "#/components/schemas/ConsentimientoExcepcionOpenFinance"
+        estado:
+          type: string
+          enum: [pendiente, aprobada, rechazada]
+        estadoAnterior:
+          type: string
+        creadoEn:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+        trazabilidad:
+          $ref: "#/components/schemas/TrazabilidadExcepcionOpenFinance"
+        actorId:
+          type: [string, "null"]
+          format: uuid
+        resueltaEn:
+          type: [string, "null"]
+          format: date-time
+        decision:
+          type: [string, "null"]
+          enum: [aprobar, rechazar, null]
+        motivo:
+          type: [string, "null"]
+          description: Motivo de la decisión humana; ausente mientras está pendiente.
+        idempotente:
+          type: boolean
+    ConsentimientoExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [id, version, estado, fuentes, datos, finalidad, vigenteHasta]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [autorizado, rechazado, revocado, vencido]
+        fuentes:
+          type: array
+          items:
+            type: string
+        datos:
+          type: array
+          items:
+            type: string
+        finalidad:
+          type: string
+        vigenteHasta:
+          type: string
+          format: date-time
+    ResolverExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [decision, motivo]
+      properties:
+        decision:
+          type: string
+          enum: [aprobar, rechazar]
+        motivo:
+          type: string
+          minLength: 3
+          maxLength: 500
+    TrazabilidadExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [estadoAnterior, estadoActual, alcance, creadoEn, correlationId]
+      properties:
+        estadoAnterior:
+          type: string
+        estadoActual:
+          type: string
+        alcance:
+          type: string
+          const: open_finance
+        creadoEn:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+    ExcepcionOpenFinanceResuelta:
+      allOf:
+        - $ref: "#/components/schemas/ExcepcionOpenFinance"
+        - type: object
+          required: [decision, actorId, resueltaEn, motivo]
+          properties:
+            estado:
+              type: string
+              enum: [aprobada, rechazada]
+            estadoAnterior:
+              type: string
+              const: pendiente
+            decision:
+              type: string
+              enum: [aprobar, rechazar]
+            actorId:
+              type: string
+              format: uuid
+            resueltaEn:
+              type: string
+              format: date-time
+            motivo:
+              type: string
+              minLength: 3
+              maxLength: 500
     DecisionConsentimiento:
       type: object
       additionalProperties: false
