@@ -626,3 +626,86 @@ def test_enrollment_rechecks_time_after_inserting_unique_key(
         assert session.scalar(select(func.count()).select_from(RefreshTokenModel)) == 1
         row = session.get(BiometricChallengeModel, challenge["desafioId"])
         assert row is not None and row.consumida_en is None
+
+
+def test_biometric_session_has_same_lifetime_and_claims_as_conventional(
+    biometric_app: Flask,
+) -> None:
+    import jwt
+
+    client = biometric_app.test_client()
+    conventional = register_login(client)
+    key = ec.generate_private_key(ec.SECP256R1())
+    credential_id = enroll(client, key, conventional)
+    biometric = client.post(
+        "/oauth/token", json=grant(proof(login_challenge(client, credential_id), key))
+    ).get_json()
+    for field in ("token_type", "expires_in", "refresh_expires_in", "scope"):
+        assert biometric[field] == conventional[field]
+    assert biometric["usuario"] == conventional["usuario"]
+    claims = jwt.decode(biometric["access_token"], options={"verify_signature": False})
+    expected = jwt.decode(conventional["access_token"], options={"verify_signature": False})
+    for claim in ("iss", "aud", "sub", "scope", "rol", "client_id"):
+        assert claims[claim] == expected[claim]
+    assert claims["exp"] - claims["iat"] == expected["exp"] - expected["iat"]
+
+
+@pytest.mark.parametrize("field", ["selfie", "plantilla", "template", "imagen", "livenessOK"])
+def test_endpoints_reject_selfies_templates_and_client_verdicts(
+    biometric_app: Flask, database_url: str, field: str
+) -> None:
+    client = biometric_app.test_client()
+    tokens = register_login(client)
+    key = ec.generate_private_key(ec.SECP256R1())
+    credential_id = enroll(client, key, tokens)
+    headers = {"Authorization": "Bearer " + tokens["access_token"]}
+    sensitive = {field: "dGVzdA"}
+    enrollment = client.post(
+        "/v1/biometria/enrolamientos/desafio",
+        headers=headers,
+        json={"contrasena": PASSWORD, "clavePublica": key_public(key), **sensitive},
+    )
+    challenge = login_challenge(client, credential_id)
+    bodies = [
+        client.post("/v1/biometria/desafios", json={"credencialId": credential_id, **sensitive}),
+        client.post("/oauth/token", json={**grant(proof(challenge, key)), **sensitive}),
+    ]
+    for response in [enrollment, *bodies]:
+        assert response.status_code == 400
+        assert "access_token" not in response.get_json()
+    with Session(create_engine(database_url)) as session:
+        assert session.scalar(select(func.count()).select_from(RefreshTokenModel)) == 1
+        row = session.get(BiometricChallengeModel, challenge["desafioId"])
+        assert row is not None and row.consumida_en is None
+        audits = session.scalars(select(BiometricAuditModel)).all()
+        assert "dGVzdA" not in str([row.__dict__ for row in audits])
+    # A clean retry still succeeds: a rejected attempt neither consumes the nonce nor locks out.
+    assert client.post("/oauth/token", json=grant(proof(challenge, key))).status_code == 200
+
+
+def test_failed_proof_is_audited_without_sensitive_data_and_allows_controlled_retry(
+    biometric_app: Flask, database_url: str
+) -> None:
+    client = biometric_app.test_client()
+    tokens = register_login(client)
+    key = ec.generate_private_key(ec.SECP256R1())
+    credential_id = enroll(client, key, tokens)
+    challenge = login_challenge(client, credential_id)
+    wrong = grant(proof(challenge, ec.generate_private_key(ec.SECP256R1())))
+    response = client.post("/oauth/token", json=wrong)
+    assert response.status_code == 401 and "access_token" not in response.get_json()
+    with Session(create_engine(database_url)) as session:
+        assert session.scalar(select(func.count()).select_from(RefreshTokenModel)) == 1
+        failures = session.scalars(
+            select(BiometricAuditModel).where(
+                BiometricAuditModel.operacion == "login",
+                BiometricAuditModel.resultado == "credenciales_invalidas",
+            )
+        ).all()
+        assert len(failures) == 1
+        serialized = str([row.__dict__ for row in failures])
+        assert wrong["firma"] not in serialized and challenge["desafioId"] not in serialized
+    retry = client.post(
+        "/oauth/token", json=grant(proof(login_challenge(client, credential_id), key))
+    )
+    assert retry.status_code == 200
