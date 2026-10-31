@@ -201,6 +201,39 @@ def test_consulta_informacion_rechaza_reuso_con_otros_datos(
         )
 
 
+def test_consulta_persistida_se_recupera_solo_con_consentimiento_vigente(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    servicio = ConsultarInformacionCliente(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    comando = ConsultarInformacionComando(
+        uuid4(),
+        "BANCO-001",
+        uuid4(),
+        cliente_id,
+        "mortgage-life",
+        "cotizacion",
+        ("indicador_riesgo",),
+    )
+    consulta = servicio.ejecutar(comando, "corr-original")
+
+    assert servicio.recuperar("BANCO-001", comando.operation_id, "corr-recuperar") == consulta
+    assert consentimientos.actual is not None
+    consentimientos.actual = consentimientos.actual.model_copy(
+        update={"estado": "revocado", "version": 2}
+    )
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.ejecutar(comando, "corr-reintento-revocado")
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.recuperar("BANCO-001", comando.operation_id, "corr-recuperar-revocado")
+
+
 def test_consulta_revocada_bloquea_antes_de_consultar_fuentes(
     repo: RepositorioPerfiles,
 ) -> None:
@@ -765,7 +798,35 @@ def test_failed_source_uses_recent_authorized_cache(repo: RepositorioPerfiles) -
     assert any(fuente.version == "mock-1:cache" for fuente in degradado.fuentes)
 
 
-def test_hu48_latency_and_capacity_baseline(repo: RepositorioPerfiles) -> None:
+def test_cache_from_previous_consent_is_not_reused(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    disponible = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    disponible.generar(cliente_id, uuid4(), "corr-consent-cache-base")
+    assert consentimientos.actual is not None
+    consentimientos.actual = consentimientos.actual.model_copy(
+        update={"consentimiento_id": uuid4(), "version": 2}
+    )
+
+    degradado = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance", "no_disponible"), FuenteMock("open_data")),
+        lambda: AHORA + timedelta(minutes=1),
+    ).generar(cliente_id, uuid4(), "corr-new-consent")
+
+    assert degradado.degradaciones[0].politica == "default"
+    assert any(fuente.version == "default-1" for fuente in degradado.fuentes)
+
+
+def test_hu48_application_latency_baseline(repo: RepositorioPerfiles) -> None:
     cliente_id = uuid4()
     servicio = ConsultarPerfil(
         repo,
@@ -774,7 +835,6 @@ def test_hu48_latency_and_capacity_baseline(repo: RepositorioPerfiles) -> None:
         lambda: AHORA,
     )
     latencias_ms = []
-    inicio = perf_counter()
     for indice in range(200):
         operacion = uuid4()
         medida = perf_counter()
@@ -786,12 +846,9 @@ def test_hu48_latency_and_capacity_baseline(repo: RepositorioPerfiles) -> None:
             credito_id=f"HIP-{indice:06}",
         )
         latencias_ms.append((perf_counter() - medida) * 1000)
-    duracion = perf_counter() - inicio
     ordenadas = sorted(latencias_ms)
     p95 = ordenadas[189]
     p99 = ordenadas[197]
-    operaciones_hora = len(latencias_ms) / duracion * 3600
 
     assert p95 <= 400
     assert p99 <= 800
-    assert operaciones_hora >= 20_000

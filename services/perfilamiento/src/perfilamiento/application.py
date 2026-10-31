@@ -111,7 +111,12 @@ class ConsultarPerfil:
                 except ErrorPerfilamiento as error:
                     if error.codigo not in {"fuente_no_disponible", "fuente_vencida"}:
                         raise
-                    fuente, politica = self._degradar(cliente_id, adaptador.nombre, ahora_fuente)
+                    fuente, politica = self._degradar(
+                        cliente_id,
+                        adaptador.nombre,
+                        consentimiento,
+                        ahora_fuente,
+                    )
                     degradaciones.append(
                         Degradacion(
                             fuente=adaptador.nombre,
@@ -133,10 +138,6 @@ class ConsultarPerfil:
                 for fuente in fuentes
                 if "indicador_riesgo" in consentimiento.datos
             )
-            disponibles = {
-                "open_finance": ("indicador_riesgo", "saldo_promedio"),
-                "open_data": ("indicador_riesgo", "zona_geografica"),
-            }
             variables_excluidas = tuple(
                 VariableExcluida(
                     nombre=nombre,
@@ -144,7 +145,7 @@ class ConsultarPerfil:
                     motivo="sin_consentimiento",
                 )
                 for fuente in fuentes
-                for nombre in disponibles[fuente.nombre]
+                for nombre in fuente.variables_disponibles
                 if nombre not in consentimiento.datos
             )
             regla = ReglaRiesgo(
@@ -223,9 +224,16 @@ class ConsultarPerfil:
         self,
         cliente_id: UUID,
         nombre: Literal["open_finance", "open_data"],
+        consentimiento: Consentimiento,
         ahora: datetime,
     ) -> tuple[Fuente, Literal["cache", "default"]]:
-        cache = self._repositorio.fuente_en_cache(cliente_id, nombre, ahora)
+        cache = self._repositorio.fuente_en_cache(
+            cliente_id,
+            nombre,
+            consentimiento.consentimiento_id,
+            consentimiento.version,
+            ahora,
+        )
         if cache is not None:
             return (
                 cache.model_copy(
@@ -248,6 +256,7 @@ class ConsultarPerfil:
                 vigente_hasta=ahora + timedelta(minutes=5),
                 simulada=True,
                 indicador_riesgo=valores_default[nombre],
+                variables_disponibles=("indicador_riesgo",),
             ),
             "default",
         )

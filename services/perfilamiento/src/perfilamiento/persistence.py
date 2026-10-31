@@ -174,7 +174,14 @@ class RepositorioPerfiles:
                 raise ErrorPerfilamiento("perfil_no_integro", 503)
             return Perfil.model_validate(fila.contenido)
 
-    def fuente_en_cache(self, cliente_id: UUID, nombre: str, ahora: datetime) -> Fuente | None:
+    def fuente_en_cache(
+        self,
+        cliente_id: UUID,
+        nombre: str,
+        consentimiento_id: UUID,
+        consentimiento_version: int,
+        ahora: datetime,
+    ) -> Fuente | None:
         with self._sesiones() as sesion:
             filas = sesion.scalars(
                 select(PerfilModel)
@@ -185,6 +192,12 @@ class RepositorioPerfiles:
                 if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
                     raise ErrorPerfilamiento("perfil_no_integro", 503)
                 perfil = Perfil.model_validate(fila.contenido)
+                if (
+                    perfil.consentimiento_id != consentimiento_id
+                    or perfil.consentimiento_version != consentimiento_version
+                    or any(degradacion.fuente == nombre for degradacion in perfil.degradaciones)
+                ):
+                    continue
                 for fuente in perfil.fuentes:
                     if fuente.nombre == nombre and ahora - fuente.consultada_en <= timedelta(
                         minutes=30

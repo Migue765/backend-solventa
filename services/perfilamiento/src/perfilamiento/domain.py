@@ -87,6 +87,9 @@ class Fuente(Documento):
     vigente_hasta: AwareDatetime = Field(alias="vigenteHasta")
     simulada: bool
     indicador_riesgo: Decimal = Field(alias="indicadorRiesgo", ge=0, le=1)
+    variables_disponibles: tuple[str, ...] = Field(
+        default=("indicador_riesgo",), alias="variablesDisponibles"
+    )
 
 
 class VariableRiesgo(Documento):

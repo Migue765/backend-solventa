@@ -174,6 +174,14 @@ def create_app(
         )
         return jsonify(consulta.model_dump(mode="json", by_alias=True)), 201
 
+    @app.get("/v1/consultas-informacion-cliente/<uuid:operation_id>")
+    def recuperar_informacion(operation_id: UUID) -> tuple[Response, int] | Response:
+        socio_id = request.args.get("socioId", "")
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        consulta = servicio_informacion.recuperar(socio_id, operation_id, g.correlation_id)
+        return jsonify(consulta.model_dump(mode="json", by_alias=True))
+
     @app.post("/v1/eventos/consentimientos")
     def aplicar_consentimiento() -> tuple[Response, int] | Response:
         try:

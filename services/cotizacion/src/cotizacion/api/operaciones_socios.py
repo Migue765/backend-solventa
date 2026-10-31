@@ -27,6 +27,7 @@ class SolicitudSocioRequest(RegistrarSolicitudRequest):
     usuario_id: UUID
     consentimiento_id: UUID
     consentimiento_version: int = Field(ge=1)
+    referencia_credito: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
 
 
 @bp.post("/solicitudes-cotizacion")
@@ -52,6 +53,7 @@ def iniciar() -> tuple[Response, int] | Response:
                 payload.a_comando(key),
                 consentimiento_id=payload.consentimiento_id,
                 consentimiento_version=payload.consentimiento_version,
+                credito_id=payload.referencia_credito,
             ),
         )
     )

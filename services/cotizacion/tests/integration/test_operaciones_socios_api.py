@@ -45,6 +45,7 @@ def payload() -> dict:
         "telefono": "+573001234567",
         "consentimientoId": str(uuid4()),
         "consentimientoVersion": 1,
+        "referenciaCredito": "HIP-2026-001",
     }
 
 
@@ -197,7 +198,7 @@ def test_mortgage_offer_persists_explanation_and_complete_decision(database_url,
         assert evidence["tarificacion"]["datosProducto"] == body["datosProducto"]
         assert evidence["perfil"]["evidencia"]["fuentes"]
         assert evidence["perfil"]["evidencia"]["operationId"] == body["operationId"]
-        assert evidence["perfil"]["evidencia"]["creditoId"] == body["operationId"]
+        assert evidence["perfil"]["evidencia"]["creditoId"] == body["referenciaCredito"]
         assert evidence["regla"]["version"] == "academico-v1"
         assert evidence["resultado"]["primaEstimada"] == offer["prima"]["monto"]
 
@@ -251,6 +252,38 @@ def test_mortgage_offer_failure_does_not_persist_partial_results(
     with crear_sesiones(database_url)() as session:
         for model in (CotizacionModel, OperacionSocioModel, OfertaHipotecariaModel):
             assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+def test_mortgage_offer_explains_profile_degradation(database_url, monkeypatch):
+    profiling = ProfilingServiceStub()
+    profiling.degradations = [
+        {
+            "fuente": "open_finance",
+            "motivo": "fuente_no_disponible",
+            "politica": "default",
+            "versionPolitica": "degradacion-1",
+        }
+    ]
+    monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
+    app = app_for(database_url)
+    body = {
+        **payload(),
+        "productoId": "mortgage-life",
+        "datosProducto": {
+            "birthDate": "1985-02-10",
+            "mortgageBalance": "310000000",
+        },
+    }
+
+    response = post(app, body)
+
+    assert response.status_code == 201
+    factors = response.get_json()["oferta"]["explicacion"]["factoresDeterminantes"]
+    degradation = next(
+        factor for factor in factors if factor["nombre"] == "Disponibilidad de datos"
+    )
+    assert degradation["valor"] == "open_finance: política default"
+    assert "fuente_no_disponible" in degradation["impacto"]
 
 
 def test_quota_override_is_persistent_and_does_not_block_other_partner(database_url, monkeypatch):

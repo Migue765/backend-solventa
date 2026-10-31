@@ -21,7 +21,10 @@ def payload() -> dict[str, Any]:
         "operationId": str(uuid4()),
         "socioId": "BANCO-001",
         "productoId": "mortgage-life",
-        "datosProducto": {"mortgageBalance": "180000000"},
+        "datosProducto": {
+            "mortgageBalance": "180000000",
+            "referenciaCredito": "HIP-2026-001",
+        },
         "cliente": {
             "tipoCliente": "persona_natural",
             "tipoDocumento": "cc",
@@ -38,6 +41,9 @@ def valid_consent(app: Flask) -> Mock:
         "clienteId": str(USER.user_id),
         "version": 2,
         "estado": "autorizado",
+        "finalidad": "cotizacion",
+        "alcances": ["open_finance", "open_data"],
+        "efectivaEn": "2026-10-25T23:00:00Z",
         "vigenteHasta": "2099-10-25T23:00:00Z",
         "actorId": str(USER.user_id),
         "fuentes": ["open_finance", "open_data"],
@@ -148,6 +154,7 @@ def test_real_partner_context_and_authoritative_client(
         "birthDate": "1985-02-10",
         "mortgageBalance": "180000000",
     }
+    assert gateway.body["referenciaCredito"] == "HIP-2026-001"
     assert identity.calls[-1][0] == "get_client_by_document"
     assert gateway.body["consentimientoVersion"] == 2
 
@@ -203,6 +210,30 @@ def test_partner_finds_client_and_only_receives_useful_consent_status(
     }
     assert "clienteId" not in response.get_json()
     assert "version" not in response.get_json()
+
+
+def test_partial_consent_is_not_reported_as_current_for_mortgage_risk(
+    app: Flask, keypair: KeyPair, valid_consent: Mock
+) -> None:
+    valid_consent.get_consent.return_value["alcances"] = ["open_data"]
+    valid_consent.get_consent.return_value["fuentes"] = ["open_data"]
+
+    response = app.test_client().get(
+        "/v1/socios/clientes/por-documento",
+        query_string={
+            "socioId": "BANCO-001",
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1234567890",
+        },
+        headers={
+            "Authorization": "Bearer "
+            + sign_token(keypair, user=PARTNER, scope="socio", socios=["BANCO-001"]),
+            "API-Version": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["consentimientoEstado"] == "insuficiente"
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ class ProfilingServiceStub:
     def __init__(self) -> None:
         self.profiles: dict[str, dict[str, Any]] = {}
         self.created = 0
+        self.degradations: list[dict[str, str]] = []
 
     def __call__(self, request: Request, timeout: float) -> BytesIO:
         assert timeout == 0.7
@@ -44,6 +45,7 @@ class ProfilingServiceStub:
                         "vigenteHasta": (now + timedelta(minutes=15)).isoformat(),
                         "simulada": True,
                         "indicadorRiesgo": "0.35",
+                        "variablesDisponibles": ["indicador_riesgo"],
                     }
                     for name in ("open_finance", "open_data")
                 ],
@@ -63,9 +65,9 @@ class ProfilingServiceStub:
                     "modeloVersion": "perfil-riesgo-1",
                     "expresion": "max(indicador_riesgo_por_fuente)",
                 },
-                "degradaciones": [],
+                "degradaciones": self.degradations,
                 "hashDecision": "a" * 64,
-                "fallbackUsed": False,
+                "fallbackUsed": bool(self.degradations),
             }
             self.profiles[profile_id] = profile
             self.created += 1

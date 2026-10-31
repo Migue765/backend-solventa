@@ -98,6 +98,39 @@ paths:
           description: idempotencia_conflicto
         "503":
           description: Dependencia o fuente no disponible; no contiene datos parciales
+  /v1/socios/consultas-informacion-cliente/{operationId}:
+    get:
+      tags: [Socios]
+      operationId: recuperarInformacionCliente
+      summary: Recupera una consulta autorizada por su operación
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Consulta persistida con consentimiento aún vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InformacionClienteAutorizada"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Socio o consentimiento no autorizado
+        "404":
+          description: consulta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/socios/clientes/por-documento:
     get:
       tags: [Socios]
@@ -144,7 +177,7 @@ paths:
                     type: string
                   consentimientoEstado:
                     type: string
-                    enum: [vigente, vencido, revocado, rechazado, ausente]
+                    enum: [vigente, insuficiente, vencido, revocado, rechazado, ausente]
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
@@ -1116,11 +1149,14 @@ components:
         datosProducto:
           type: object
           additionalProperties: false
-          required: [mortgageBalance]
+          required: [mortgageBalance, referenciaCredito]
           properties:
             mortgageBalance:
               type: string
               pattern: "^[1-9][0-9]{0,15}$"
+            referenciaCredito:
+              type: string
+              pattern: "^[A-Za-z0-9-]{4,30}$"
         cliente:
           type: object
           additionalProperties: false
@@ -1438,7 +1474,8 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo,
+                       variablesDisponibles]
             properties:
               nombre:
                 type: string
@@ -1456,6 +1493,12 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+              variablesDisponibles:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items:
+                  type: string
         variables:
           type: array
           minItems: 2

@@ -1,6 +1,8 @@
 import json
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -30,6 +32,25 @@ class HttpClientInformationGateway:
                 "X-Correlation-ID": correlation_id,
             },
         )
+        return self._send(request)
+
+    def recover(
+        self, socio_id: str, operation_id: UUID, correlation_id: str
+    ) -> ClientInformationResult:
+        if not self._token:
+            raise ClientInformationError("servicio_no_disponible", 503)
+        request = Request(
+            f"{self._base_url}/v1/consultas-informacion-cliente/{operation_id}?"
+            + urlencode({"socioId": socio_id}),
+            headers={
+                "Authorization": "Bearer " + self._token,
+                "Accept": "application/json",
+                "X-Correlation-ID": correlation_id,
+            },
+        )
+        return self._send(request)
+
+    def _send(self, request: Request) -> ClientInformationResult:
         try:
             with urlopen(request, timeout=self._timeout) as response:  # noqa: S310
                 return ClientInformationResult.model_validate(json.load(response))
@@ -53,6 +74,7 @@ def _controlled_error(error: HTTPError) -> ClientInformationError:
             "finalidad_no_autorizada",
         },
         409: {"conflicto_idempotencia"},
+        404: {"consulta_no_encontrada"},
         503: {
             "fuente_no_disponible",
             "circuito_abierto",

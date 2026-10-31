@@ -20,6 +20,7 @@ API interna con Bearer; `/health` no requiere autenticacion:
 |---|---|---|
 | POST | `/v1/perfiles` | Cliente, credito, `operationId` y referencia de la cotizacion |
 | POST | `/v1/consultas-informacion-cliente` | Contexto autorizado de HU44 e identificador idempotente |
+| GET | `/v1/consultas-informacion-cliente/{operationId}` | `socioId` en query; recupera HU44 y revalida consentimiento |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
 
@@ -63,8 +64,9 @@ El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 409 
 idempotente o version concurrente y 503 por dependencia o integridad fallida.
 
 Para HU48, una fuente fallida o vencida aplica la politica versionada `degradacion-1`: reutiliza
-por hasta 30 minutos la ultima senal autorizada e integra disponible para el mismo cliente; si
-no existe, usa el valor conservador sintetico `default-1`. El resultado marca `fallbackUsed`,
+por hasta 30 minutos la ultima senal autorizada e integra disponible para el mismo cliente,
+consentimiento y version; nunca encadena una senal ya degradada. Si no existe, usa el valor
+conservador sintetico `default-1`. El resultado marca `fallbackUsed`,
 reduce su vigencia a cinco minutos y registra fuente, motivo, politica y version. Nunca se usa
 una variable fuera del consentimiento ni se presenta una degradacion sin evidencia.
 

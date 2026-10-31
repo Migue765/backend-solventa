@@ -40,6 +40,7 @@ class PartnerMortgageData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mortgage_balance: str = Field(alias="mortgageBalance", pattern=r"^[1-9][0-9]{0,15}$")
+    credit_reference: str = Field(alias="referenciaCredito", pattern=r"^[A-Za-z0-9-]{4,30}$")
 
 
 class PartnerQuotePayload(BaseModel):
@@ -59,6 +60,9 @@ class ConsentDecision(BaseModel):
     clienteId: UUID
     version: int = Field(ge=1)
     estado: Literal["autorizado", "rechazado", "revocado", "vencido"]
+    finalidad: Literal["cotizacion"]
+    alcances: tuple[str, ...]
+    efectivaEn: datetime
     vigenteHasta: datetime
     actorId: UUID | None = None
     fuentes: tuple[str, ...] = ()
@@ -71,10 +75,10 @@ class ConsentDecision(BaseModel):
             and self.clienteId == client_id
             and self.actorId == client_id
             and self.versionTerminos == "1.0"
-            and bool(self.fuentes)
-            and set(self.fuentes).issubset({"open_finance", "open_data"})
+            and {"open_finance", "open_data"}.issubset(self.alcances)
+            and {"open_finance", "open_data"}.issubset(self.fuentes)
             and self.datos == ("indicador_riesgo",)
-            and datetime.now(UTC) < self.vigenteHasta
+            and self.efectivaEn <= datetime.now(UTC) < self.vigenteHasta
         )
 
 
@@ -152,6 +156,7 @@ def start() -> tuple[Response, int] | Response:
             "birthDate": client.birth_date.isoformat(),
             "mortgageBalance": payload.product_data.mortgage_balance,
         },
+        "referenciaCredito": payload.product_data.credit_reference,
         "clienteId": str(client.user_id),
         "tipoCliente": payload.cliente.tipoCliente,
         "tipoDocumento": payload.cliente.tipoDocumento,
@@ -200,7 +205,13 @@ def find_client_by_document() -> Response:
     consent_status: str
     try:
         consent = _get_consent(client)
-        consent_status = "vigente" if consent.is_current_for(client.user_id) else consent.estado
+        consent_status = (
+            "vigente"
+            if consent.is_current_for(client.user_id)
+            else "insuficiente"
+            if consent.estado == "autorizado"
+            else consent.estado
+        )
     except ProfilingError as error:
         if error.code == "consentimiento_ausente":
             consent_status = "ausente"

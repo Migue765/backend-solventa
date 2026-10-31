@@ -22,6 +22,7 @@ class FuenteResponse(BaseModel):
     vigenteHasta: AwareDatetime
     simulada: bool
     indicadorRiesgo: Decimal = Field(ge=0, le=1)
+    variablesDisponibles: tuple[str, ...]
 
 
 class VariableResponse(BaseModel):

@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from perfilamiento.domain import (
+    Consentimiento,
     ConsultaInformacionCliente,
     ErrorPerfilamiento,
     EvidenciaFuente,
@@ -90,6 +91,13 @@ class ConsultarInformacionCliente:
         self, comando: ConsultarInformacionComando, correlation_id: str
     ) -> ConsultaInformacionCliente:
         fingerprint = _fingerprint(comando)
+        if comando.producto_id not in PRODUCTOS_AUTORIZADOS:
+            raise ErrorPerfilamiento("producto_no_autorizado", 403)
+        if comando.finalidad != "cotizacion":
+            raise ErrorPerfilamiento("finalidad_no_autorizada", 403)
+        consentimiento = self._consentimientos.obtener(comando.cliente_id, correlation_id)
+        consentimiento.validar_consulta(comando.cliente_id, comando.finalidad, self._reloj())
+        self._repositorio.validar_version_consentimiento(consentimiento)
         existente = self._repositorio.buscar_consulta_informacion(
             comando.socio_id, comando.operation_id
         )
@@ -97,15 +105,8 @@ class ConsultarInformacionCliente:
             consulta, fingerprint_existente = existente
             if fingerprint_existente != fingerprint:
                 raise ErrorPerfilamiento("conflicto_idempotencia", 409)
+            self._validar_consentimiento_consulta(consulta, consentimiento)
             return consulta
-        if comando.producto_id not in PRODUCTOS_AUTORIZADOS:
-            raise ErrorPerfilamiento("producto_no_autorizado", 403)
-        if comando.finalidad != "cotizacion":
-            raise ErrorPerfilamiento("finalidad_no_autorizada", 403)
-
-        consentimiento = self._consentimientos.obtener(comando.cliente_id, correlation_id)
-        consentimiento.validar_consulta(comando.cliente_id, comando.finalidad, self._reloj())
-        self._repositorio.validar_version_consentimiento(consentimiento)
         permitidos = set(comando.datos_solicitados) & set(consentimiento.datos)
         fuentes = []
         if "indicador_riesgo" in permitidos:
@@ -151,6 +152,29 @@ class ConsultarInformacionCliente:
         )
         self._repositorio.guardar_consulta_informacion(consulta, fingerprint)
         return consulta
+
+    def recuperar(
+        self, socio_id: str, operation_id: UUID, correlation_id: str
+    ) -> ConsultaInformacionCliente:
+        existente = self._repositorio.buscar_consulta_informacion(socio_id, operation_id)
+        if existente is None:
+            raise ErrorPerfilamiento("consulta_no_encontrada", 404)
+        consulta, _ = existente
+        consentimiento = self._consentimientos.obtener(consulta.cliente_id, correlation_id)
+        consentimiento.validar_consulta(consulta.cliente_id, consulta.finalidad, self._reloj())
+        self._repositorio.validar_version_consentimiento(consentimiento)
+        self._validar_consentimiento_consulta(consulta, consentimiento)
+        return consulta
+
+    @staticmethod
+    def _validar_consentimiento_consulta(
+        consulta: ConsultaInformacionCliente, consentimiento: Consentimiento
+    ) -> None:
+        if (
+            consulta.consentimiento_id != consentimiento.consentimiento_id
+            or consulta.consentimiento_version != consentimiento.version
+        ):
+            raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
 
     def _auditar(self, comando: ConsultarInformacionComando, fuente: str, resultado: str) -> None:
         self._repositorio.auditar(
