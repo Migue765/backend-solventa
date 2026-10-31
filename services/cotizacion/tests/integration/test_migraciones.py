@@ -93,7 +93,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["ofertas_socios"]
+    assert script.get_heads() == ["ofertas_socios_hipotecarias"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
@@ -111,7 +111,10 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
 
     with create_engine(url).connect() as conexion:
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
-        assert conexion.scalar(text("select version_num from alembic_version")) == "ofertas_socios"
+        assert (
+            conexion.scalar(text("select version_num from alembic_version"))
+            == "ofertas_socios_hipotecarias"
+        )
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
     assert repositorio.obtener(cotizacion_id) == antes

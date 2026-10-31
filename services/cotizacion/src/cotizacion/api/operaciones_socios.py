@@ -7,7 +7,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import Field, ValidationError
 
 from cotizacion.api.operaciones_hipotecarias import _authorized
-from cotizacion.api.schemas import RegistrarSolicitudRequest
+from cotizacion.api.schemas import RegistrarSolicitudRequest, resultado_ofertas_a_json
 from cotizacion.application.iniciar_solicitud_socio import (
     IniciarSolicitudSocio,
     OperacionSocio,
@@ -15,6 +15,7 @@ from cotizacion.application.iniciar_solicitud_socio import (
 )
 from cotizacion.application.ofertas_socio import CalcularOfertaSocio
 from cotizacion.domain.oferta_socio import OfertaSocio
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.infrastructure.persistence.admision_socios import AdmisionSocios
 from cotizacion.infrastructure.persistence.repositorio_operaciones_socios import (
     RepositorioOperacionesSociosSql,
@@ -29,6 +30,7 @@ class SolicitudSocioRequest(RegistrarSolicitudRequest):
     usuario_id: UUID
     consentimiento_id: UUID
     consentimiento_version: int = Field(ge=1)
+    referencia_credito: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
 
 
 @bp.post("/solicitudes-cotizacion")
@@ -54,6 +56,7 @@ def iniciar() -> tuple[Response, int] | Response:
                 payload.a_comando(key),
                 consentimiento_id=payload.consentimiento_id,
                 consentimiento_version=payload.consentimiento_version,
+                credito_id=payload.referencia_credito,
             ),
         )
     )
@@ -147,6 +150,11 @@ def _iso(fecha: datetime) -> str:
 
 
 def _a_json(operacion: OperacionSocio) -> dict[str, object]:
+    oferta = (
+        operacion.oferta_hipotecaria.contenido
+        if operacion.oferta_hipotecaria is not None
+        else _oferta_recomendada(operacion)
+    )
     return dict(
         operationId=str(operacion.operation_id),
         socioId=operacion.socio_id,
@@ -157,4 +165,31 @@ def _a_json(operacion: OperacionSocio) -> dict[str, object]:
         solicitudId=operacion.solicitud_id,
         cotizacionId=str(operacion.cotizacion_id),
         recibidaEn=operacion.creada_en.isoformat().replace("+00:00", "Z"),
+        oferta=oferta,
     )
+
+
+def _oferta_recomendada(operacion: OperacionSocio) -> dict[str, object]:
+    resultado = resultado_ofertas_a_json(
+        _ofertas().listar(operacion.solicitud_id, operacion.cliente_id)
+    )
+    ofertas = resultado["ofertas"]
+    if not isinstance(ofertas, list):
+        raise ValueError("Respuesta de ofertas invalida.")
+    oferta = next(
+        (
+            item
+            for item in ofertas
+            if isinstance(item, dict)
+            and item.get("recomendada") is True
+            and item.get("estado") == "disponible"
+        ),
+        None,
+    )
+    if oferta is None:
+        raise ValueError("La cotizacion no produjo una oferta recomendada disponible.")
+    return oferta
+
+
+def _ofertas() -> GestionarOfertas:
+    return cast(GestionarOfertas, current_app.extensions["gestionar_ofertas"])

@@ -36,6 +36,8 @@ def register() -> Response:
             payload.contrasena,
             payload.tipo_documento,
             payload.numero_documento,
+            payload.telefono,
+            payload.fecha_nacimiento,
         )
     except EmailAlreadyRegisteredError:
         return problem_response(

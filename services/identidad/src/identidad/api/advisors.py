@@ -78,6 +78,9 @@ def _client_to_json(client: User) -> dict[str, object]:
     if client.document_type is not None and client.identification is not None:
         result["tipoDocumento"] = client.document_type
         result["numeroDocumento"] = client.identification
+    if client.phone is not None and client.birth_date is not None:
+        result["telefono"] = client.phone
+        result["fechaNacimiento"] = client.birth_date.isoformat()
     return result
 
 

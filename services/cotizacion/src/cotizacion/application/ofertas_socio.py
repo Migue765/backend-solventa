@@ -5,7 +5,7 @@ from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from cotizacion.application.iniciar_solicitud_socio import RepositorioOperacionesSocios
-from cotizacion.application.ofertas import _ofertas_calculadas
+from cotizacion.application.ofertas import ofertas_desde_decision
 from cotizacion.application.perfilamiento import validar_perfil
 from cotizacion.application.ports import ProveedorPerfil, SolicitudCotizacionRepository
 from cotizacion.domain.decision import contenido_integro
@@ -86,7 +86,7 @@ class CalcularOfertaSocio:
             raise EntradaOfertaInvalidaError("decision_inconsistente")
         factores = factores_planes(instantanea.contenido)
         try:
-            resultado = _ofertas_calculadas(solicitud, ahora, None)
+            resultado = ofertas_desde_decision(solicitud, ahora, None)
         except OfertaNoDisponibleError as error:
             raise EntradaOfertaInvalidaError("decision_sin_tarificacion") from error
         if len(resultado.ofertas) != len(factores):

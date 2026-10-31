@@ -29,6 +29,8 @@ class SqlUserRepository:
                     password_hash=password_hash,
                     tipo_documento=user.document_type,
                     numero_documento=user.identification,
+                    telefono=user.phone,
+                    fecha_nacimiento=user.birth_date,
                 )
             )
             try:
@@ -160,4 +162,6 @@ class SqlUserRepository:
             partner_ids,
             row.tipo_documento,
             row.numero_documento,
+            row.telefono,
+            row.fecha_nacimiento,
         )

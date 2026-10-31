@@ -62,4 +62,9 @@ class FuenteMock:
             vigente_hasta=ahora + timedelta(minutes=15 if self._escenario == "disponible" else -1),
             simulada=True,
             indicador_riesgo=Decimal("0.50") if self.nombre == "open_finance" else Decimal("0.25"),
+            variables_disponibles=(
+                ("indicador_riesgo", "saldo_promedio")
+                if self.nombre == "open_finance"
+                else ("indicador_riesgo", "zona_geografica")
+            ),
         )

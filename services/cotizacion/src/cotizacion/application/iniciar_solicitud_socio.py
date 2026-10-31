@@ -6,8 +6,10 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from cotizacion.application.iniciar_operacion_hipotecaria import AdmisionOperaciones
+from cotizacion.application.oferta_hipotecaria import construir_oferta_hipotecaria
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud, RegistrarSolicitudComando
 from cotizacion.domain.errors import ConflictoIdempotenciaError, ErrorConsultaPerfil
+from cotizacion.domain.oferta_hipotecaria import OfertaHipotecariaPersistida
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class OperacionSocio:
     perfilamiento_referencia: str
     fingerprint: str
     creada_en: datetime
+    oferta_hipotecaria: OfertaHipotecariaPersistida | None = None
 
 
 class RepositorioOperacionesSocios(Protocol):
@@ -72,11 +75,21 @@ class IniciarSolicitudSocio:
                     comando.solicitud,
                     idempotency_key=uuid5(NAMESPACE_URL, namespace),
                     cotizacion_id=uuid5(NAMESPACE_URL, namespace + ":cotizacion"),
+                    operation_id=comando.operation_id,
                 )
             )
             instantanea = solicitud.cotizacion.instantanea
             if instantanea is None:
                 raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+            oferta_hipotecaria = (
+                construir_oferta_hipotecaria(
+                    comando.operation_id,
+                    comando.socio_id,
+                    solicitud,
+                )
+                if comando.solicitud.producto_id == "mortgage-life"
+                else None
+            )
             operacion = OperacionSocio(
                 operation_id=comando.operation_id,
                 socio_id=comando.socio_id,
@@ -88,6 +101,7 @@ class IniciarSolicitudSocio:
                 perfilamiento_referencia=instantanea.perfil_id,
                 fingerprint=fingerprint,
                 creada_en=solicitud.creada_en,
+                oferta_hipotecaria=oferta_hipotecaria,
             )
             self._repositorio.guardar(operacion, token)
             return operacion

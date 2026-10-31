@@ -41,37 +41,40 @@ Perfilamiento. Solo solicita y devuelve datos cubiertos por el consentimiento
 autoritativo vigente. Un fallo o circuito abierto de cualquier fuente requerida
 responde `503` sin datos parciales ni fallback. La respuesta incluye la versión del
 consentimiento y evidencia por fuente, y usa `Cache-Control: no-store`.
+`GET /v1/socios/consultas-informacion-cliente/{operationId}?socioId=...` recupera
+la consulta persistida sin repetir fuentes y vuelve a comprobar que el consentimiento
+exacto siga vigente antes de entregar los datos.
 
 Configurar `PERFILAMIENTO_SERVICE_URL` con la URL interna de Perfilamiento. El BFF
 limita esta dependencia a 800 ms.
 
-`POST /v1/socios/solicitudes-cotizacion` integra **todos los productos actuales**
-con el motor y la persistencia principales, no una simulacion paralela:
+`POST /v1/socios/solicitudes-cotizacion` integra `mortgage-life` con el motor y la
+persistencia principales, no una simulacion paralela:
 
 ```json
 {
   "operationId": "11111111-1111-4111-8111-111111111111",
   "socioId": "BANCO-001",
-  "productoId": "automotive",
-  "datosProducto": {"vehiclePlate": "ABC123"},
+  "productoId": "mortgage-life",
+  "datosProducto": {
+    "mortgageBalance": "310000000",
+    "referenciaCredito": "HIP-2026-001"
+  },
   "cliente": {
-    "clienteId": "22222222-2222-4222-8222-222222222222",
     "tipoCliente": "persona_natural",
     "tipoDocumento": "cc",
-    "numeroDocumento": "1023456789",
-    "telefono": "+573001234567"
-  },
-  "consentimientoId": "33333333-3333-4333-8333-333333333333",
-  "consentimientoVersion": 1
+    "numeroDocumento": "1023456789"
+  }
 }
 ```
 
 Exige `Idempotency-Key` igual a `operationId`. `API-Version: 1` es opcional;
-otra version devuelve `400 version_no_soportada`. `datosProducto` reutiliza
-exactamente el contrato vigente de solicitudes de clientes. Se consulta al
-cliente por UUID en Identidad; el correo y el usuario operador no son campos
-editables. No se publica un catalogo global de clientes a socios. La pertenencia
-del operador al socio se comprueba antes de consultar dependencias.
+otra version devuelve `400 version_no_soportada`. La referencia de credito identifica
+el credito real durante perfilamiento y cotizacion; nunca se reemplaza por `operationId`.
+El BFF resuelve el cliente por documento en Identidad y toma de forma autoritativa correo,
+telefono, fecha de nacimiento y consentimiento. No se publica un catalogo global de
+clientes a socios. La pertenencia del operador al socio se comprueba antes de consultar
+dependencias.
 
 Respuesta `201`: `{operationId,socioId,clienteId,productoId,estado:"completada",
 perfilamientoReferencia,solicitudId,cotizacionId,recibidaEn}`.
@@ -144,7 +147,13 @@ aislamiento fisico de CPU entre organizaciones.
 
 HU46 conserva `/v1/perfilamientos-hipotecarios` y `/v1/asesor/clientes` para asesor.
 Para socio, vida hipotecaria se cotiza en la ruta generica usando
-`productoId: "mortgage-life"` y los datos del producto del catalogo.
+`productoId: "mortgage-life"`. El navegador solo envia documento y saldo hipotecario;
+Identidad aporta telefono y fecha de nacimiento maestros, y el BFF resuelve UUID y
+consentimiento. La respuesta incluye la oferta recomendada calculada por Cotizacion.
+Para HU49, esa oferta se recupera por `operationId` sin recalcular y añade
+`explicacion.factoresDeterminantes` y `trazabilidad` con las versiones del perfil,
+fuentes y regla. El BFF valida estrictamente esa estructura, pero no recibe ni expone
+la evidencia completa usada para reconstruir la decisión, que permanece en Cotizacion.
 La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
 permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
 siempre debe pasar por autenticacion del BFF.
@@ -154,7 +163,7 @@ expone `API-Version`, `X-Correlation-ID` y `Retry-After`. La prueba local compru
 esa configuracion declarada, no los origenes ni el preflight del entorno desplegado.
 
 Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
-`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones automotrices por HTTP local
+`RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones de vida hipotecaria por HTTP local
 entre servicios/SQLite con umbrales p95 250ms y p99 500ms. No acredita SLA AWS:
 medir tambien el gateway publico regional, con la ubicacion del generador,
 100 o mas muestras por producto, errores, cuotas y concurrencia entre socios.

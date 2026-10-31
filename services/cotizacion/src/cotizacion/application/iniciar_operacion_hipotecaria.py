@@ -106,6 +106,8 @@ class IniciarOperacionHipotecaria:
                     NAMESPACE_URL,
                     f"solventa:cotizacion:{comando.socio_id}:{comando.operation_id}",
                 ),
+                operation_id=comando.operation_id,
+                credito_id=comando.referencia_credito,
             )
         )
         instantanea = solicitud.cotizacion.instantanea
