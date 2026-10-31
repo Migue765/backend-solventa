@@ -17,6 +17,11 @@ from perfilamiento.client_information import (
     ConsultarInformacionComando,
 )
 from perfilamiento.domain import ErrorPerfilamiento, EventoConsentimiento
+from perfilamiento.exceptions import (
+    AbrirExcepcionOpenFinance,
+    GestionarExcepcionesOpenFinance,
+    ResolverExcepcionOpenFinance,
+)
 from perfilamiento.persistence import RepositorioPerfiles
 from perfilamiento.ports import Consentimientos, FuentePerfilamiento
 
@@ -109,9 +114,14 @@ def create_app(
             FuenteMock("open_data", config.mock_escenario),
         ),
     )
+    servicio_excepciones = GestionarExcepcionesOpenFinance(
+        repositorio,
+        consentimientos or ConsentimientosHttp(config.identidad_url, config.internal_api_token),
+    )
     app.extensions["perfiles"] = repositorio
     app.extensions["consultar_perfil"] = servicio
     app.extensions["consultar_informacion"] = servicio_informacion
+    app.extensions["excepciones_open_finance"] = servicio_excepciones
 
     @app.cli.command("init-db")
     def init_db() -> None:
@@ -189,6 +199,65 @@ def create_app(
         except (ValidationError, BadRequest, UnsupportedMediaType):
             return jsonify(error="solicitud_invalida"), 400
         return jsonify(repositorio.aplicar_consentimiento(evento))
+
+    @app.post("/v1/excepciones-open-finance")
+    def abrir_excepcion_open_finance() -> tuple[Response, int]:
+        try:
+            payload = AbrirExcepcionOpenFinance.model_validate(request.get_json())
+        except (ValidationError, BadRequest, UnsupportedMediaType):
+            return jsonify(error="solicitud_invalida"), 400
+        excepcion = servicio_excepciones.abrir(payload, g.correlation_id)
+        return jsonify(excepcion.model_dump(mode="json", by_alias=True)), (
+            200 if excepcion.idempotente else 201
+        )
+
+    @app.get("/v1/excepciones-open-finance")
+    def listar_excepciones_open_finance() -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        excepciones = servicio_excepciones.listar_pendientes(socio_id)
+        return jsonify(
+            excepciones=[
+                excepcion.model_dump(mode="json", by_alias=True) for excepcion in excepciones
+            ]
+        )
+
+    @app.get("/v1/excepciones-open-finance/operaciones/<uuid:operation_id>")
+    def obtener_excepcion_por_operacion(operation_id: UUID) -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        excepcion = servicio_excepciones.obtener_por_operacion(operation_id, socio_id)
+        return jsonify(excepcion.model_dump(mode="json", by_alias=True))
+
+    @app.get("/v1/excepciones-open-finance/<uuid:excepcion_id>")
+    def obtener_excepcion_open_finance(excepcion_id: UUID) -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        excepcion = servicio_excepciones.obtener(excepcion_id, socio_id)
+        return jsonify(excepcion.model_dump(mode="json", by_alias=True))
+
+    @app.post("/v1/excepciones-open-finance/<uuid:excepcion_id>/resolver")
+    def resolver_excepcion_open_finance(excepcion_id: UUID) -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        actor_id = request.headers.get("X-Actor-ID", "")
+        try:
+            actor_uuid = UUID(actor_id)
+            payload = ResolverExcepcionOpenFinance.model_validate(request.get_json())
+        except (ValidationError, BadRequest, UnsupportedMediaType, TypeError, ValueError):
+            return jsonify(error="solicitud_invalida"), 400
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        excepcion = servicio_excepciones.resolver(
+            excepcion_id,
+            socio_id,
+            actor_uuid,
+            payload,
+            g.correlation_id,
+        )
+        return jsonify(excepcion.model_dump(mode="json", by_alias=True))
 
     @app.get("/v1/perfiles/<uuid:perfil_id>")
     def obtener(perfil_id: UUID) -> tuple[Response, int] | Response:
