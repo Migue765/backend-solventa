@@ -265,9 +265,9 @@ class RepositorioPerfiles:
                     )
                 )
         except IntegrityError as error:
-            existente = self.obtener_excepcion_open_finance_por_operacion(socio_id, operation_id)
-            if existente is not None and self._misma_solicitud_excepcion(existente, contenido):
-                return existente
+            persistido = self.obtener_excepcion_open_finance_por_operacion(socio_id, operation_id)
+            if persistido is not None and self._misma_solicitud_excepcion(persistido, contenido):
+                return persistido
             raise ErrorPerfilamiento("conflicto_idempotencia", 409) from error
         return contenido
 
@@ -321,7 +321,7 @@ class RepositorioPerfiles:
             actual = self._contenido_excepcion(existente)
             if actual["estado"] != "pendiente":
                 raise ErrorPerfilamiento("excepcion_ya_resuelta", 409)
-            resultado = sesion.execute(
+            actualizado = sesion.scalar(
                 update(ExcepcionOpenFinanceModel)
                 .where(
                     ExcepcionOpenFinanceModel.excepcion_id == excepcion_id,
@@ -329,8 +329,9 @@ class RepositorioPerfiles:
                     ExcepcionOpenFinanceModel.contenido["estado"].as_string() == "pendiente",
                 )
                 .values(contenido=contenido, hash_contenido=_hash(contenido))
+                .returning(ExcepcionOpenFinanceModel.excepcion_id)
             )
-            if resultado.rowcount != 1:
+            if actualizado is None:
                 raise ErrorPerfilamiento("excepcion_ya_resuelta", 409)
             sesion.add(
                 EventoExcepcionOpenFinanceModel(

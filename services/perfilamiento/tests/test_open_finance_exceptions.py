@@ -25,18 +25,18 @@ TOKEN = "Bearer interno-test"
 class ConsentimientosExcepcion:
     def __init__(self, client_id: UUID, ahora: datetime = AHORA) -> None:
         self.actual = Consentimiento(
-            consentimientoId=uuid4(),
-            clienteId=client_id,
+            consentimiento_id=uuid4(),
+            cliente_id=client_id,
             version=3,
             estado="autorizado",
             finalidad="cotizacion",
             alcances=("open_finance", "open_data"),
             fuentes=("open_finance", "open_data"),
             datos=("indicador_riesgo",),
-            actorId=client_id,
-            versionTerminos="1.0",
-            efectivaEn=ahora - timedelta(days=1),
-            vigenteHasta=ahora + timedelta(days=1),
+            actor_id=client_id,
+            version_terminos="1.0",
+            efectiva_en=ahora - timedelta(days=1),
+            vigente_hasta=ahora + timedelta(days=1),
         )
 
     def obtener(self, cliente_id: UUID, correlation_id: str) -> Consentimiento:
@@ -53,14 +53,14 @@ def _command(
     reason: str = "La regla requiere validacion manual",
 ) -> AbrirExcepcionOpenFinance:
     return AbrirExcepcionOpenFinance(
-        operationId=operation_id or uuid4(),
-        socioId="BANCO-001",
-        clienteId=consent.actual.cliente_id,
-        consentimientoId=consent.actual.consentimiento_id,
-        consentimientoVersion=consent.actual.version,
+        operation_id=operation_id or uuid4(),
+        socio_id="BANCO-001",
+        cliente_id=consent.actual.cliente_id,
+        consentimiento_id=consent.actual.consentimiento_id,
+        consentimiento_version=consent.actual.version,
         codigo="regla_no_aplicable",
-        motivoBloqueo=reason,
-        bloqueaProcesamiento=blocked,
+        motivo_bloqueo=reason,
+        bloquea_procesamiento=blocked,
     )
 
 

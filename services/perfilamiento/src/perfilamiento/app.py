@@ -212,7 +212,7 @@ def create_app(
         )
 
     @app.get("/v1/excepciones-open-finance")
-    def listar_excepciones_open_finance() -> Response:
+    def listar_excepciones_open_finance() -> Response | tuple[Response, int]:
         socio_id = request.args.get("socioId", "")
         if not socio_id or len(socio_id) > 50:
             return jsonify(error="solicitud_invalida"), 400
@@ -224,7 +224,7 @@ def create_app(
         )
 
     @app.get("/v1/excepciones-open-finance/operaciones/<uuid:operation_id>")
-    def obtener_excepcion_por_operacion(operation_id: UUID) -> Response:
+    def obtener_excepcion_por_operacion(operation_id: UUID) -> Response | tuple[Response, int]:
         socio_id = request.args.get("socioId", "")
         if not socio_id or len(socio_id) > 50:
             return jsonify(error="solicitud_invalida"), 400
@@ -232,7 +232,7 @@ def create_app(
         return jsonify(excepcion.model_dump(mode="json", by_alias=True))
 
     @app.get("/v1/excepciones-open-finance/<uuid:excepcion_id>")
-    def obtener_excepcion_open_finance(excepcion_id: UUID) -> Response:
+    def obtener_excepcion_open_finance(excepcion_id: UUID) -> Response | tuple[Response, int]:
         socio_id = request.args.get("socioId", "")
         if not socio_id or len(socio_id) > 50:
             return jsonify(error="solicitud_invalida"), 400

@@ -120,17 +120,17 @@ class GestionarExcepcionesOpenFinance:
         )
         ahora = self._reloj()
         excepcion = ExcepcionOpenFinance(
-            excepcionId=uuid4(),
-            operationId=comando.operation_id,
-            socioId=comando.socio_id,
-            clienteId=comando.cliente_id,
+            excepcion_id=uuid4(),
+            operation_id=comando.operation_id,
+            socio_id=comando.socio_id,
+            cliente_id=comando.cliente_id,
             codigo=comando.codigo,
-            motivoBloqueo=comando.motivo_bloqueo,
+            motivo_bloqueo=comando.motivo_bloqueo,
             consentimiento=self._consentimiento_json(consentimiento),
             estado="pendiente",
-            estadoAnterior="procesamiento_automatico_bloqueado",
-            creadoEn=ahora,
-            correlationId=correlation_id,
+            estado_anterior="procesamiento_automatico_bloqueado",
+            creado_en=ahora,
+            correlation_id=correlation_id,
             trazabilidad={
                 "estadoAnterior": "procesamiento_automatico_bloqueado",
                 "estadoActual": "pendiente",
@@ -140,7 +140,7 @@ class GestionarExcepcionesOpenFinance:
             },
         )
         contenido = excepcion.model_dump(mode="json", by_alias=True, exclude={"idempotente"})
-        evento = {
+        evento: dict[str, object] = {
             "eventoId": str(uuid4()),
             "excepcionId": str(excepcion.excepcion_id),
             "operationId": str(excepcion.operation_id),

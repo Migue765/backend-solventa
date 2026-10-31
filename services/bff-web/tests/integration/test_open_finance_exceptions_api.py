@@ -116,7 +116,9 @@ def test_advisor_can_list_get_and_resolve_for_authorized_partner(
         "/v1/asesor/excepciones-open-finance?socioId=BANCO-001",
         headers=headers,
     )
-    exception_id = UUID(gateway.record["excepcionId"])
+    raw_exception_id = gateway.record["excepcionId"]
+    assert isinstance(raw_exception_id, str)
+    exception_id = UUID(raw_exception_id)
     detail = client.get(
         f"/v1/asesor/excepciones-open-finance/{exception_id}?socioId=BANCO-001",
         headers=headers,
@@ -142,7 +144,9 @@ def test_advisor_route_enforces_scope_partner_and_resolution_payload(
     gateway = OpenFinanceExceptionGatewayStub(record=_exception())
     app.extensions["open_finance_exception_gateway"] = gateway
     client = app.test_client()
-    exception_id = UUID(gateway.record["excepcionId"])
+    raw_exception_id = gateway.record["excepcionId"]
+    assert isinstance(raw_exception_id, str)
+    exception_id = UUID(raw_exception_id)
     route = f"/v1/asesor/excepciones-open-finance/{exception_id}/resolver?socioId="
 
     assert (
@@ -177,7 +181,9 @@ def test_consent_error_is_returned_without_confirming_resolution(
         error=OpenFinanceExceptionError("consentimiento_no_vigente", 403),
     )
     app.extensions["open_finance_exception_gateway"] = gateway
-    exception_id = UUID(gateway.record["excepcionId"])
+    raw_exception_id = gateway.record["excepcionId"]
+    assert isinstance(raw_exception_id, str)
+    exception_id = UUID(raw_exception_id)
 
     response = app.test_client().post(
         f"/v1/asesor/excepciones-open-finance/{exception_id}/resolver?socioId=BANCO-001",
