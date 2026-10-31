@@ -2038,10 +2038,33 @@ components:
           format: date-time
         fallbackUsed:
           type: boolean
+          description: Indica que se aplico cache o default bajo la misma autorizacion; no riesgo parcial.
+        estadoFuentes:
+          type: array
+          description: Metadatos completos por fuente; opcionales solo para perfiles historicos sin fallback.
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, estado, intentos, motivo]
+            properties:
+              fuente:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
+              estado:
+                type: string
+                enum: [disponible, cache, default]
+              intentos:
+                type: integer
+                minimum: 0
+                maximum: 2
+              motivo:
+                type: [string, "null"]
         fuentes:
           type: array
           minItems: 2
-          maxItems: 2
+          description: Nombres unicos; incluye open_finance y open_data, admite adaptadores adicionales autorizados.
           items:
             type: object
             additionalProperties: false
@@ -2050,7 +2073,9 @@ components:
             properties:
               nombre:
                 type: string
-                enum: [open_finance, open_data]
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
               version:
                 type: string
               consultadaEn:
@@ -2073,7 +2098,6 @@ components:
         variables:
           type: array
           minItems: 2
-          maxItems: 2
           items:
             type: object
             additionalProperties: false
@@ -2084,7 +2108,9 @@ components:
                 const: indicador_riesgo
               fuente:
                 type: string
-                enum: [open_finance, open_data]
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
               valorNormalizado:
                 type: string
               autorizadaPor:
@@ -2101,7 +2127,9 @@ components:
                 type: string
               fuente:
                 type: string
-                enum: [open_finance, open_data]
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
               motivo:
                 type: string
                 const: sin_consentimiento
@@ -2131,7 +2159,9 @@ components:
             properties:
               fuente:
                 type: string
-                enum: [open_finance, open_data]
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
               motivo:
                 type: string
                 enum: [fuente_no_disponible, fuente_vencida]
@@ -2144,6 +2174,31 @@ components:
         hashDecision:
           type: string
           pattern: "^[0-9a-f]{64}$"
+      allOf:
+        - if:
+            properties:
+              fallbackUsed:
+                const: true
+          then:
+            required: [estadoFuentes]
+            properties:
+              estadoFuentes:
+                minItems: 2
+                contains:
+                  anyOf:
+                    - properties:
+                        estado:
+                          const: cache
+                    - properties:
+                        estado:
+                          const: default
+          else:
+            properties:
+              estadoFuentes:
+                items:
+                  properties:
+                    estado:
+                      const: disponible
     DesafioLogin:
       type: object
       additionalProperties: false

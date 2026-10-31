@@ -9,10 +9,13 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 
 class ErrorPerfilamiento(Exception):
-    def __init__(self, codigo: str, status: int) -> None:
+    def __init__(
+        self, codigo: str, status: int, fuentes: list[dict[str, object]] | None = None
+    ) -> None:
         super().__init__(codigo)
         self.codigo = codigo
         self.status = status
+        self.fuentes = fuentes
 
 
 class Documento(BaseModel):
@@ -62,7 +65,6 @@ class Consentimiento(Documento):
             or self.finalidad != finalidad
             or not self.fuentes
             or not set(self.fuentes).issubset(self.alcances)
-            or not set(self.fuentes).issubset({"open_finance", "open_data"})
             or not self.datos
             or self.actor_id != cliente_id
             or self.version_terminos != "1.0"
@@ -70,18 +72,25 @@ class Consentimiento(Documento):
         ):
             raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
 
-    def validar(self, cliente_id: UUID, ahora: datetime) -> None:
-        self.validar_consulta(cliente_id, "cotizacion", ahora)
+    def validar(
+        self,
+        cliente_id: UUID,
+        ahora: datetime,
+        fuentes: tuple[str, ...] = ("open_finance", "open_data"),
+        finalidad: str = "cotizacion",
+        datos: tuple[str, ...] = ("indicador_riesgo",),
+    ) -> None:
+        self.validar_consulta(cliente_id, finalidad, ahora)
         if (
-            not {"open_finance", "open_data"}.issubset(self.alcances)
-            or not {"open_finance", "open_data"}.issubset(self.fuentes)
-            or "indicador_riesgo" not in self.datos
+            not set(fuentes).issubset(self.alcances)
+            or not set(fuentes).issubset(self.fuentes)
+            or not set(datos).issubset(self.datos)
         ):
             raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
 
 
 class Fuente(Documento):
-    nombre: Literal["open_finance", "open_data"]
+    nombre: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     version: str
     consultada_en: AwareDatetime = Field(alias="consultadaEn")
     vigente_hasta: AwareDatetime = Field(alias="vigenteHasta")
@@ -94,14 +103,14 @@ class Fuente(Documento):
 
 class VariableRiesgo(Documento):
     nombre: Literal["indicador_riesgo"]
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     valor_normalizado: Decimal = Field(alias="valorNormalizado", ge=0, le=1)
     autorizada_por: UUID = Field(alias="autorizadaPor")
 
 
 class VariableExcluida(Documento):
     nombre: str
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     motivo: Literal["sin_consentimiento"]
 
 
@@ -113,10 +122,17 @@ class ReglaRiesgo(Documento):
 
 
 class Degradacion(Documento):
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     motivo: Literal["fuente_no_disponible", "fuente_vencida"]
     politica: Literal["cache", "default"]
     version_politica: Literal["degradacion-1"] = Field(alias="versionPolitica")
+
+
+class EstadoFuente(Documento):
+    fuente: str
+    estado: Literal["disponible", "cache", "default", "fallida"]
+    intentos: int = Field(ge=0, le=2)
+    motivo: str | None = None
 
 
 class Perfil(Documento):
@@ -140,6 +156,7 @@ class Perfil(Documento):
     degradaciones: tuple[Degradacion, ...] = ()
     hash_decision: str = Field(alias="hashDecision", pattern=r"^[0-9a-f]{64}$")
     fallback_used: bool = Field(default=False, alias="fallbackUsed")
+    estado_fuentes: tuple[EstadoFuente, ...] = Field(default=(), alias="estadoFuentes")
 
     @model_validator(mode="before")
     @classmethod
@@ -193,7 +210,12 @@ class Perfil(Documento):
         return contenido
 
     def validar(self, consentimiento: Consentimiento, ahora: datetime) -> None:
-        consentimiento.validar(self.cliente_id, ahora)
+        nombres = tuple(fuente.nombre for fuente in self.fuentes)
+        estados_degradados = {
+            estado.fuente for estado in self.estado_fuentes if estado.estado in {"cache", "default"}
+        }
+        fuentes_degradadas = {degradacion.fuente for degradacion in self.degradaciones}
+        consentimiento.validar(self.cliente_id, ahora, nombres)
         if (
             self.consentimiento_id != consentimiento.consentimiento_id
             or self.consentimiento_version != consentimiento.version
@@ -201,13 +223,28 @@ class Perfil(Documento):
             raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
         if (
             not self.calculado_en <= ahora < self.vigente_hasta
-            or len(self.fuentes) != 2
-            or {fuente.nombre for fuente in self.fuentes} != {"open_finance", "open_data"}
+            or len(nombres) != len(set(nombres))
+            or not {"open_finance", "open_data"}.issubset(nombres)
             or any(
                 not fuente.consultada_en <= ahora < fuente.vigente_hasta for fuente in self.fuentes
             )
         ):
             raise ErrorPerfilamiento("perfil_vencido", 422)
+        if (
+            self.fallback_used
+            != any(estado.estado in {"cache", "default"} for estado in self.estado_fuentes)
+            or len(fuentes_degradadas) != len(self.degradaciones)
+            or estados_degradados != fuentes_degradadas
+            or (
+                self.estado_fuentes
+                and (
+                    len(self.estado_fuentes) != len(nombres)
+                    or {estado.fuente for estado in self.estado_fuentes} != set(nombres)
+                    or any(estado.estado == "fallida" for estado in self.estado_fuentes)
+                )
+            )
+        ):
+            raise ErrorPerfilamiento("perfil_no_integro", 503)
 
 
 class EvidenciaFuente(Documento):
