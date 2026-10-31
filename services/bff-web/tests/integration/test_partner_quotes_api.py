@@ -302,9 +302,7 @@ class OfferGateway:
     error: MortgageProfilingError | None = None
     calls: list[tuple[str, str, UUID]] = field(default_factory=list)
 
-    def calculate_offer(
-        self, socio_id: str, operation_id: UUID, _: str
-    ) -> PartnerOfferSnapshot:
+    def calculate_offer(self, socio_id: str, operation_id: UUID, _: str) -> PartnerOfferSnapshot:
         return self._offer("calculate", socio_id, operation_id)
 
     def get_offer(self, socio_id: str, operation_id: UUID, _: str) -> PartnerOfferSnapshot:
