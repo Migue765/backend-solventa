@@ -10,15 +10,22 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from identidad.api import advisors, consents, health, oauth, users, wellknown
+from identidad.api import advisors, biometrics, consents, health, oauth, users, wellknown
+from identidad.api.schemas import RegisterRequest
+from identidad.application.biometric_service import BiometricService
 from identidad.application.ports import LoginAttemptLimiter
 from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
 from identidad.config import Config
 from identidad.domain.auth import User
+from identidad.domain.errors import TokenIssuanceError
+from identidad.infrastructure.biometric_crypto import P256BiometricCrypto
+from identidad.infrastructure.biometric_limiter import RedisBiometricLimiter
+from identidad.infrastructure.encrypted_login import EncryptedLogin
 from identidad.infrastructure.jwt_issuer import RsaJwtIssuer
 from identidad.infrastructure.memory_attempt_limiter import InMemoryLoginAttemptLimiter
 from identidad.infrastructure.passwords import hash_password
+from identidad.infrastructure.persistence.biometric_repository import SqlBiometricRepository
 from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.infrastructure.persistence.database import create_sessions
 from identidad.infrastructure.persistence.refresh_token_repository import (
@@ -53,6 +60,13 @@ def create_app(
             active_config.max_attempts,
             active_config.attempt_window,
         )
+        if active_config.encrypted_login_enabled:
+            app.extensions["encrypted_login"] = EncryptedLogin(
+                active_config.login_encryption_private_key,
+                active_config.jwt_private_key,
+                redis_client,
+                active_clock,
+            )
 
     sessions = create_sessions(
         active_config.database_url,
@@ -74,7 +88,7 @@ def create_app(
     app.extensions["jwt_issuer"] = jwt_issuer
     app.extensions["token_service"] = TokenService(
         users=user_repository,
-        refresh_tokens=SqlRefreshTokenRepository(sessions),
+        refresh_tokens=SqlRefreshTokenRepository(sessions, active_clock),
         access_tokens=jwt_issuer,
         attempt_limiter=attempt_limiter,
         clock=active_clock,
@@ -88,6 +102,22 @@ def create_app(
         clock=active_clock,
         password_hasher=partial(hash_password, iterations=active_config.password_iterations),
     )
+    if active_config.biometric_login_enabled:
+        app.extensions["biometric_service"] = BiometricService(
+            SqlBiometricRepository(sessions, active_clock),
+            user_repository,
+            app.extensions["token_service"],
+            P256BiometricCrypto(
+                active_config.jwt_private_key, active_config.jwt_issuer, active_config.jwt_audience
+            ),
+            RedisBiometricLimiter(
+                redis_client,
+                active_config.max_attempts,
+                int(active_config.attempt_window.total_seconds()),
+            ),
+            active_clock,
+            active_config.jwt_issuer,
+        )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
@@ -95,6 +125,7 @@ def create_app(
     app.register_blueprint(wellknown.bp)
     app.register_blueprint(consents.bp)
     app.register_blueprint(advisors.bp)
+    app.register_blueprint(biometrics.bp)
 
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)
@@ -118,6 +149,29 @@ def create_app(
         )
         click.echo(str(user.user_id))
 
+    @app.cli.command("create-partner-user")
+    @click.option("--name", required=True)
+    @click.option("--email", required=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+    @click.option("--partner-id", required=True)
+    @click.option("--partner-name", required=True)
+    def create_partner_user(
+        name: str, email: str, password: str, partner_id: str, partner_name: str
+    ) -> None:
+        payload = RegisterRequest(nombre=name.strip(), correo=email.strip(), contrasena=password)
+        if not partner_name.strip() or len(partner_name.strip()) > 120:
+            raise click.BadParameter("Nombre del socio invalido.", param_hint="partner-name")
+        user = User(
+            uuid4(), payload.nombre, str(payload.correo).casefold(), "socio", (partner_id.strip(),)
+        )
+        user_repository.create_partner_user(
+            user,
+            hash_password(password, iterations=active_config.password_iterations),
+            partner_id.strip(),
+            partner_name.strip(),
+        )
+        click.echo(str(user.user_id))
+
     @app.before_request
     def assign_correlation_id() -> None:
         g.correlation_id = _correlation_id(request.headers.get("X-Correlation-ID"))
@@ -125,6 +179,8 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
+        if request.path.startswith(("/oauth/", "/v1/biometria/")):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.errorhandler(BadRequest)
@@ -139,7 +195,11 @@ def create_app(
 
     @app.errorhandler(RedisError)
     @app.errorhandler(SQLAlchemyError)
+    @app.errorhandler(TokenIssuanceError)
     def dependency_unavailable(_: Exception) -> Response:
+        app.logger.error(
+            "Identidad: dependencia no disponible", extra={"correlationId": str(g.correlation_id)}
+        )
         return problem_response(
             status=503,
             code="servicio_no_disponible",

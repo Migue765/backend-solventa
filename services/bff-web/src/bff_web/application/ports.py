@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from bff_web.domain.auth import AccessClaims, TokenSet, User
 
@@ -8,6 +9,12 @@ Clock = Callable[[], datetime]
 
 
 class IdentityGateway(Protocol):
+    def login_challenge(self, correlation_id: str) -> dict[str, object]: ...
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet: ...
+
     def register(self, name: str, email: str, password: str, correlation_id: str) -> User: ...
 
     def login(self, email: str, password: str, correlation_id: str) -> TokenSet: ...
@@ -17,6 +24,12 @@ class IdentityGateway(Protocol):
     def revoke(self, refresh_token: str, correlation_id: str) -> None: ...
 
     def list_clients(self, correlation_id: str) -> tuple[User, ...]: ...
+
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None: ...
+
+    def get_client_by_document(
+        self, document_type: str, identification: str, correlation_id: str
+    ) -> User | None: ...
 
 
 class TokenVerifier(Protocol):

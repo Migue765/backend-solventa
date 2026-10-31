@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.domain.operacion_hipotecaria import OperacionHipotecaria
+from cotizacion.infrastructure.persistence.admision_socios import validar_reserva
 from cotizacion.infrastructure.persistence.models import OperacionHipotecariaModel
 
 
@@ -19,8 +20,9 @@ class RepositorioOperacionesHipotecarias:
             )
             return _a_dominio(row) if row is not None else None
 
-    def guardar(self, operacion: OperacionHipotecaria) -> None:
+    def guardar(self, operacion: OperacionHipotecaria, token: UUID) -> None:
         with self._sesiones.begin() as sesion:
+            validar_reserva(sesion, operacion.socio_id, operacion.operation_id, token)
             sesion.add(
                 OperacionHipotecariaModel(
                     operation_id=operacion.operation_id,

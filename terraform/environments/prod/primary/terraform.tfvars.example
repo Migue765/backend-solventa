@@ -3,6 +3,9 @@
 aws_region  = "us-east-2"
 aws_profile = "tesis"
 
+# Pausa temporal: sin ejecuciones por tags; las manuales siguen consumiendo minutos.
+cicd_automatic_triggers_enabled = false
+
 # OBLIGATORIO: tu IP publica /32 (curl -s https://checkip.amazonaws.com)
 public_access_cidrs = ["203.0.113.10/32"]
 

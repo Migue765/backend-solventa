@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -58,6 +59,69 @@ class CotizacionModel(Base):
         order_by="CoberturaCotizadaModel.orden",
     )
     instantanea: Mapped["InstantaneaDecisionModel | None"] = relationship(lazy="selectin")
+
+
+class OperacionSocioModel(Base):
+    __tablename__ = "operaciones_socios"
+    __table_args__ = (UniqueConstraint("operation_id", name="uq_operaciones_socios_operation"),)
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    usuario_id: Mapped[UUID]
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    producto_id: Mapped[str] = mapped_column(String(64))
+    solicitud_id: Mapped[str] = mapped_column(
+        ForeignKey("cotizaciones.solicitud_id", ondelete="RESTRICT")
+    )
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT")
+    )
+    perfilamiento_referencia: Mapped[str] = mapped_column(String(64))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OfertaHipotecariaModel(Base):
+    __tablename__ = "ofertas_hipotecarias"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["socio_id", "operation_id"],
+            ["operaciones_socios.socio_id", "operaciones_socios.operation_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    oferta_id: Mapped[UUID] = mapped_column(unique=True)
+    version: Mapped[int] = mapped_column(Integer)
+    contenido: Mapped[dict[str, Any]] = mapped_column(JSON)
+    evidencia_decision: Mapped[dict[str, Any]] = mapped_column(JSON)
+    hash_oferta: Mapped[str] = mapped_column(String(64), index=True)
+    hash_decision: Mapped[str] = mapped_column(String(64), index=True)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmisionSocioModel(Base):
+    __tablename__ = "admision_socios"
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    ventana: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    usadas: Mapped[int] = mapped_column(Integer)
+    cuota_por_minuto: Mapped[int | None] = mapped_column(Integer)
+    max_concurrentes: Mapped[int | None] = mapped_column(Integer)
+
+
+class ReservaOperacionModel(Base):
+    __tablename__ = "reservas_operaciones"
+    __table_args__ = (UniqueConstraint("operation_global", name="uq_reservas_operation_global"),)
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    operation_global: Mapped[UUID | None]
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    token: Mapped[UUID | None]
+    vence_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class OperacionHipotecariaModel(Base):

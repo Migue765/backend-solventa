@@ -18,6 +18,8 @@ UUID_ADAPTER: TypeAdapter[UUID] = TypeAdapter(UUID)
 def iniciar() -> tuple[Response, int] | Response:
     if not _authorized():
         return jsonify(error="no_autorizado"), 401
+    if request.headers.get("API-Version", "1") != "1":
+        return jsonify(error="version_no_soportada"), 400
     try:
         payload = IniciarOperacionHipotecariaRequest.model_validate(request.get_json(silent=False))
         idempotency_key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
@@ -49,6 +51,7 @@ def _a_json(operacion: OperacionHipotecaria) -> dict[str, object]:
         "socioId": operacion.socio_id,
         "asesorId": str(operacion.asesor_id),
         "clienteId": str(operacion.cliente_id),
+        "productoId": "mortgage-life",
         "estado": operacion.estado,
         "perfilamientoReferencia": operacion.perfilamiento_referencia,
         "solicitudId": operacion.solicitud_id,

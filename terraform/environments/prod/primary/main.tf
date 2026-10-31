@@ -178,6 +178,8 @@ module "api_gateway" {
 module "cicd" {
   source = "../../../modules/cicd"
 
+  automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
+
   name                      = var.name_prefix
   github_repository         = var.github_repository
   branch_name               = var.release_branch
@@ -197,6 +199,8 @@ module "cicd" {
 # No migra: los BFF no tienen base de datos (los usuarios los migra identidad).
 module "cicd_bff_web" {
   source = "../../../modules/cicd"
+
+  automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
   name                      = var.name_prefix
   service_name              = "bff-web"
@@ -221,6 +225,8 @@ module "cicd_bff_web" {
 module "cicd_bff_movil" {
   source = "../../../modules/cicd"
 
+  automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
+
   name                      = var.name_prefix
   service_name              = "bff-movil"
   resource_prefix           = "${var.name_prefix}-bff-movil"
@@ -243,6 +249,8 @@ module "cicd_bff_movil" {
 # Cuarto pipeline (identidad): tag identidad-v*, con migraciones (dueno de la tabla usuarios).
 module "cicd_identidad" {
   source = "../../../modules/cicd"
+
+  automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
   name                      = var.name_prefix
   service_name              = "identidad"

@@ -1,8 +1,10 @@
+from datetime import date
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from identidad.domain.auth import IssuedTokens, User
+from identidad.domain.documents import DocumentType, normalize_document
 
 
 class RegisterRequest(BaseModel):
@@ -11,6 +13,32 @@ class RegisterRequest(BaseModel):
     nombre: str = Field(min_length=1, max_length=120)
     correo: EmailStr = Field(max_length=254)
     contrasena: str = Field(min_length=8, max_length=128)
+    tipo_documento: DocumentType | None = Field(default=None, alias="tipoDocumento")
+    numero_documento: str | None = Field(
+        default=None, alias="numeroDocumento", min_length=5, max_length=16
+    )
+    telefono: str | None = Field(default=None, pattern=r"^\+57[0-9]{10}$")
+    fecha_nacimiento: date | None = Field(default=None, alias="fechaNacimiento")
+
+    @model_validator(mode="after")
+    def validate_document(self) -> Self:
+        if (self.tipo_documento is None) != (self.numero_documento is None):
+            raise ValueError("Tipo y numero de documento deben enviarse juntos.")
+        master_values = (
+            self.tipo_documento,
+            self.numero_documento,
+            self.telefono,
+            self.fecha_nacimiento,
+        )
+        if any(value is not None for value in master_values) and any(
+            value is None for value in master_values
+        ):
+            raise ValueError("Documento, telefono y fecha de nacimiento deben enviarse juntos.")
+        if self.tipo_documento is not None and self.numero_documento is not None:
+            self.tipo_documento, self.numero_documento = normalize_document(
+                self.tipo_documento, self.numero_documento
+            )
+        return self
 
 
 class TokenRequest(BaseModel):
@@ -37,6 +65,15 @@ class RevokeRequest(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=512)
 
 
+class EncryptedTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    grant_type: Literal["encrypted_password"]
+    client_id: Literal["web"]
+    username: EmailStr = Field(max_length=254)
+    credencialCifrada: str = Field(min_length=1, max_length=8192, strict=True)
+
+
 def user_to_json(user: User) -> dict[str, object]:
     result: dict[str, object] = {
         "id": str(user.user_id),
@@ -44,8 +81,14 @@ def user_to_json(user: User) -> dict[str, object]:
         "correo": user.email,
         "rol": user.role,
     }
-    if user.role == "asesor":
+    if user.role in {"asesor", "socio"}:
         result["socios"] = list(user.partner_ids)
+    if user.document_type is not None and user.identification is not None:
+        result["tipoDocumento"] = user.document_type
+        result["numeroDocumento"] = user.identification
+    if user.phone is not None and user.birth_date is not None:
+        result["telefono"] = user.phone
+        result["fechaNacimiento"] = user.birth_date.isoformat()
     return result
 
 

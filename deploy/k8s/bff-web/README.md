@@ -5,8 +5,9 @@ Backend for Frontend de la web de clientes. Compone cotizaciones y delega la aut
 variables `${...}` se sustituyen con `envsubst` a partir de los outputs de Terraform.
 
 No tiene base de datos, ni Redis, ni cookies, ni CORS (el API Gateway valida el JWT y responde los preflight), ni
-rol IRSA: los usuarios, las contrasenas y las sesiones son de `identidad`. **`identidad` y `cotizacion` deben estar
-desplegados antes que `bff-web`.** El pipeline de `bff-web` corre con `MIGRATE=false` y no tiene Job de migracion.
+rol IRSA: los usuarios, las contrasenas y las sesiones son de `identidad`. **`identidad`, `cotizacion` y
+`perfilamiento` deben estar desplegados antes que `bff-web`.** El pipeline de `bff-web` corre con
+`MIGRATE=false` y no tiene Job de migracion.
 
 | Variable | Origen |
 |---|---|
@@ -20,6 +21,7 @@ desplegados antes que `bff-web`.** El pipeline de `bff-web` corre con `MIGRATE=f
 
 Prerrequisito: `terraform apply` de `terraform/environments/prod/primary` y `kubectl` apuntando al cluster
 (`terraform output kubeconfig_command`). `cotizacion` se consume en `http://cotizacion.cotizacion.svc.cluster.local:8080`.
+HU44 consume Perfilamiento en `http://perfilamiento.perfilamiento.svc.cluster.local:8080`.
 
 ```bash
 cd terraform/environments/prod/primary

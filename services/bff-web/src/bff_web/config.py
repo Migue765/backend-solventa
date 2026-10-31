@@ -10,7 +10,9 @@ class Config:
     jwks_url: str | None = None
     identity_timeout_seconds: float = 5
     quote_service_url: str = "http://localhost:5000"
+    profiling_service_url: str = "http://localhost:5003"
     internal_api_token: str = ""
+    encrypted_login_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.identity_url.strip():
@@ -27,6 +29,7 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            encrypted_login_enabled=_boolean("ENCRYPTED_LOGIN_ENABLED"),
             internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             identity_url=_required("IDENTIDAD_URL").rstrip("/"),
             jwt_issuer=_required("JWT_ISSUER"),
@@ -34,6 +37,9 @@ class Config:
             jwks_url=os.getenv("JWKS_URL") or None,
             identity_timeout_seconds=_positive_float("IDENTIDAD_TIMEOUT_SECONDS", 5),
             quote_service_url=os.getenv("QUOTE_SERVICE_URL", "http://localhost:5000").rstrip("/"),
+            profiling_service_url=os.getenv(
+                "PERFILAMIENTO_SERVICE_URL", "http://localhost:5003"
+            ).rstrip("/"),
         )
 
 
@@ -42,6 +48,13 @@ def _required(name: str) -> str:
     if not value:
         raise ValueError(f"{name} es obligatoria.")
     return value
+
+
+def _boolean(name: str) -> bool:
+    value = os.getenv(name, "false").strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} solo admite true o false.")
+    return value == "true"
 
 
 def _positive_float(name: str, default: float) -> float:

@@ -14,7 +14,12 @@ locals {
   build_vars   = "BuildVariables"
   build_action = "Build"
 
-  connection_arn = coalesce(var.github_connection_arn, one(aws_codestarconnections_connection.github[*].arn))
+  connection_arn     = coalesce(var.github_connection_arn, one(aws_codestarconnections_connection.github[*].arn))
+  connection_service = split(":", local.connection_arn)[2]
+  subnet_arns = [
+    for subnet in var.private_subnet_ids : "arn:aws:ec2:${local.region}:${local.account_id}:subnet/${subnet}"
+  ]
+  vpc_arn = "arn:aws:ec2:${local.region}:${local.account_id}:vpc/${var.vpc_id}"
 }
 
 # ---------------------------------------------------------------------------
@@ -22,7 +27,7 @@ locals {
 # ---------------------------------------------------------------------------
 resource "aws_s3_bucket" "artifacts" {
   bucket        = "${local.prefix}-cicd-${local.account_id}"
-  force_destroy = true
+  force_destroy = var.artifact_force_destroy
 
   tags = var.tags
 }
@@ -83,7 +88,7 @@ moved {
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "deploy" {
   name        = "${local.prefix}-codebuild-deploy"
-  description = "CodeBuild de despliegue: salida libre, sin entrada"
+  description = var.restrict_service_access ? "CodeBuild de despliegue: HTTPS y paquetes HTTP, sin entrada" : "CodeBuild de despliegue: salida libre, sin entrada"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, { Name = "${local.prefix}-codebuild-deploy" })
@@ -91,9 +96,22 @@ resource "aws_security_group" "deploy" {
 
 resource "aws_vpc_security_group_egress_rule" "deploy_all" {
   security_group_id = aws_security_group.deploy.id
-  ip_protocol       = "-1"
+  ip_protocol       = var.restrict_service_access ? "tcp" : "-1"
+  from_port         = var.restrict_service_access ? 443 : null
+  to_port           = var.restrict_service_access ? 443 : null
   cidr_ipv4         = "0.0.0.0/0"
   description       = "Salida a ECR, STS, EKS y descarga de kubectl"
+}
+
+resource "aws_vpc_security_group_egress_rule" "deploy_http" {
+  count = var.restrict_service_access ? 1 : 0
+
+  security_group_id = aws_security_group.deploy.id
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
+  cidr_ipv4         = "0.0.0.0/0"
+  description       = "Repositorios apt del fallback gettext-base en buildspec-deploy.yml"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "cluster_from_deploy" {
@@ -119,9 +137,34 @@ data "aws_iam_policy_document" "codebuild_assume" {
   }
 }
 
+data "aws_iam_policy_document" "codebuild_restricted_assume" {
+  for_each = var.restrict_service_access ? toset(["build", "deploy"]) : toset([])
+
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["codebuild.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:codebuild:${local.region}:${local.account_id}:project/${local.pipeline}-${each.key}"]
+    }
+  }
+}
+
 resource "aws_iam_role" "build" {
   name               = "${local.prefix}-codebuild-build"
-  assume_role_policy = data.aws_iam_policy_document.codebuild_assume.json
+  assume_role_policy = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["build"].json : data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
 }
@@ -166,7 +209,7 @@ resource "aws_iam_role_policy" "build" {
 # ---------------------------------------------------------------------------
 resource "aws_iam_role" "deploy" {
   name               = "${local.prefix}-codebuild-deploy"
-  assume_role_policy = data.aws_iam_policy_document.codebuild_assume.json
+  assume_role_policy = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["deploy"].json : data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
 }
@@ -184,18 +227,74 @@ data "aws_iam_policy_document" "deploy" {
     resources = [local.cluster_arn]
   }
 
-  statement {
-    sid = "RedVpc"
-    actions = [
-      "ec2:CreateNetworkInterface",
-      "ec2:DeleteNetworkInterface",
-      "ec2:DescribeDhcpOptions",
-      "ec2:DescribeNetworkInterfaces",
-      "ec2:DescribeSecurityGroups",
-      "ec2:DescribeSubnets",
-      "ec2:DescribeVpcs",
-    ]
-    resources = ["*"]
+  dynamic "statement" {
+    for_each = var.restrict_service_access ? [] : [1]
+
+    content {
+      sid = "RedVpc"
+      actions = [
+        "ec2:CreateNetworkInterface",
+        "ec2:DeleteNetworkInterface",
+        "ec2:DescribeDhcpOptions",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+      ]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.restrict_service_access ? [1] : []
+
+    content {
+      sid = "DescribirRed"
+      actions = [
+        "ec2:DescribeDhcpOptions",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+      ]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.restrict_service_access ? [1] : []
+
+    content {
+      sid     = "CrearInterfaces"
+      actions = ["ec2:CreateNetworkInterface"]
+      # EC2 autoriza por separado la nueva ENI, cada SG y la subnet.
+      resources = concat(
+        ["arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*", aws_security_group.deploy.arn],
+        local.subnet_arns,
+      )
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.restrict_service_access ? [1] : []
+
+    content {
+      sid       = "EliminarInterfaces"
+      actions   = ["ec2:DeleteNetworkInterface"]
+      resources = ["arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*"]
+
+      condition {
+        test     = "ArnEquals"
+        variable = "ec2:Vpc"
+        values   = [local.vpc_arn]
+      }
+
+      condition {
+        test     = "ArnEquals"
+        variable = "ec2:Subnet"
+        values   = local.subnet_arns
+      }
+    }
   }
 
   statement {
@@ -207,6 +306,19 @@ data "aws_iam_policy_document" "deploy" {
       test     = "StringEquals"
       variable = "ec2:AuthorizedService"
       values   = ["codebuild.amazonaws.com"]
+    }
+
+    dynamic "condition" {
+      for_each = var.restrict_service_access ? {
+        "ec2:Vpc"    = [local.vpc_arn]
+        "ec2:Subnet" = local.subnet_arns
+      } : {}
+
+      content {
+        test     = "ArnEquals"
+        variable = condition.key
+        values   = condition.value
+      }
     }
   }
 }
@@ -400,13 +512,34 @@ data "aws_iam_policy_document" "pipeline" {
 
   statement {
     sid       = "ConexionGitHub"
-    actions   = ["codestar-connections:UseConnection", "codeconnections:UseConnection"]
+    actions   = var.restrict_service_access ? ["${local.connection_service}:UseConnection"] : ["codestar-connections:UseConnection", "codeconnections:UseConnection"]
     resources = [local.connection_arn]
+
+    dynamic "condition" {
+      for_each = var.restrict_service_access ? [1] : []
+
+      content {
+        test     = "StringEquals"
+        variable = "${local.connection_service}:FullRepositoryId"
+        values   = [var.github_repository]
+      }
+    }
+
+    # Las lecturas por SHA no incluyen necesariamente BranchName.
+    dynamic "condition" {
+      for_each = var.restrict_service_access ? [1] : []
+
+      content {
+        test     = "StringEqualsIfExists"
+        variable = "${local.connection_service}:BranchName"
+        values   = [var.branch_name]
+      }
+    }
   }
 
   statement {
     sid = "EjecutarBuilds"
-    actions = [
+    actions = var.restrict_service_access ? ["codebuild:BatchGetBuilds", "codebuild:StartBuild"] : [
       "codebuild:BatchGetBuilds",
       "codebuild:StartBuild",
       "codebuild:BatchGetBuildBatches",
@@ -436,15 +569,19 @@ resource "aws_codepipeline" "this" {
     location = aws_s3_bucket.artifacts.bucket
   }
 
-  trigger {
-    provider_type = "CodeStarSourceConnection"
+  dynamic "trigger" {
+    for_each = var.automatic_triggers_enabled ? [1] : []
 
-    git_configuration {
-      source_action_name = "Source"
+    content {
+      provider_type = "CodeStarSourceConnection"
 
-      push {
-        tags {
-          includes = var.release_tag_patterns
+      git_configuration {
+        source_action_name = "Source"
+
+        push {
+          tags {
+            includes = var.release_tag_patterns
+          }
         }
       }
     }

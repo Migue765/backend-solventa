@@ -33,6 +33,9 @@ class RegistrarSolicitudComando:
     idempotency_key: UUID
     consentimiento_id: UUID | None = None
     consentimiento_version: int | None = None
+    cotizacion_id: UUID | None = None
+    operation_id: UUID | None = None
+    credito_id: str | None = None
 
 
 class RegistrarSolicitud:
@@ -76,6 +79,7 @@ class RegistrarSolicitud:
             deducible=Dinero(producto.deducible, "COP"),
         )
         cotizacion = Cotizacion(
+            cotizacion_id=comando.cotizacion_id or uuid4(),
             cliente_id=comando.cliente_id,
             producto_id=producto.producto_interno_id,
             coberturas=[cobertura],
@@ -89,10 +93,15 @@ class RegistrarSolicitud:
                     cotizacion.cotizacion_id,
                     comando.consentimiento_id,
                     comando.consentimiento_version,
+                    comando.operation_id or comando.idempotency_key,
+                    comando.credito_id or str(cotizacion.cotizacion_id),
                 )
             else:
                 perfil_remoto = self._generador_perfiles.generar(
-                    comando.cliente_id, cotizacion.cotizacion_id
+                    comando.cliente_id,
+                    cotizacion.cotizacion_id,
+                    operation_id=comando.operation_id or comando.idempotency_key,
+                    credito_id=comando.credito_id or str(cotizacion.cotizacion_id),
                 )
             perfil_id = perfil_remoto.perfil_id
             perfil_ofertas = perfil_desde_score(perfil_remoto.score)
@@ -140,6 +149,8 @@ def _fingerprint(comando: RegistrarSolicitudComando) -> str:
             str(comando.consentimiento_id) if comando.consentimiento_id is not None else None
         ),
         "consentimientoVersion": comando.consentimiento_version,
+        "operationId": str(comando.operation_id) if comando.operation_id is not None else None,
+        "creditoId": comando.credito_id,
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()

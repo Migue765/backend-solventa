@@ -1,9 +1,23 @@
+import hashlib
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from time import monotonic
+from typing import Literal
 from uuid import UUID, uuid4
 
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EstadoFuente, Fuente, Perfil
+from perfilamiento.domain import (
+    Consentimiento,
+    Degradacion,
+    ErrorPerfilamiento,
+    EstadoFuente,
+    Fuente,
+    Perfil,
+    ReglaRiesgo,
+    VariableExcluida,
+    VariableRiesgo,
+)
 from perfilamiento.persistence import RepositorioPerfiles
 from perfilamiento.ports import Consentimientos, FuentePerfilamiento
 from perfilamiento.resilience import (
@@ -70,14 +84,21 @@ class ConsultarPerfil:
         fuentes_solicitadas: tuple[str, ...] | None = None,
         finalidad: str = "cotizacion",
         datos: tuple[str, ...] = ("indicador_riesgo",),
+        operation_id: UUID | None = None,
+        credito_id: str | None = None,
     ) -> Perfil:
+        operation_id = operation_id or referencia_id
+        credito_id = credito_id or str(referencia_id)
         auditoria = self._auditoria(cliente_id, correlation_id)
         auditoria["referenciaId"] = str(referencia_id)
+        auditoria["operationId"] = str(operation_id)
+        auditoria["creditoId"] = credito_id
         presupuesto = Presupuesto(self._politica, self._ejecutor)
         estados: list[dict[str, object]] = []
         auditoria["estadoFuentes"] = estados
         consentimiento: Consentimiento | None = None
         fuentes: list[Fuente] = []
+        degradaciones: list[Degradacion] = []
         conservar_parcial = False
         try:
             nombres = fuentes_solicitadas or tuple(fuente.nombre for fuente in self._fuentes)
@@ -104,10 +125,14 @@ class ConsultarPerfil:
                 )
 
             consentimiento = autorizar()
-            existente = self._repositorio.buscar_por_referencia(cliente_id, referencia_id)
+            existente = self._repositorio.buscar_por_operacion(cliente_id, operation_id)
             if existente is not None:
-                if set(nombres) != {fuente.nombre for fuente in existente.fuentes}:
-                    raise ErrorPerfilamiento("conflicto_referencia", 409)
+                if (
+                    existente.referencia_id != referencia_id
+                    or existente.credito_id != credito_id
+                    or set(nombres) != {fuente.nombre for fuente in existente.fuentes}
+                ):
+                    raise ErrorPerfilamiento("conflicto_idempotencia", 409)
                 existente.validar(consentimiento, self._reloj())
                 auditoria.update(
                     perfilId=str(existente.perfil_id),
@@ -128,7 +153,7 @@ class ConsultarPerfil:
                 estados.append(estado)
                 auditoria["fuentes"] = [estado["fuente"] for estado in estados]
                 fuente = self._consultar_fuente(
-                    adaptador, consentimiento, autorizar, presupuesto, estado
+                    adaptador, consentimiento, autorizar, presupuesto, estado, degradaciones
                 )
                 if fuente is not None:
                     fuentes.append(fuente)
@@ -141,12 +166,61 @@ class ConsultarPerfil:
                 raise ErrorPerfilamiento("fuentes_no_disponibles", 503, estados)
             ahora = self._reloj()
             score = max(fuente.indicador_riesgo for fuente in fuentes)
+            variables = tuple(
+                VariableRiesgo(
+                    nombre="indicador_riesgo",
+                    fuente=fuente.nombre,
+                    valor_normalizado=fuente.indicador_riesgo,
+                    autorizada_por=consentimiento.consentimiento_id,
+                )
+                for fuente in fuentes
+                if "indicador_riesgo" in consentimiento.datos
+            )
+            variables_excluidas = tuple(
+                VariableExcluida(
+                    nombre=nombre,
+                    fuente=fuente.nombre,
+                    motivo="sin_consentimiento",
+                )
+                for fuente in fuentes
+                for nombre in fuente.variables_disponibles
+                if nombre not in consentimiento.datos
+            )
+            regla = ReglaRiesgo(
+                regla_id="riesgo-maximo-fuentes",
+                version="1.0",
+                modelo_version="perfil-riesgo-1",
+                expresion="max(indicador_riesgo_por_fuente)",
+            )
+            evidencia = {
+                "clienteId": str(cliente_id),
+                "creditoId": credito_id,
+                "operationId": str(operation_id),
+                "consentimientoId": str(consentimiento.consentimiento_id),
+                "consentimientoVersion": consentimiento.version,
+                "fuentes": [fuente.model_dump(mode="json", by_alias=True) for fuente in fuentes],
+                "variables": [
+                    variable.model_dump(mode="json", by_alias=True) for variable in variables
+                ],
+                "variablesExcluidas": [
+                    variable.model_dump(mode="json", by_alias=True)
+                    for variable in variables_excluidas
+                ],
+                "regla": regla.model_dump(mode="json", by_alias=True),
+                "degradaciones": [
+                    degradacion.model_dump(mode="json", by_alias=True)
+                    for degradacion in degradaciones
+                ],
+                "score": str(score),
+            }
             perfil = Perfil(
                 perfil_id=uuid4(),
                 cliente_id=cliente_id,
                 referencia_id=referencia_id,
+                operation_id=operation_id,
+                credito_id=credito_id,
                 version=1,
-                modelo_version="perfil-mock-1",
+                modelo_version="perfil-riesgo-1",
                 score=score,
                 nivel="A" if score <= 0.5 else "B" if score <= 0.75 else "C",
                 consentimiento_id=consentimiento.consentimiento_id,
@@ -154,11 +228,18 @@ class ConsultarPerfil:
                 calculado_en=ahora,
                 vigente_hasta=min(
                     consentimiento.vigente_hasta,
-                    ahora + timedelta(minutes=15),
+                    ahora + timedelta(minutes=5 if degradaciones else 15),
                     *(fuente.vigente_hasta for fuente in fuentes),
                 ),
                 fuentes=tuple(fuentes),
-                fallback_used=any(estado["estado"] == "cache" for estado in estados),
+                variables=variables,
+                variables_excluidas=variables_excluidas,
+                regla=regla,
+                degradaciones=tuple(degradaciones),
+                hash_decision=hashlib.sha256(
+                    json.dumps(evidencia, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                fallback_used=bool(degradaciones),
                 estado_fuentes=tuple(EstadoFuente.model_validate(estado) for estado in estados),
             )
             perfil.validar(
@@ -185,6 +266,7 @@ class ConsultarPerfil:
         autorizar: Callable[[], Consentimiento],
         presupuesto: Presupuesto,
         estado: dict[str, object],
+        degradaciones: list[Degradacion],
     ) -> Fuente | None:
         def verificar() -> None:
             if autorizar() != consentimiento:
@@ -261,7 +343,52 @@ class ConsultarPerfil:
             cache.vigente_hasta, cache.consultada_en + timedelta(minutes=15)
         ):
             estado["estado"] = "cache"
-            return cache
+            degradaciones.append(
+                Degradacion(
+                    fuente=adaptador.nombre,
+                    motivo=(
+                        "fuente_vencida" if codigo == "perfil_vencido" else "fuente_no_disponible"
+                    ),
+                    politica="cache",
+                    version_politica="degradacion-1",
+                )
+            )
+            return cache.model_copy(
+                update={
+                    "version": cache.version + ":cache",
+                    "vigente_hasta": min(cache.vigente_hasta, self._reloj() + timedelta(minutes=5)),
+                }
+            )
+        if codigo in {
+            "fuente_no_disponible",
+            "dependencia_timeout",
+            "dependencia_saturada",
+            "presupuesto_agotado",
+            "circuito_abierto",
+            "perfil_vencido",
+        } and adaptador.nombre in {"open_finance", "open_data"}:
+            ahora = self._reloj()
+            nombre: Literal["open_finance", "open_data"] = (
+                "open_finance" if adaptador.nombre == "open_finance" else "open_data"
+            )
+            fuente, politica = self._degradar(
+                consentimiento.cliente_id,
+                nombre,
+                consentimiento,
+                ahora,
+            )
+            estado["estado"] = politica
+            degradaciones.append(
+                Degradacion(
+                    fuente=adaptador.nombre,
+                    motivo=(
+                        "fuente_vencida" if codigo == "perfil_vencido" else "fuente_no_disponible"
+                    ),
+                    politica=politica,
+                    version_politica="degradacion-1",
+                )
+            )
+            return fuente
         return None
 
     @staticmethod
@@ -269,6 +396,47 @@ class ConsultarPerfil:
         auditoria["dependencias"] = presupuesto.dependencias
         auditoria["duracionMs"] = round((monotonic() - presupuesto.inicio) * 1000, 2)
         auditoria["presupuestoMs"] = presupuesto.politica.journey_segundos * 1000
+
+    def _degradar(
+        self,
+        cliente_id: UUID,
+        nombre: Literal["open_finance", "open_data"],
+        consentimiento: Consentimiento,
+        ahora: datetime,
+    ) -> tuple[Fuente, Literal["cache", "default"]]:
+        cache = self._repositorio.fuente_en_cache(
+            cliente_id,
+            nombre,
+            consentimiento.consentimiento_id,
+            consentimiento.version,
+            ahora,
+        )
+        if cache is not None:
+            return (
+                cache.model_copy(
+                    update={
+                        "version": cache.version + ":cache",
+                        "vigente_hasta": ahora + timedelta(minutes=5),
+                    }
+                ),
+                "cache",
+            )
+        valores_default = {
+            "open_finance": Decimal("0.50"),
+            "open_data": Decimal("0.25"),
+        }
+        return (
+            Fuente(
+                nombre=nombre,
+                version="default-1",
+                consultada_en=ahora,
+                vigente_hasta=ahora + timedelta(minutes=5),
+                simulada=True,
+                indicador_riesgo=valores_default[nombre],
+                variables_disponibles=("indicador_riesgo",),
+            ),
+            "default",
+        )
 
     def obtener(self, perfil_id: UUID, cliente_id: UUID, correlation_id: str) -> Perfil:
         auditoria = self._auditoria(cliente_id, correlation_id)

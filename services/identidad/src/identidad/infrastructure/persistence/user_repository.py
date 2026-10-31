@@ -5,8 +5,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from identidad.domain.auth import StoredCredential, User
-from identidad.domain.errors import EmailAlreadyRegisteredError
-from identidad.infrastructure.persistence.models import AsesorSocioModel, SocioModel, UsuarioModel
+from identidad.domain.errors import DocumentAlreadyRegisteredError, EmailAlreadyRegisteredError
+from identidad.infrastructure.persistence.models import (
+    AsesorSocioModel,
+    SocioModel,
+    UsuarioModel,
+    UsuarioSocioModel,
+)
 
 
 class SqlUserRepository:
@@ -22,12 +27,22 @@ class SqlUserRepository:
                     nombre=user.name,
                     rol=user.role,
                     password_hash=password_hash,
+                    tipo_documento=user.document_type,
+                    numero_documento=user.identification,
+                    telefono=user.phone,
+                    fecha_nacimiento=user.birth_date,
                 )
             )
             try:
                 session.commit()
             except IntegrityError as error:
                 session.rollback()
+                message = str(error.orig)
+                if user.document_type is not None and (
+                    "uq_usuarios_documento" in message
+                    or "usuarios.tipo_documento, usuarios.numero_documento" in message
+                ):
+                    raise DocumentAlreadyRegisteredError() from error
                 raise EmailAlreadyRegisteredError() from error
 
     def find_credential(self, email: str) -> StoredCredential | None:
@@ -43,6 +58,17 @@ class SqlUserRepository:
     def find_by_id(self, user_id: UUID) -> User | None:
         with self._sessions() as session:
             row = session.get(UsuarioModel, user_id)
+            return self._to_user(session, row) if row is not None else None
+
+    def find_client_by_document(self, document_type: str, identification: str) -> User | None:
+        with self._sessions() as session:
+            row = session.scalar(
+                select(UsuarioModel).where(
+                    UsuarioModel.rol == "cliente",
+                    UsuarioModel.tipo_documento == document_type,
+                    UsuarioModel.numero_documento == identification,
+                )
+            )
             return self._to_user(session, row) if row is not None else None
 
     def create_advisor(
@@ -78,6 +104,29 @@ class SqlUserRepository:
             ).all()
             return tuple(self._to_user(session, row) for row in rows)
 
+    def create_partner_user(
+        self, user: User, password_hash: str, partner_id: str, partner_name: str
+    ) -> None:
+        if user.role != "socio" or not partner_id.strip() or len(partner_id) > 50:
+            raise ValueError("Se requiere un usuario socio y una organizacion valida.")
+        with self._sessions.begin() as session:
+            partner = session.get(SocioModel, partner_id)
+            if partner is None:
+                session.add(SocioModel(socio_id=partner_id, nombre=partner_name, activo=True))
+            elif not partner.activo:
+                raise ValueError("El socio no esta activo.")
+            session.add(
+                UsuarioModel(
+                    usuario_id=user.user_id,
+                    correo=user.email.casefold(),
+                    nombre=user.name,
+                    rol=user.role,
+                    password_hash=password_hash,
+                )
+            )
+            session.flush()
+            session.add(UsuarioSocioModel(usuario_id=user.user_id, socio_id=partner_id))
+
     @staticmethod
     def _to_user(session: Session, row: UsuarioModel) -> User:
         partner_ids: tuple[str, ...] = ()
@@ -93,4 +142,26 @@ class SqlUserRepository:
                     .order_by(AsesorSocioModel.socio_id)
                 ).all()
             )
-        return User(row.usuario_id, row.nombre, row.correo, row.rol, partner_ids)
+        elif row.rol == "socio":
+            partner_ids = tuple(
+                session.scalars(
+                    select(UsuarioSocioModel.socio_id)
+                    .join(SocioModel, SocioModel.socio_id == UsuarioSocioModel.socio_id)
+                    .where(
+                        UsuarioSocioModel.usuario_id == row.usuario_id,
+                        SocioModel.activo.is_(True),
+                    )
+                    .order_by(UsuarioSocioModel.socio_id)
+                ).all()
+            )
+        return User(
+            row.usuario_id,
+            row.nombre,
+            row.correo,
+            row.rol,
+            partner_ids,
+            row.tipo_documento,
+            row.numero_documento,
+            row.telefono,
+            row.fecha_nacimiento,
+        )

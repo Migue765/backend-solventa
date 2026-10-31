@@ -15,7 +15,264 @@ tags:
   - name: Suscripciones
   - name: Dashboard
   - name: Asesores
+  - name: Socios
 paths:
+  /v1/socios/actual:
+    get:
+      tags: [Socios]
+      operationId: consultarContextoSocio
+      summary: Consulta organizaciones y productos de la cuenta socio
+      description: Requiere rol y scope socio y organizaciones activas en el JWT.
+      responses:
+        "200":
+          description: Contexto autorizado; no expone catalogo global de clientes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apiVersion, usuario, socios, alcances]
+                properties:
+                  apiVersion:
+                    const: "1"
+                  usuario:
+                    $ref: "#/components/schemas/UsuarioSesion"
+                  socios:
+                    type: array
+                    items:
+                      type: object
+                      required: [socioId, productos]
+                      properties:
+                        socioId:
+                          type: string
+                        productos:
+                          type: array
+                          description: Vida hipotecaria es el único producto habilitado para socios.
+                          items:
+                            const: mortgage-life
+                  alcances:
+                    type: array
+                    items:
+                      enum: ["perfilamientos:crear", "clientes:consultar"]
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente; cliente y asesor no son socios
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/consultas-informacion-cliente:
+    post:
+      tags: [Socios]
+      operationId: consultarInformacionCliente
+      summary: Consulta información mínima autorizada de un cliente
+      description: >-
+        Requiere JWT de socio, socioId autorizado y consentimiento vigente del
+        cliente para el producto, finalidad, fuentes y datos solicitados.
+        operationId debe coincidir con Idempotency-Key. Un reintento idéntico
+        devuelve la consulta persistida. Si falla una fuente autorizada, la
+        operación falla sin devolver ni persistir datos parciales.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsultaInformacionCliente"
+      responses:
+        "201":
+          description: Consulta autorizada, minimizada y auditada por fuente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InformacionClienteAutorizada"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio, producto, finalidad o consentimiento no autorizado
+        "404":
+          description: cliente_no_encontrado
+        "409":
+          description: idempotencia_conflicto
+        "503":
+          description: Dependencia o fuente no disponible; no contiene datos parciales
+  /v1/socios/consultas-informacion-cliente/{operationId}:
+    get:
+      tags: [Socios]
+      operationId: recuperarInformacionCliente
+      summary: Recupera una consulta autorizada por su operación
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Consulta persistida con consentimiento aún vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InformacionClienteAutorizada"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Socio o consentimiento no autorizado
+        "404":
+          description: consulta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/clientes/por-documento:
+    get:
+      tags: [Socios]
+      operationId: buscarClienteSocioPorDocumento
+      summary: Identifica al cliente y muestra solo el estado util de su consentimiento
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: tipoDocumento
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [cc, ce, passport, ppt]
+        - name: numeroDocumento
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cliente identificado sin exponer UUID ni version de consentimiento
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - nombre
+                  - tipoDocumento
+                  - numeroDocumentoEnmascarado
+                  - consentimientoEstado
+                properties:
+                  nombre:
+                    type: string
+                  tipoDocumento:
+                    type: string
+                    enum: [cc, ce, passport, ppt]
+                  numeroDocumentoEnmascarado:
+                    type: string
+                  consentimientoEstado:
+                    type: string
+                    enum: [vigente, insuficiente, vencido, revocado, rechazado, ausente]
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado
+        "404":
+          description: cliente_no_encontrado
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion:
+    post:
+      tags: [Socios]
+      operationId: iniciarSolicitudSocio
+      summary: Perfila y cotiza un producto del catalogo para el cliente autorizado
+      description: >-
+        Requiere rol y scope socio y socioId presente en el JWT. operationId debe
+        coincidir con Idempotency-Key y ser globalmente unico entre organizaciones.
+        Una colision de otro socio devuelve 409 sin revelar su propietario.
+        Consentimiento vigente del cliente obligatorio;
+        el socio nunca lo concede. El resultado enlaza la solicitud real del cliente.
+        Un reintento identico devuelve el mismo resultado sin consumir cuota.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSolicitudSocio"
+      responses:
+        "201":
+          description: Operacion persistida y completada, incluyendo reintentos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperacionSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
+        "404":
+          description: cliente_no_encontrado
+        "409":
+          description: idempotencia_conflicto o operacion_en_curso (Retry-After)
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "429":
+          $ref: "#/components/responses/CuotaSocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion/{operationId}:
+    get:
+      tags: [Socios]
+      operationId: recuperarSolicitudSocio
+      summary: Recupera una operacion sin guardar datos personales en el navegador
+      parameters:
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: Misma operacion completada; no recalcula ni consulta fuentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperacionSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente o socio_no_autorizado
+        "404":
+          description: operacion_no_encontrada dentro del socio autorizado
+        "409":
+          description: >-
+            operacion_en_curso o operacion_reintentable, con Retry-After.
+            GET no reanuda; para reintentar se necesita POST con el cuerpo original.
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/asesor/clientes:
     get:
       tags: [Asesores]
@@ -39,6 +296,142 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance:
+    get:
+      tags: [Asesores]
+      summary: Lista excepciones Open Finance pendientes del socio
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor. socioId debe estar incluido
+        en el claim socios. La bandeja solo devuelve excepciones pendientes.
+        La aprobación no modifica ni sustituye el consentimiento del cliente.
+      operationId: listarExcepcionesOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      responses:
+        "200":
+          description: Excepciones pendientes del socio autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BandejaExcepcionesOpenFinance"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado o alcance_insuficiente
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance/{excepcionId}:
+    get:
+      tags: [Asesores]
+      summary: Consulta el detalle de una excepción Open Finance
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
+        claim socios. Solo expone la referencia, bloqueo, consentimiento y
+        trazabilidad mínimos; una excepción de otro socio se oculta como 404.
+      operationId: consultarExcepcionOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: excepcionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      responses:
+        "200":
+          description: Detalle trazable de la excepción
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExcepcionOpenFinance"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado o alcance_insuficiente
+        "404":
+          description: excepcion_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance/{excepcionId}/resolver:
+    post:
+      tags: [Asesores]
+      summary: Aprueba o rechaza una excepción Open Finance
+      description: >-
+        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
+        claim socios. El actorId se deriva de sub; no se acepta en el cuerpo.
+        motivo es obligatorio. Aprobar revalida el consentimiento vigente y la
+        versión exacta antes de persistir, y no amplía fuentes, datos ni finalidad.
+        La respuesta 200 solo se devuelve tras confirmar atómicamente la decisión
+        y su evento de trazabilidad. El proceso solicitante debe volver a validar
+        el consentimiento antes de continuar.
+      operationId: resolverExcepcionOpenFinance
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: excepcionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolverExcepcionOpenFinance"
+      responses:
+        "200":
+          description: Decisión y evento confirmados por el backend
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExcepcionOpenFinanceResuelta"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: >-
+            socio_no_autorizado, alcance_insuficiente, consentimiento_ausente
+            o consentimiento_no_vigente. Ante error de consentimiento no se
+            cambia el estado de la excepción.
+        "404":
+          description: excepcion_no_encontrada
+        "409":
+          description: excepcion_ya_resuelta o conflicto_idempotencia
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/perfilamientos-hipotecarios:
     post:
       tags: [Asesores]
@@ -50,6 +443,7 @@ paths:
       operationId: iniciarPerfilamientoHipotecario
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ApiVersion"
       requestBody:
         required: true
         content:
@@ -75,6 +469,8 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
+        "429":
+          $ref: "#/components/responses/CuotaSocio"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/consentimientos/perfilamiento:
@@ -192,10 +588,37 @@ paths:
           $ref: "#/components/responses/DemasiadasSolicitudes"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/desafio:
+    get:
+      tags: [Sesiones]
+      summary: Obtiene un desafío de login cifrado, válido 60 segundos
+      operationId: obtenerDesafioLogin
+      security: []
+      description: >-
+        Requiere ENCRYPTED_LOGIN_ENABLED=true. Sin habilitar responde 503.
+        El BFF delega a identidad; no tiene clave privada ni almacén de desafíos.
+      responses:
+        "200":
+          description: Desafío de un solo uso; no almacenar en caché
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesafioLogin"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones:
     post:
       tags: [Sesiones]
       summary: Inicia una sesión de cliente
+      description: >-
+        Con ENCRYPTED_LOGIN_ENABLED=true solo acepta CredencialesCifradas; rechaza
+        contrasena y campos adicionales. Por defecto solo acepta Credenciales heredadas.
+        Nunca intenta el contrato heredado si falla el login cifrado.
       operationId: iniciarSesion
       security: []
       requestBody:
@@ -203,7 +626,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Credenciales"
+              oneOf:
+                - $ref: "#/components/schemas/Credenciales"
+                - $ref: "#/components/schemas/CredencialesCifradas"
       responses:
         "200":
           description: >-
@@ -635,7 +1060,27 @@ components:
       schema:
         type: string
         format: uuid
+    ApiVersion:
+      name: API-Version
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: ["1"]
+        default: "1"
+      description: Una version distinta devuelve 400 version_no_soportada.
   responses:
+    CuotaSocio:
+      description: cuota_socio_excedida o socio_ocupado, sin iniciar perfilamiento
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     SolicitudInvalida:
       description: La solicitud no cumple el contrato
       content:
@@ -714,6 +1159,182 @@ components:
         correo:
           type: string
           format: email
+    ConsultaInformacionCliente:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, productoId, finalidad, datosSolicitados]
+      oneOf:
+        - required: [clienteId]
+          not:
+            anyOf:
+              - required: [tipoDocumento]
+              - required: [numeroDocumento]
+        - required: [tipoDocumento, numeroDocumento]
+          not:
+            required: [clienteId]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 50
+        clienteId:
+          type: string
+          format: uuid
+          description: Identificador interno para clientes heredados sin documento maestro.
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          minLength: 5
+          maxLength: 16
+          description: cc 6-10 digitos; ce 6-12; passport 5-16 A-Z/0-9; ppt 7-10 digitos.
+        productoId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        finalidad:
+          const: cotizacion
+        datosSolicitados:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: string
+    InformacionClienteAutorizada:
+      type: object
+      additionalProperties: false
+      required:
+        - operationId
+        - socioId
+        - actorId
+        - clienteId
+        - productoId
+        - finalidad
+        - estado
+        - consentimientoId
+        - consentimientoVersion
+        - datos
+        - evidenciaFuentes
+        - consultadaEn
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        actorId:
+          type: string
+          format: uuid
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        finalidad:
+          const: cotizacion
+        estado:
+          const: completada
+        consentimientoId:
+          type: string
+          format: uuid
+        consentimientoVersion:
+          type: integer
+          minimum: 1
+        datos:
+          type: object
+          additionalProperties:
+            type: string
+          description: Solo contiene la intersección entre datos solicitados y consentidos.
+        evidenciaFuentes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, version, consultadaEn, simulada]
+            properties:
+              fuente:
+                enum: [open_finance, open_data]
+              version:
+                type: string
+              consultadaEn:
+                type: string
+                format: date-time
+              simulada:
+                type: boolean
+        consultadaEn:
+          type: string
+          format: date-time
+    NuevaSolicitudSocio:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, productoId, datosProducto, cliente]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+          minLength: 1
+          maxLength: 50
+        productoId:
+          const: mortgage-life
+        datosProducto:
+          type: object
+          additionalProperties: false
+          required: [mortgageBalance, referenciaCredito]
+          properties:
+            mortgageBalance:
+              type: string
+              pattern: "^[1-9][0-9]{0,15}$"
+            referenciaCredito:
+              type: string
+              pattern: "^[A-Za-z0-9-]{4,30}$"
+        cliente:
+          type: object
+          additionalProperties: false
+          required: [tipoCliente, tipoDocumento, numeroDocumento]
+          properties:
+            tipoCliente:
+              const: persona_natural
+            tipoDocumento:
+              enum: [cc, ce, passport, ppt]
+            numeroDocumento:
+              type: string
+              description: cc 6-10 digitos; ce 6-12; passport 5-16 A-Z/0-9; ppt 7-10 digitos.
+    OperacionSocio:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, clienteId, productoId, estado, perfilamientoReferencia, solicitudId, cotizacionId, recibidaEn, oferta]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        estado:
+          const: completada
+        perfilamientoReferencia:
+          type: string
+          description: Referencia opaca del perfil persistido.
+        solicitudId:
+          type: string
+        cotizacionId:
+          type: string
+          format: uuid
+        oferta:
+          $ref: "#/components/schemas/OfertaHipotecariaSocio"
+        recibidaEn:
+          type: string
+          format: date-time
     IniciarPerfilamientoHipotecario:
       type: object
       additionalProperties: false
@@ -728,6 +1349,10 @@ components:
         operationId:
           type: string
           format: uuid
+        productoId:
+          type: string
+          const: mortgage-life
+          default: mortgage-life
         socioId:
           type: string
           minLength: 1
@@ -795,6 +1420,9 @@ components:
         - cotizacionId
         - recibidaEn
       properties:
+        productoId:
+          type: string
+          const: mortgage-life
         operationId:
           type: string
           format: uuid
@@ -816,6 +1444,175 @@ components:
         recibidaEn:
           type: string
           format: date-time
+    BandejaExcepcionesOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [excepciones]
+      properties:
+        excepciones:
+          type: array
+          description: Solo contiene excepciones con estado pendiente.
+          items:
+            $ref: "#/components/schemas/ExcepcionOpenFinance"
+    ExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required:
+        - excepcionId
+        - operationId
+        - socioId
+        - clienteId
+        - codigo
+        - motivoBloqueo
+        - alcance
+        - finalidad
+        - datos
+        - consentimiento
+        - estado
+        - estadoAnterior
+        - creadoEn
+        - correlationId
+        - trazabilidad
+      properties:
+        excepcionId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        codigo:
+          type: string
+          enum: [fuente_no_disponible, fuente_vencida, regla_no_aplicable]
+        motivoBloqueo:
+          type: string
+          minLength: 3
+          maxLength: 500
+        alcance:
+          type: string
+          const: open_finance
+          description: Alcance de la excepción, no concesión de consentimiento.
+        finalidad:
+          type: string
+          const: cotizacion
+        datos:
+          type: array
+          items:
+            type: string
+            const: indicador_riesgo
+        consentimiento:
+          $ref: "#/components/schemas/ConsentimientoExcepcionOpenFinance"
+        estado:
+          type: string
+          enum: [pendiente, aprobada, rechazada]
+        estadoAnterior:
+          type: string
+        creadoEn:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+        trazabilidad:
+          $ref: "#/components/schemas/TrazabilidadExcepcionOpenFinance"
+        actorId:
+          type: [string, "null"]
+          format: uuid
+        resueltaEn:
+          type: [string, "null"]
+          format: date-time
+        decision:
+          type: [string, "null"]
+          enum: [aprobar, rechazar, null]
+        motivo:
+          type: [string, "null"]
+          description: Motivo de la decisión humana; ausente mientras está pendiente.
+        idempotente:
+          type: boolean
+    ConsentimientoExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [id, version, estado, fuentes, datos, finalidad, vigenteHasta]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        estado:
+          type: string
+          enum: [autorizado, rechazado, revocado, vencido]
+        fuentes:
+          type: array
+          items:
+            type: string
+        datos:
+          type: array
+          items:
+            type: string
+        finalidad:
+          type: string
+        vigenteHasta:
+          type: string
+          format: date-time
+    ResolverExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [decision, motivo]
+      properties:
+        decision:
+          type: string
+          enum: [aprobar, rechazar]
+        motivo:
+          type: string
+          minLength: 3
+          maxLength: 500
+    TrazabilidadExcepcionOpenFinance:
+      type: object
+      additionalProperties: false
+      required: [estadoAnterior, estadoActual, alcance, creadoEn, correlationId]
+      properties:
+        estadoAnterior:
+          type: string
+        estadoActual:
+          type: string
+        alcance:
+          type: string
+          const: open_finance
+        creadoEn:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+    ExcepcionOpenFinanceResuelta:
+      allOf:
+        - $ref: "#/components/schemas/ExcepcionOpenFinance"
+        - type: object
+          required: [decision, actorId, resueltaEn, motivo]
+          properties:
+            estado:
+              type: string
+              enum: [aprobada, rechazada]
+            estadoAnterior:
+              type: string
+              const: pendiente
+            decision:
+              type: string
+              enum: [aprobar, rechazar]
+            actorId:
+              type: string
+              format: uuid
+            resueltaEn:
+              type: string
+              format: date-time
+            motivo:
+              type: string
+              minLength: 3
+              maxLength: 500
     DecisionConsentimiento:
       type: object
       additionalProperties: false
@@ -932,19 +1729,29 @@ components:
     Perfilamiento:
       type: object
       additionalProperties: false
-      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId,
-                 consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      required: [solicitudId, perfilId, operationId, creditoId, version, modeloVersion, score,
+                 nivel, consentimientoId, consentimientoVersion, calculadoEn, vigenteHasta,
+                 fuentes, variables, variablesExcluidas, regla, degradaciones, hashDecision,
+                 fallbackUsed]
       properties:
         solicitudId:
           type: string
         perfilId:
           type: string
           format: uuid
+        operationId:
+          type: string
+          format: uuid
+        creditoId:
+          type: string
+          minLength: 1
+          maxLength: 64
         version:
           type: integer
           minimum: 1
         modeloVersion:
           type: string
+          enum: [perfil-riesgo-1, perfil-mock-1]
         score:
           type: string
           description: Indicador sintetico entre 0 y 1, no informacion financiera real
@@ -965,7 +1772,7 @@ components:
           format: date-time
         fallbackUsed:
           type: boolean
-          description: Indica evidencia cache vigente bajo la misma autorizacion; no riesgo parcial.
+          description: Indica que se aplico cache o default bajo la misma autorizacion; no riesgo parcial.
         estadoFuentes:
           type: array
           description: Metadatos completos por fuente; opcionales solo para perfiles historicos sin fallback.
@@ -981,7 +1788,7 @@ components:
                 pattern: '^[a-z][a-z0-9_]*$'
               estado:
                 type: string
-                enum: [disponible, cache]
+                enum: [disponible, cache, default]
               intentos:
                 type: integer
                 minimum: 0
@@ -995,7 +1802,8 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo,
+                       variablesDisponibles]
             properties:
               nombre:
                 type: string
@@ -1015,6 +1823,91 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+              variablesDisponibles:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items:
+                  type: string
+        variables:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, valorNormalizado, autorizadaPor]
+            properties:
+              nombre:
+                type: string
+                const: indicador_riesgo
+              fuente:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
+              valorNormalizado:
+                type: string
+              autorizadaPor:
+                type: string
+                format: uuid
+        variablesExcluidas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, motivo]
+            properties:
+              nombre:
+                type: string
+              fuente:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
+              motivo:
+                type: string
+                const: sin_consentimiento
+        regla:
+          type: object
+          additionalProperties: false
+          required: [reglaId, version, modeloVersion, expresion]
+          properties:
+            reglaId:
+              type: string
+              const: riesgo-maximo-fuentes
+            version:
+              type: string
+              enum: ["1.0", legacy]
+            modeloVersion:
+              type: string
+              enum: [perfil-riesgo-1, perfil-mock-1]
+            expresion:
+              type: string
+              const: max(indicador_riesgo_por_fuente)
+        degradaciones:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, motivo, politica, versionPolitica]
+            properties:
+              fuente:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: '^[a-z][a-z0-9_]*$'
+              motivo:
+                type: string
+                enum: [fuente_no_disponible, fuente_vencida]
+              politica:
+                type: string
+                enum: [cache, default]
+              versionPolitica:
+                type: string
+                const: degradacion-1
+        hashDecision:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
       allOf:
         - if:
             properties:
@@ -1026,9 +1919,13 @@ components:
               estadoFuentes:
                 minItems: 2
                 contains:
-                  properties:
-                    estado:
-                      const: cache
+                  anyOf:
+                    - properties:
+                        estado:
+                          const: cache
+                    - properties:
+                        estado:
+                          const: default
           else:
             properties:
               estadoFuentes:
@@ -1036,6 +1933,56 @@ components:
                   properties:
                     estado:
                       const: disponible
+    DesafioLogin:
+      type: object
+      additionalProperties: false
+      required: [desafioId, clavePublica, expiraEn]
+      properties:
+        desafioId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+        expiraEn:
+          type: string
+          format: date-time
+        clavePublica:
+          type: object
+          additionalProperties: false
+          required: [kty, n, e, alg, use, kid]
+          properties:
+            kty:
+              type: string
+              const: RSA
+            n:
+              type: string
+            e:
+              type: string
+            alg:
+              type: string
+              const: RSA-OAEP-256
+            use:
+              type: string
+              const: enc
+            kid:
+              type: string
+              minLength: 1
+    CredencialesCifradas:
+      type: object
+      additionalProperties: false
+      required: [correo, credencialCifrada]
+      properties:
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        credencialCifrada:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: >-
+            JWE compacto con cabecera protegida exacta alg=RSA-OAEP-256, enc=A256GCM,
+            kid de clavePublica, typ=solventa-login+jwe. JSON cifrado exacto
+            {desafioId, correo, contrasena}; correo coincide con el exterior.
+            Desafío válido 60 segundos, consumido antes de verificar la contraseña.
     Credenciales:
       type: object
       additionalProperties: false
@@ -1078,7 +2025,7 @@ components:
     UsuarioSesion:
       type: object
       additionalProperties: false
-      required: [id, nombre, correo, rol, tipoDocumento, identificacion, telefono]
+      required: [id, nombre, correo, rol]
       properties:
         id:
           type: string
@@ -1092,7 +2039,13 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente]
+          enum: [cliente, asesor, socio]
+        socios:
+          type: array
+          uniqueItems: true
+          description: Organizaciones autorizadas para roles asesor y socio.
+          items:
+            type: string
         tipoDocumento:
           type: string
           enum: [cc, ce, passport, ppt]
@@ -1589,6 +2542,92 @@ components:
         vigenteHasta:
           type: string
           format: date-time
+        explicacion:
+          $ref: "#/components/schemas/ExplicacionOfertaHipotecaria"
+        trazabilidad:
+          $ref: "#/components/schemas/TrazabilidadOfertaHipotecaria"
+    OfertaHipotecariaSocio:
+      allOf:
+        - $ref: "#/components/schemas/Oferta"
+        - type: object
+          required: [explicacion, trazabilidad]
+    ExplicacionOfertaHipotecaria:
+      type: object
+      additionalProperties: false
+      required: [resumen, factoresDeterminantes]
+      properties:
+        resumen:
+          type: string
+          minLength: 1
+        factoresDeterminantes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, valor, impacto]
+            properties:
+              nombre:
+                type: string
+                minLength: 1
+              valor:
+                type: string
+                minLength: 1
+              impacto:
+                type: string
+                minLength: 1
+    TrazabilidadOfertaHipotecaria:
+      type: object
+      additionalProperties: false
+      required:
+        - esquemaDecision
+        - hashDecision
+        - hashContenido
+        - perfilId
+        - perfilVersion
+        - modeloPerfilVersion
+        - reglaId
+        - reglaVersion
+        - fuentes
+      properties:
+        esquemaDecision:
+          type: integer
+          minimum: 1
+        hashDecision:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        hashContenido:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        perfilId:
+          type: string
+          format: uuid
+        perfilVersion:
+          type: integer
+          minimum: 1
+        modeloPerfilVersion:
+          type: string
+          minLength: 1
+        reglaId:
+          type: string
+          format: uuid
+        reglaVersion:
+          type: string
+          minLength: 1
+        fuentes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, version]
+            properties:
+              nombre:
+                type: string
+                enum: [open_finance, open_data]
+              version:
+                type: string
+                minLength: 1
     ResultadoOfertas:
       type: object
       additionalProperties: false

@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -40,7 +40,22 @@ ISSUER = "https://identidad.solventa.test"
 AUDIENCE = "solventa-api"
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 USER = User(
-    UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"), "Ana Cliente", "ana@solventa.co", "cliente"
+    UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"),
+    "Ana Cliente",
+    "ana@solventa.co",
+    "cliente",
+    document_type="cc",
+    identification="1234567890",
+)
+CLIENT_PROFILE = User(
+    USER.user_id,
+    USER.name,
+    USER.email,
+    USER.role,
+    document_type=USER.document_type,
+    identification=USER.identification,
+    phone="+573001234567",
+    birth_date=date(1985, 2, 10),
 )
 PASSWORD = "Solventa123!"
 ACCESS_TTL = 3600
@@ -189,7 +204,17 @@ class FakeJwks:
 class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
-    clients: tuple[User, ...] = (USER,)
+    clients: tuple[User, ...] = (CLIENT_PROFILE,)
+
+    def login_challenge(self, correlation_id: str) -> dict[str, object]:
+        self._record("login_challenge", correlation_id)
+        return {"desafioId": "challenge", "clavePublica": {}, "expiraEn": "2026-10-24T12:00:00Z"}
+
+    def encrypted_login(
+        self, email: str, encrypted_credential: str, correlation_id: str
+    ) -> TokenSet:
+        self._record("encrypted_login", email, encrypted_credential, correlation_id)
+        return self._tokens()
 
     def _record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
@@ -217,6 +242,23 @@ class FakeIdentity:
     def list_clients(self, correlation_id: str) -> tuple[User, ...]:
         self._record("list_clients", correlation_id)
         return self.clients
+
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        self._record("get_client", client_id, correlation_id)
+        return next((client for client in self.clients if client.user_id == client_id), None)
+
+    def get_client_by_document(
+        self, document_type: str, identification: str, correlation_id: str
+    ) -> User | None:
+        self._record("get_client_by_document", document_type, identification, correlation_id)
+        return next(
+            (
+                client
+                for client in self.clients
+                if client.document_type == document_type and client.identification == identification
+            ),
+            None,
+        )
 
 
 def rejected(status: int, code: str, retry_after: int | None = None) -> IdentityRejectedError:
@@ -414,5 +456,7 @@ def token_response(access_token: str = "access-jwt") -> dict[str, Any]:
             "nombre": USER.name,
             "correo": USER.email,
             "rol": USER.role,
+            "tipoDocumento": USER.document_type,
+            "numeroDocumento": USER.identification,
         },
     }

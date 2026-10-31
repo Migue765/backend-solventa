@@ -14,27 +14,54 @@ tags:
   - name: Consentimientos
   - name: Asesores
 paths:
+  /v1/biometria/enrolamientos/desafio:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos~1desafio"
+  /v1/biometria/enrolamientos:
+    $ref: "./biometria-v1.yaml#/paths/~1enrolamientos"
+  /v1/biometria/desafios:
+    $ref: "./biometria-v1.yaml#/paths/~1desafios"
+  /v1/biometria/credenciales:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales"
+  /v1/biometria/credenciales/{credencialId}:
+    $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
   /v1/clientes:
     get:
       tags: [Asesores]
-      summary: Lista clientes registrados para consumo interno del BFF
+      summary: Lista clientes o busca uno por documento para consumo interno del BFF
       security:
         - TokenInterno: []
+      parameters:
+        - name: tipoDocumento
+          in: query
+          schema:
+            type: string
+            enum: [cc, ce, passport, ppt]
+        - name: numeroDocumento
+          in: query
+          schema:
+            type: string
+            minLength: 5
+            maxLength: 16
+          description: Debe enviarse junto con tipoDocumento para una busqueda exacta.
       responses:
         "200":
-          description: Datos mínimos para seleccionar al titular
+          description: Catalogo o cliente exacto cuando se envia el documento
           content:
             application/json:
               schema:
-                type: object
-                required: [clientes]
-                properties:
-                  clientes:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ClienteRegistrado"
+                oneOf:
+                  - type: object
+                    required: [clientes]
+                    properties:
+                      clientes:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ClienteRegistrado"
+                  - $ref: "#/components/schemas/ClienteRegistrado"
         "401":
           description: Token interno invalido
+        "404":
+          description: No existe un cliente con el documento exacto.
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes/{clienteId}/consentimiento-perfilamiento:
@@ -116,25 +143,58 @@ paths:
           $ref: "#/components/responses/DemasiadosIntentos"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /oauth/login-challenge:
+    get:
+      tags: [OAuth]
+      summary: Emite desafío de login web cifrado, válido 60 segundos
+      operationId: emitirDesafioLogin
+      security: []
+      responses:
+        "200":
+          description: Desafío de un solo uso persistido en Redis
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/DesafioLogin"
+        "503":
+          description: Función deshabilitada o Redis no disponible
   /oauth/token:
     post:
       tags: [OAuth]
-      summary: Emite tokens (grant password o refresh_token)
+      summary: Emite tokens (password, encrypted_password, biometric_signature o refresh_token)
       description: >-
+        biometric_signature acepta solo JSON estricto, client_id=movil y
+        credencialId/desafioId/firma; usa los bytes de mensaje del desafio,
+        nunca una confirmacion biometrica booleana. Rol no cliente responde403.
         Con `grant_type=password` autentica al usuario. Con `grant_type=refresh_token`
         rota el refresh token: el presentado queda revocado y se emite uno nuevo en la misma
         familia. Presentar un refresh token ya rotado revoca toda la familia.
         El access token es un JWT RS256 de 1 hora (`expires_in: 3600`).
+        Con ENCRYPTED_LOGIN_ENABLED=true, web debe usar encrypted_password; password
+        queda disponible solo para movil. El grant cifrado exige cliente web y rechaza
+        campos adicionales, incluyendo password. Desafío consumido atómicamente en Redis
+        tras validar JWE y correo, antes de verificar credenciales. Fallo de sobre,
+        desafío expirado o replay responde 400; credenciales incorrectas 401. No hay fallback.
       operationId: emitirToken
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SolicitudToken"
+              oneOf:
+                - $ref: "#/components/schemas/SolicitudToken"
+                - $ref: "#/components/schemas/SolicitudTokenCifrado"
+                - $ref: "./biometria-v1.yaml#/components/schemas/SolicitudTokenBiometrico"
           application/x-www-form-urlencoded:
             schema:
-              $ref: "#/components/schemas/SolicitudToken"
+              oneOf:
+                - $ref: "#/components/schemas/SolicitudToken"
+                - $ref: "#/components/schemas/SolicitudTokenCifrado"
       responses:
         "200":
           description: Tokens emitidos
@@ -151,6 +211,8 @@ paths:
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutenticado"
+        "403":
+          $ref: "./biometria-v1.yaml#/components/responses/Error"
         "429":
           $ref: "#/components/responses/DemasiadosIntentos"
         "503":
@@ -257,6 +319,11 @@ components:
       type: object
       additionalProperties: false
       required: [nombre, correo, contrasena]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento, telefono, fechaNacimiento]
+        numeroDocumento: [tipoDocumento, telefono, fechaNacimiento]
+        telefono: [tipoDocumento, numeroDocumento, fechaNacimiento]
+        fechaNacimiento: [tipoDocumento, numeroDocumento, telefono]
       properties:
         nombre:
           type: string
@@ -271,10 +338,26 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          minLength: 5
+          maxLength: 16
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
+        fechaNacimiento:
+          type: string
+          format: date
     Usuario:
       type: object
       additionalProperties: false
       required: [id, nombre, correo, rol]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento]
+        numeroDocumento: [tipoDocumento]
       properties:
         id:
           type: string
@@ -286,17 +369,31 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente, asesor]
+          enum: [cliente, asesor, socio]
         socios:
           type: array
           uniqueItems: true
-          description: Socios activos autorizados; presente para rol asesor.
+          description: Socios activos autorizados; presente para rol asesor o socio.
           items:
             type: string
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
+        fechaNacimiento:
+          type: string
+          format: date
     ClienteRegistrado:
       type: object
       additionalProperties: false
       required: [clienteId, nombre, correo]
+      dependentRequired:
+        tipoDocumento: [numeroDocumento]
+        numeroDocumento: [tipoDocumento]
       properties:
         clienteId:
           type: string
@@ -306,6 +403,17 @@ components:
         correo:
           type: string
           format: email
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
+        fechaNacimiento:
+          type: string
+          format: date
     UsuarioCreado:
       type: object
       additionalProperties: false
@@ -313,6 +421,26 @@ components:
       properties:
         usuario:
           $ref: "#/components/schemas/Usuario"
+    SolicitudTokenCifrado:
+      type: object
+      additionalProperties: false
+      required: [grant_type, client_id, username, credencialCifrada]
+      properties:
+        grant_type:
+          type: string
+          const: encrypted_password
+        client_id:
+          type: string
+          const: web
+        username:
+          type: string
+          format: email
+          maxLength: 254
+        credencialCifrada:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: JWE compacto; mismo formato que CredencialesCifradas del BFF.
     SolicitudToken:
       type: object
       required: [grant_type, client_id]
@@ -367,7 +495,7 @@ components:
           description: Vida del refresh token en segundos (web 28800, movil 2592000).
         scope:
           type: string
-          enum: [cliente, asesor]
+          enum: [cliente, asesor, socio]
         usuario:
           $ref: "#/components/schemas/Usuario"
     SolicitudRevocacion:

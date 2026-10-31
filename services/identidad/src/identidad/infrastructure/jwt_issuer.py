@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from identidad.domain.auth import User
+from identidad.domain.errors import TokenIssuanceError
 
 ALGORITHM = "RS256"
 
@@ -62,14 +63,17 @@ class RsaJwtIssuer:
             "correo": user.email,
             "client_id": client_id,
         }
-        if user.role == "asesor":
+        if user.role in {"asesor", "socio"}:
             claims["socios"] = list(user.partner_ids)
-        return jwt.encode(
-            claims,
-            self._private_key,
-            algorithm=ALGORITHM,
-            headers={"kid": self._kid},
-        )
+        try:
+            return jwt.encode(
+                claims,
+                self._private_key,
+                algorithm=ALGORITHM,
+                headers={"kid": self._kid},
+            )
+        except (jwt.PyJWTError, ValueError, TypeError) as error:
+            raise TokenIssuanceError() from error
 
 
 def _int_to_bytes(value: int) -> bytes:

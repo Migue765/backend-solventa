@@ -1,8 +1,9 @@
 # Perfilamiento HU11
 
-Implementa SOL-163 con puertos de consentimiento y fuentes externas. Open Finance y Open Data
-son mocks sinteticos: no consultan bancos, buros ni proveedores. El modelo `perfil-mock-1`
-usa el mayor indicador de las dos fixtures; no es una regla actuarial aprobada.
+Implementa SOL-163 y HU48 con puertos de consentimiento y fuentes externas. Open Finance y
+Open Data son mocks sinteticos: no consultan bancos, buros ni proveedores. El modelo
+`perfil-riesgo-1` y la regla `riesgo-maximo-fuentes` 1.0 usan el mayor indicador normalizado
+de las dos fixtures; no constituyen una regla actuarial aprobada.
 
 ```powershell
 python -m pip install -e ".\services\perfilamiento[dev]"
@@ -17,9 +18,16 @@ API interna con Bearer; `/health` no requiere autenticacion:
 
 | Metodo | Ruta | Entrada |
 |---|---|---|
-| POST | `/v1/perfiles` | `clienteId` y `referenciaId` UUID de la cotizacion |
+| POST | `/v1/perfiles` | Cliente, credito, `operationId` y referencia de la cotizacion |
+| POST | `/v1/consultas-informacion-cliente` | Contexto autorizado de HU44 e identificador idempotente |
+| GET | `/v1/consultas-informacion-cliente/{operationId}` | `socioId` en query; recupera HU44 y revalida consentimiento |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
+| POST | `/v1/excepciones-open-finance` | Registra un bloqueo real para revisión humana |
+| GET | `/v1/excepciones-open-finance?socioId=...` | Lista solo excepciones pendientes |
+| GET | `/v1/excepciones-open-finance/{excepcionId}?socioId=...` | Consulta detalle y trazabilidad |
+| GET | `/v1/excepciones-open-finance/operaciones/{operationId}?socioId=...` | Devuelve el resultado al proceso solicitante |
+| POST | `/v1/excepciones-open-finance/{excepcionId}/resolver?socioId=...` | Persiste aprobación o rechazo |
 
 El servicio consulta el consentimiento autoritativo antes de cada fuente, reintento, fallback
 y antes de entregar
@@ -27,6 +35,11 @@ el perfil. Persiste una instantanea inmutable y su auditoria en la misma transac
 cliente tiene versiones crecientes; incluye modelo, consentimiento/version, fechas, fuentes,
 indicadores minimos e identificador de la cotizacion. No guarda movimientos bancarios ni documentos.
 El perfil vence a los quince minutos o antes si vence una fuente o la autorizacion.
+La decision queda asociada al cliente, credito y `operationId`; un reintento recupera la misma
+instantanea y un cuerpo incompatible produce conflicto. La evidencia incluye fuentes, variables
+normalizadas autorizadas, variables excluidas, regla/modelo versionados, degradaciones, resultado
+y `hashDecision`, suficiente para reconstruir y comprobar la decision. Una degradacion reduce
+la vigencia del perfil a cinco minutos.
 
 Las lecturas comprueban titularidad, integridad del contenido, vigencia y la version exacta del
 consentimiento. Revocar bloquea nuevas lecturas y usos; volver a autorizar no rehabilita perfiles
@@ -56,8 +69,9 @@ Ver el [rollout coordinado](../../deploy/k8s/identidad/README.md#sol-326-consent
 `PERFILAMIENTO_MOCK_ESCENARIO` acepta `disponible` (default), `no_disponible` o `vencido`, solo
 como configuracion del servicio. No se permite elegir el escenario desde una peticion publica.
 El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 422 por perfil vencido,
-409 por referencia concurrente y 503 por dependencia o integridad fallida. No se entregan perfiles
-parciales ni se inventa un valor por defecto de riesgo.
+409 por conflicto idempotente/version y 503 por dependencia o integridad fallida. No se entregan
+perfiles parciales; en HU48 solo se usa el valor conservador `default-1` bajo una degradacion
+explicita y autorizada.
 
 ## SOL-201: consultas resilientes integradas
 
@@ -88,18 +102,20 @@ no se publica ni persiste. Python no interrumpe threads; cualquier futuro adapta
 red debe imponer tambien timeout nativo/cancelacion de transporte. No se afirma que un
 thread lento sea una conexion bancaria cancelada.
 
-El fallback solo usa `cache_fuentes`, ligada a cliente, consentimiento/id/version y
-nombre de fuente; valida integridad, fecha original, maximo 15 minutos y permiso vigente.
-No renueva timestamps, no reutiliza otra version y no autoriza consentimiento legado.
-Revocacion/rechazo/vencimiento bloquean incluso cache y perfiles ya creados.
-La cache se persiste en la misma transaccion que perfil/auditoria. Si una fuente falla
-sin cache util, la respuesta 503 incluye estados por fuente sin indicadores ni detalle
-del proveedor; las fuentes exitosas se conservan con la auditoria, tras revalidar permiso.
-No se crea cotizacion con riesgo parcial. Una consulta posterior puede reutilizar esa
-evidencia cuando otra fuente falle, bajo las mismas condiciones.
+La resiliencia de SOL-201 primero usa `cache_fuentes`, ligada a cliente y consentimiento/id/version,
+con integridad y fecha original verificadas, hasta quince minutos. HU48 tambien permite recuperar
+una senal integra de perfiles historicos del mismo cliente y consentimiento/version hasta treinta
+minutos, sin encadenar senales degradadas; si no existe, aplica el valor sintetico conservador
+`default-1`. Toda degradacion queda identificada en `degradaciones` y `estadoFuentes`; reduce la
+vigencia del perfil a cinco minutos. Ninguna ruta renueva una fecha de consulta original ni autoriza
+un consentimiento legado. Revocacion/rechazo/vencimiento bloquean incluso cache y perfiles creados.
+La cache de SOL-201 se persiste en la misma transaccion que perfil/auditoria. Si no se puede completar
+el perfil bajo una autorizacion vigente, la respuesta 503 incluye estados por fuente sin indicadores
+ni detalle del proveedor; las fuentes exitosas se conservan con la auditoria, tras revalidar permiso.
+No se crea cotizacion con riesgo parcial.
 
 Los perfiles completos incluyen `estadoFuentes` con `{fuente, estado, intentos, motivo}`;
-`estado` es `disponible` o `cache`, y `fallbackUsed` indica si se utilizo cache.
+`estado` es `disponible`, `cache` o `default`, y `fallbackUsed` indica si se uso una degradacion.
 El error parcial usa `fuentes` con esos estados y `fallida` para la afectada. Cotizacion
 acepta la extension y preserva la evidencia hasta el BFF. Perfiles historicos sin estos
 metadatos siguen siendo legibles si `fallbackUsed` es falso; no se admite inconsistencia
@@ -124,3 +140,56 @@ ni se acredita propagacion hacia ellos. El hash local detecta alteraciones del c
 sustituye WORM ni una firma. El chequeo previo al uso no es una transaccion distribuida con
 Identidad; con las fuentes locales simuladas no hay divulgacion externa, y estas pruebas no
 demuestran la propiedad de cero divulgaciones para un adaptador real.
+El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 409 por conflicto
+idempotente o version concurrente y 503 por dependencia o integridad fallida.
+
+Para HU48, una fuente fallida o vencida aplica la politica versionada `degradacion-1`: reutiliza
+por hasta 30 minutos la ultima senal autorizada e integra disponible para el mismo cliente,
+consentimiento y version; nunca encadena una senal ya degradada. Si no existe, usa el valor
+conservador sintetico `default-1`. El resultado marca `fallbackUsed`,
+reduce su vigencia a cinco minutos y registra fuente, motivo, politica y version. Nunca se usa
+una variable fuera del consentimiento ni se presenta una degradacion sin evidencia.
+
+El adaptador de Identidad limita cada llamada a 700 ms. No existe cache Redis, batch ni
+proyeccion analitica; la cache de degradacion se reconstruye exclusivamente desde perfiles
+durables e integros. No se contempla conectar proveedores reales.
+El hash local detecta alteraciones del contenido, pero no sustituye WORM ni una firma. El chequeo
+previo al uso no es una transacción distribuida con Identidad; con las fuentes locales simuladas
+no hay divulgación externa, y estas pruebas no demuestran la propiedad de cero divulgaciones para
+un adaptador real.
+
+## Excepciones Open Finance
+
+El productor interno crea una excepción solo cuando un bloqueo de fuente o regla impide
+continuar automáticamente. `bloqueaProcesamiento` debe ser `true`; no se enrutan fallbacks
+automáticos exitosos, errores de consentimiento, ni rechazos operativos como conflictos de
+idempotencia. La creación recibe `operationId`, `socioId`, `clienteId`, el ID/versión del
+consentimiento, `codigo` (`fuente_no_disponible`, `fuente_vencida` o `regla_no_aplicable`)
+y `motivoBloqueo`. Perfilamiento consulta y valida el consentimiento autoritativo antes de
+crear el caso. `socioId + operationId` es idempotente; un reuso con otro motivo o contexto
+responde `409 conflicto_idempotencia`.
+
+El BFF expone la bandeja/detalle/decisión del asesor; las rutas internas de esta tabla usan
+`INTERNAL_API_TOKEN`, no están expuestas directamente al navegador. Una resolución exige
+`X-Actor-ID` originado en el `sub` del JWT verificado y motivo de 3 a 500 caracteres.
+La aprobación revalida el consentimiento vigente y la misma versión. Nunca cambia consentimiento,
+fuentes, datos ni finalidad: el proceso solicitante debe volver a pasar su validación de
+consentimiento antes de continuar. El rechazo no necesita consentimiento vigente.
+
+La decisión, actor, fecha, motivo, alcance, estados previo/posterior y correlación se guardan
+atómicamente con un evento durable. La API solo confirma la resolución tras el commit; en caso
+de error no cambia el estado. El proceso solicitante consulta por `socioId + operationId` para
+obtener el resultado persistido. `init-db` crea aditivamente las dos tablas de excepciones.
+
+## Consulta autorizada HU44
+
+La consulta de información usa `socioId + operationId` como clave idempotente,
+minimiza por intersección entre `datosSolicitados` y los datos consentidos y registra
+por fuente la operación, actor, cliente, producto, finalidad, fecha y resultado.
+Consulta el consentimiento autoritativo en cada intento, por lo que una revocación
+bloquea inmediatamente nuevas consultas.
+
+Cada fuente tiene un circuit breaker que abre tras dos fallos y vuelve a probar a los
+30 segundos. La política es fail-closed: una fuente lenta, fallida o con circuito
+abierto cancela la consulta completa; no se persiste ni devuelve una respuesta
+parcial y no se reutilizan datos históricos como fallback.

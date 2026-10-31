@@ -6,8 +6,16 @@ class InvalidRefreshTokenError(Exception):
     """El refresh token no existe, expiró, fue revocado o es de otro cliente."""
 
 
+class TokenIssuanceError(Exception):
+    """El firmante no pudo emitir una sesion valida."""
+
+
 class EmailAlreadyRegisteredError(Exception):
     """Ya existe un usuario con ese correo."""
+
+
+class DocumentAlreadyRegisteredError(Exception):
+    """Ya existe un cliente con ese documento."""
 
 
 class TooManyAttemptsError(Exception):

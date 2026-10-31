@@ -10,6 +10,12 @@ variable "aws_profile" {
   default     = "tesis"
 }
 
+variable "cicd_automatic_triggers_enabled" {
+  description = "Habilita los disparadores automaticos de todos los pipelines. Pausados temporalmente para limitar el consumo de CodePipeline y CodeBuild."
+  type        = bool
+  default     = false
+}
+
 variable "account_id" {
   description = "ID de la cuenta AWS permitida (evita aplicar en otra cuenta)."
   type        = string

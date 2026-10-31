@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "Servicio de identidad de Solventa: usuarios y emisión de tokens JWT"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=46,<51",
     "email-validator>=2.2,<3",
     "flask>=3.1,<4",
     "pydantic>=2.9,<3",
     "PyJWT[crypto]>=2.8,<3",
+    "jwcrypto>=1.6.1,<2",
     "redis>=5,<7",
     "sqlalchemy>=2.0,<3",
     "alembic>=1.13,<2",
@@ -16,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2,<4"]
 server = ["gunicorn>=23,<24"]
-dev = ["pytest>=8", "fakeredis>=2.26,<3"]
+dev = ["pytest>=8", "fakeredis[lua]>=2.26,<3"]
 
 [build-system]
 requires = ["setuptools>=69"]

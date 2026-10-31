@@ -81,9 +81,12 @@ DB, PVC y datos. No tocar preview ni otros workloads, rutas o capacidad.
 Registrar inventario antes/despues y comprobar de nuevo que no reaparezcan.
 
 Los manifiestos ya no apuntan a HU11 y `deploy/codebuild/deploy.sh` rechaza ese
-namespace antes de cualquier operacion AWS/Kubernetes. No existe pipeline de
-Perfilamiento en la infraestructura actual: futuros despliegues deben usar
-`SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true` para SOL-326.
+namespace antes de cualquier operacion AWS/Kubernetes. Terraform define un pipeline
+y repositorio ECR propios para Perfilamiento, con tag `perfilamiento-v*`, namespace
+`perfilamiento` y migraciones habilitadas. Los recursos solo existen tras una
+aplicacion Terraform aprobada; los disparadores automaticos heredan la politica
+global y permanecen pausados por defecto. El pipeline usa el build/deploy existente
+con `SERVICE_NAME=perfilamiento`, `NAMESPACE=perfilamiento`, `MIGRATE=true` para SOL-326.
 El nuevo `migrate-job.yaml` ejecuta `init-db` sobre la base existente y agrega la
 tabla de eventos sin borrar perfiles ni auditoria. No reactivar manifiestos demo externos.
 El guard no es una politica de admision: revisar tambien automatizaciones
@@ -129,3 +132,67 @@ Para revertir, conservar las tablas aditivas. No volver a un consumidor Cotizaci
 rechace `estadoFuentes` mientras se lean perfiles con ese campo. Mantener el consumidor
 compatible y decidir una imagen de Perfilamiento correctiva con el operador; no ejecutar
 `rollout undo` ciego ni borrar evidencias para hacer pasar una imagen antigua.
+## Publicacion acotada de HU44
+
+La instancia `cicd_perfilamiento` activa `restrict_service_access=true`,
+`artifact_force_destroy=false` y aprobacion manual; su ECR usa
+`force_delete=false`. Los valores por defecto del modulo conservan el
+comportamiento de los otros servicios. Revisar el plan guardado contra el state
+productivo existente: aceptar solo creaciones dentro de `ecr_perfilamiento` y
+`cicd_perfilamiento`, sin reemplazos, borrados ni cambios a otros recursos.
+Conservar los disparadores pausados, la conexion existente y la regla ALB 11.
+
+Los roles de build y deploy confian en CodeBuild solo desde la cuenta propia y
+el ARN exacto de su proyecto. El rol de CodePipeline mantiene el trust de
+servicio documentado: no agregar condiciones SourceArn/SourceAccount sin
+soporte confirmado. Sus permisos alcanzan solo su bucket, sus dos proyectos y
+la conexion existente con `FullRepositoryId` exacto. `BranchName` usa
+`StringEqualsIfExists`: AWS no exige contexto de rama en todas las lecturas
+por commit. Esto rechaza otra rama cuando AWS la informa, pero no acredita
+pertenencia de un SHA a main. Verificar esa pertenencia y la procedencia antes
+de aprobar Deploy.
+
+La salida del SG nuevo permite TCP 443 para AWS/EKS, S3 y kubectl, y TCP 80
+para los repositorios apt del fallback `gettext-base` del buildspec existente.
+Los destinos publicos requieren `0.0.0.0/0`; no abrir otros puertos ni entrada
+al build. El DNS de AmazonProvidedDNS no depende de una regla UDP 53 del SG.
+Solo agregar entrada 443 al SG del cluster desde este SG nuevo.
+
+EC2 necesita el comodin `network-interface/*` porque asigna el ID al crear la
+interfaz. La creacion exige ademas el SG nuevo y las subnets privadas exactas.
+DeleteNetworkInterface no ofrece una condicion de SG: se limita a la cuenta,
+region, VPC y subnets autorizadas; conserva acceso residual a otras ENI de esas
+subnets. No atribuir aislamiento por proyecto a ese permiso. La concesion de
+uso de ENI se limita ademas a `codebuild.amazonaws.com`. Solo las lecturas
+Describe de EC2 y GetAuthorizationToken de ECR necesitan `Resource="*"`.
+Ninguno de los tres roles recibe `iam:PassRole`; el actor de provisionamiento
+necesita pasarlos a sus respectivos servicios sin ampliar roles existentes.
+S3 conserva logs/artefactos 30 dias y ECR mantiene su politica de diez imagenes.
+
+La creacion del pipeline puede iniciar Source/Build aunque DetectChanges sea
+false y no haya triggers. La aprobacion posterior al build solo retiene Deploy.
+Para esta entrega, autorizar exclusivamente
+`70b1d43c35a690965d06875929e8b2547da5f071`, sin PR51. Contrastar revision de
+Source, `resolvedSourceVersion`, `COMMIT_ID`, resultado de pruebas, tag y digest
+ECR antes de aprobar. Si la inicial toma otro SHA, detenerla sin aprobar Deploy
+y lanzar una ejecucion con `sourceRevisions` explicito. Si toma el SHA autorizado,
+reutilizar su imagen y ejecucion: los tags ECR son inmutables. El tag esperado es
+`perfilamiento-0.1.0-70b1d43`; no reconstruirlo si ya existe.
+
+Tras el apply revisado, usar primero el rol propio para leer Deployment,
+replicas, imagen/digest, env por nombre y esquema, sin imprimir secretos.
+Comprobar la base existente y las tablas `perfiles`, `referencias_perfil`,
+`consultas_perfilamiento` y `eventos_consentimiento`. Ante diferencias, detenerse.
+El init-db autorizado agrega solo `consultas_informacion_cliente`; no crear
+las tablas de PR51 ni ejecutar inicializaciones que amplien ese alcance.
+Guardar snapshot privado del Deployment, revision, imagen y esquema antes de
+migrar; no copiar secretos. Verificar la tabla y las rutas del productor antes
+de configurar en BFF web
+`PERFILAMIENTO_SERVICE_URL=http://perfilamiento.perfilamiento.svc.cluster.local:8080`.
+Conservar los demas valores de env y `ENCRYPTED_LOGIN_ENABLED=true`.
+
+Comprobar el digest del pod y los contratos autenticados HU44/HU46 con replay,
+ownership y rechazos reales. Las fuentes sinteticas no acreditan integracion
+con bancos. Ante un fallo, restaurar la imagen/configuracion del snapshot y la
+URL previa del BFF con su via propia. Conservar la tabla aditiva y sus datos:
+la reversion de aplicacion no autoriza DROP ni rollback de la base.

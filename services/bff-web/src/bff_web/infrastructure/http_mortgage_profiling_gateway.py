@@ -56,6 +56,7 @@ def _command_json(command: MortgageProfilingCommand) -> dict[str, object]:
     return {
         "operationId": str(command.operation_id),
         "socioId": command.partner_id,
+        "productoId": "mortgage-life",
         "asesorId": str(command.advisor_id),
         "cliente": {
             "clienteId": str(command.client.client_id),
@@ -84,13 +85,21 @@ def _controlled_error(error: HTTPError) -> MortgageProfilingError:
     allowed = {
         400: {"solicitud_invalida"},
         403: {"consentimiento_ausente", "consentimiento_no_vigente"},
-        409: {"conflicto_idempotencia"},
+        404: {"operacion_no_encontrada"},
+        409: {"conflicto_idempotencia", "operacion_en_curso", "operacion_reintentable"},
+        429: {"cuota_socio_excedida", "socio_ocupado"},
         422: {"perfil_vencido", "regla_de_negocio"},
         503: {"perfilamiento_no_disponible", "servicio_no_disponible"},
     }
     if not isinstance(code, str) or code not in allowed.get(error.code, set()):
         return MortgageProfilingError("servicio_no_disponible", 503)
-    return MortgageProfilingError(code, error.code)
+    retry_after = None
+    if error.code in {409, 429}:
+        try:
+            retry_after = max(1, int(error.headers.get("Retry-After", "1")))
+        except (ValueError, TypeError):
+            retry_after = 1
+    return MortgageProfilingError(code, error.code, retry_after)
 
 
 def _result(payload: dict[str, Any]) -> MortgageProfilingResult:

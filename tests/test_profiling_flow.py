@@ -152,12 +152,16 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
             )
         )
         client = bff.test_client()
-        registered = client.post(
+        registered = identity.test_client().post(
             "/v1/usuarios",
             json={
                 "nombre": "Cliente integrado",
                 "correo": "integracion@solventa.co",
                 "contrasena": "Solventa123!",
+                "tipoDocumento": "cc",
+                "numeroDocumento": "1012345678",
+                "telefono": "+573001234567",
+                "fechaNacimiento": "1990-01-01",
             },
         )
         assert registered.status_code == 201
@@ -334,7 +338,7 @@ def test_decisions_without_required_permission_block_the_full_flow(
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 0
 
 
-def test_partial_source_failure_never_creates_a_quote(
+def test_partial_source_failure_creates_traceable_degraded_profile(
     flow: Flow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     flow.authorize()
@@ -355,10 +359,23 @@ def test_partial_source_failure_never_creates_a_quote(
             "Idempotency-Key": str(uuid4()),
         },
     )
-    assert response.status_code == 503
-    assert response.get_json()["code"] == "perfilamiento_no_disponible"
+    assert response.status_code == 201
+    profile = flow.client.get(
+        f"{REQUESTS}/{response.get_json()['id']}/perfilamiento",
+        headers=flow.headers,
+    )
+    assert profile.status_code == 200
+    assert profile.get_json()["fallbackUsed"] is True
+    assert profile.get_json()["degradaciones"] == [
+        {
+            "fuente": "open_data",
+            "motivo": "fuente_no_disponible",
+            "politica": "default",
+            "versionPolitica": "degradacion-1",
+        }
+    ]
     with Session(create_engine(flow.quote_database)) as session:
-        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
 
 
 def test_authorized_cached_source_reaches_quote_and_is_explicit(
@@ -377,7 +394,11 @@ def test_authorized_cached_source_reaches_quote_and_is_explicit(
     assert response.status_code == 200
     profile = response.get_json()
     assert profile["fallbackUsed"] is True
-    assert profile["fuentes"][1] == original["fuentes"][1]
+    esperada = {
+        **original["fuentes"][1],
+        "version": f"{original['fuentes'][1]['version']}:cache",
+    }
+    assert {**profile["fuentes"][1], "vigenteHasta": None} == {**esperada, "vigenteHasta": None}
     assert profile["estadoFuentes"][1]["estado"] == "cache"
     assert profile["estadoFuentes"][1]["motivo"] == "fuente_no_disponible"
     contract = yaml.safe_load(
@@ -489,9 +510,17 @@ def test_real_jwt_payment_recovery_ownership_and_saga(flow: Flow) -> None:
     assert updated["estado"] == "aprobada"
     # Otra sesión JWT real no puede cambiar ownership mediante query ni body.
     password = "Integration123!"
-    registered = flow.client.post(
+    registered = flow.identity.test_client().post(
         "/v1/usuarios",
-        json={"nombre": "Otro cliente", "correo": "otro-pago@solventa.co", "contrasena": password},
+        json={
+            "nombre": "Otro cliente",
+            "correo": "otro-pago@solventa.co",
+            "contrasena": password,
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1098765432",
+            "telefono": "+573009876543",
+            "fechaNacimiento": "1992-02-02",
+        },
     )
     assert registered.status_code == 201
     login = flow.client.post(
