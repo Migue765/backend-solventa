@@ -77,7 +77,7 @@ toda esa matriz ni que un escenario HTTP equivalga a cobertura de lineas.
 Opt-in, secuencial por defecto y nunca contra AWS:
 
 ```powershell
-python -m tests.jmeter.run --jmeter-home reports\tools\apache-jmeter-5.6.3 --mode performance --iterations 20 --allow-load --output reports\jmeter-performance
+python -m tests.jmeter.run --jmeter-home reports\tools\apache-jmeter-5.6.3 --mode performance --threads 8 --iterations 20 --allow-load --output reports\jmeter-performance
 ```
 
 Cada iteracion registra un usuario nuevo y crea ocho operaciones distintas; los reintentos
@@ -92,6 +92,9 @@ la primera operacion y su compilacion Groovy cuentan. Se exige cero assertions f
 conteo exacto de recorridos y al menos 20 muestras por grupo para activar percentiles
 nearest-rank. Veinte muestras es un chequeo inicial, no significancia estadistica de p99.
 El smoke verifica funcionalidad sin convertir una sola muestra en evidencia de SLO.
+Para Vida Hipotecaria, el evaluador calcula además la capacidad cerrada a partir del
+tiempo medio real de `journey.quote.mortgage-life` y la concurrencia configurada. La
+ejecución falla si la capacidad es menor de 20.000 perfilamientos/ofertas por hora.
 
 | Grupo | Recorrido medido | Gate p95 / p99 |
 | --- | --- | --- |

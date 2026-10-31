@@ -8,13 +8,24 @@ PASSWORD = "Solventa123!"
 INTERNAL_TOKEN = "internal-test-token"
 
 
-def _register_client(client: FlaskClient) -> str:
+def _register_client(client: FlaskClient, with_document: bool = False) -> str:
+    document = (
+        {
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1012345678",
+            "telefono": "+573001234567",
+            "fechaNacimiento": "1985-02-10",
+        }
+        if with_document
+        else {}
+    )
     response = client.post(
         "/v1/usuarios",
         json={
             "nombre": "Ana Cliente",
             "correo": "ana@solventa.co",
             "contrasena": PASSWORD,
+            **document,
         },
     )
     assert response.status_code == 201
@@ -92,6 +103,37 @@ def test_internal_client_catalog_requires_service_credential(make_app: Any) -> N
             }
         ]
     }
+
+
+def test_internal_client_lookup_by_document_is_exact_and_authorized(make_app: Any) -> None:
+    app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
+    client = app.test_client()
+    client_id = _register_client(client, with_document=True)
+    headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}"}
+
+    unauthorized = client.get("/v1/clientes?tipoDocumento=cc&numeroDocumento=1012345678")
+    found = client.get(
+        "/v1/clientes?tipoDocumento=cc&numeroDocumento=1012345678",
+        headers=headers,
+    )
+    missing = client.get(
+        "/v1/clientes?tipoDocumento=cc&numeroDocumento=1099999999",
+        headers=headers,
+    )
+
+    assert unauthorized.status_code == 401
+    assert found.status_code == 200
+    assert found.get_json() == {
+        "clienteId": client_id,
+        "nombre": "Ana Cliente",
+        "correo": "ana@solventa.co",
+        "tipoDocumento": "cc",
+        "numeroDocumento": "1012345678",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "1985-02-10",
+    }
+    assert missing.status_code == 404
+    assert missing.get_json()["code"] == "cliente_no_encontrado"
 
 
 def test_partner_user_has_distinct_role_and_organization_after_refresh(make_app: Any) -> None:

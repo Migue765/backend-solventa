@@ -14,6 +14,7 @@ from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
     AdmisionSocioModel,
     CotizacionModel,
+    OfertaHipotecariaModel,
     OperacionSocioModel,
     ReservaOperacionModel,
     SeleccionOfertaModel,
@@ -80,22 +81,19 @@ def partner_headers(flow: Flow, partner_id: str, email: str) -> dict[str, str]:
 def prepare(flow: Flow) -> tuple[dict[str, str], dict]:
     headers = partner_headers(flow, "BANK-E2E", "socio@integracion.co")
     flow.authorize()
-    consent = flow.client.get(CONSENT, headers=flow.headers).get_json()
-    current = flow.client.get("/v1/sesiones/actual", headers=flow.headers).get_json()
     body = {
         "operationId": str(uuid4()),
         "socioId": "BANK-E2E",
-        "productoId": "automotive",
-        "datosProducto": {"vehiclePlate": "ABC123"},
+        "productoId": "mortgage-life",
+        "datosProducto": {
+            "mortgageBalance": "100000000",
+            "referenciaCredito": "HIP-E2E-001",
+        },
         "cliente": {
-            "clienteId": current["usuario"]["id"],
             "tipoCliente": "persona_natural",
             "tipoDocumento": "cc",
-            "numeroDocumento": "1023456789",
-            "telefono": "+573001234567",
+            "numeroDocumento": "1012345678",
         },
-        "consentimientoId": consent["consentimientoId"],
-        "consentimientoVersion": consent["version"],
     }
     return headers, body
 
@@ -150,7 +148,7 @@ def test_portal_context_matches_authenticated_session_without_cross_partner_leak
         assert set(context["socios"][0]) == {"socioId", "productos"}
         assert context["socios"][0]["socioId"] == partner
         products = context["socios"][0]["productos"]
-        assert "automotive" in products
+        assert products == ["mortgage-life"]
         assert all(isinstance(product, str) and product for product in products)
         assert foreign not in response.get_data(as_text=True)
         assert partner_state(flow) == original
@@ -221,10 +219,21 @@ def test_partner_login_consent_profile_quote_persistence_and_recovery(flow: Flow
     context = flow.client.get("/v1/socios/actual", headers=headers)
     assert context.status_code == 200
     print("partner_context=" + json.dumps(context.get_json()))
-    assert "automotive" in context.get_json()["socios"][0]["productos"]
+    assert context.get_json()["socios"][0]["productos"] == ["mortgage-life"]
     post_headers = {**headers, "Idempotency-Key": body["operationId"], "API-Version": "1"}
     first = flow.client.post(PATH, json=body, headers=post_headers)
     assert first.status_code == 201, first.get_json()
+    offer = first.get_json()["oferta"]
+    assert [factor["nombre"] for factor in offer["explicacion"]["factoresDeterminantes"]] == [
+        "Saldo hipotecario",
+        "Perfil de riesgo autorizado",
+        "Regla y plan",
+    ]
+    assert offer["trazabilidad"]["reglaVersion"] == "academico-v1"
+    assert {source["nombre"] for source in offer["trazabilidad"]["fuentes"]} == {
+        "open_finance",
+        "open_data",
+    }
     retry = flow.client.post(PATH, json=body, headers=post_headers)
     assert retry.get_json() == first.get_json()
     recovered = flow.client.get(f"{PATH}/{body['operationId']}?socioId=BANK-E2E", headers=headers)
@@ -232,15 +241,17 @@ def test_partner_login_consent_profile_quote_persistence_and_recovery(flow: Flow
     with crear_sesiones(flow.quote_database)() as session:
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
         assert session.scalar(select(func.count()).select_from(OperacionSocioModel)) == 1
+        assert session.scalar(select(func.count()).select_from(OfertaHipotecariaModel)) == 1
     request_id = first.get_json()["solicitudId"]
     customer_view = flow.client.get(
         f"/v1/solicitudes-cotizacion/{request_id}", headers=flow.headers
     )
     assert customer_view.status_code == 200
-    assert customer_view.get_json()["productoId"] == "automotive"
+    assert customer_view.get_json()["productoId"] == "mortgage-life"
+    consent = flow.client.get(CONSENT, headers=flow.headers).get_json()
     revoked = flow.client.put(
         CONSENT,
-        json={"autorizado": False, "version": body["consentimientoVersion"]},
+        json={"autorizado": False, "version": consent["version"]},
         headers=flow.headers,
     )
     assert revoked.status_code == 200
@@ -249,7 +260,7 @@ def test_partner_login_consent_profile_quote_persistence_and_recovery(flow: Flow
         PATH, json=new_body, headers={**headers, "Idempotency-Key": new_body["operationId"]}
     )
     assert denied.status_code == 403
-    assert denied.get_json()["code"] == "consentimiento_invalido"
+    assert denied.get_json()["code"] == "consentimiento_no_vigente"
     with crear_sesiones(flow.quote_database)() as session:
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
 
@@ -403,8 +414,7 @@ def test_admission_audit_correlation_crosses_http_without_changing_replay(
         assert event["correlationId"] == correlation_id
         assert event["status"] == 429
         assert headers["Authorization"].removeprefix("Bearer ") not in record.getMessage()
-        assert str(body["cliente"]["clienteId"]) not in record.getMessage()
-        assert "1023456789" not in record.getMessage()
+        assert body["cliente"]["numeroDocumento"] not in record.getMessage()
         assert "+573001234567" not in record.getMessage()
     with crear_sesiones(flow.quote_database)() as session:
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
@@ -432,7 +442,8 @@ def test_partner_journey_latency_100_requests(flow: Flow) -> None:
         samples[math.ceil(len(samples) * 0.99) - 1],
     )
     print(
-        f"local Windows, HTTP downstream, SQLite, automotive n=100 p95={p95:.2f}ms p99={p99:.2f}ms"
+        "local Windows, HTTP downstream, SQLite, mortgage-life "
+        f"n=100 p95={p95:.2f}ms p99={p99:.2f}ms"
     )
     assert p95 <= 250
     assert p99 <= 500

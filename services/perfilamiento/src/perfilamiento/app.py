@@ -56,6 +56,8 @@ class ConsultaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     cliente_id: UUID = Field(alias="clienteId")
     referencia_id: UUID = Field(alias="referenciaId")
+    operation_id: UUID | None = Field(default=None, alias="operationId")
+    credito_id: str | None = Field(default=None, alias="creditoId", min_length=1, max_length=64)
     consentimiento_id: UUID | None = Field(default=None, alias="consentimientoId")
     consentimiento_version: int | None = Field(default=None, alias="consentimientoVersion", ge=1)
 
@@ -147,6 +149,8 @@ def create_app(
             g.correlation_id,
             payload.consentimiento_id,
             payload.consentimiento_version,
+            payload.operation_id,
+            payload.credito_id,
         )
         return jsonify(perfil.model_dump(mode="json", by_alias=True)), 201
 
@@ -169,6 +173,14 @@ def create_app(
             g.correlation_id,
         )
         return jsonify(consulta.model_dump(mode="json", by_alias=True)), 201
+
+    @app.get("/v1/consultas-informacion-cliente/<uuid:operation_id>")
+    def recuperar_informacion(operation_id: UUID) -> tuple[Response, int] | Response:
+        socio_id = request.args.get("socioId", "")
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        consulta = servicio_informacion.recuperar(socio_id, operation_id, g.correlation_id)
+        return jsonify(consulta.model_dump(mode="json", by_alias=True))
 
     @app.post("/v1/eventos/consentimientos")
     def aplicar_consentimiento() -> tuple[Response, int] | Response:

@@ -22,6 +22,38 @@ class FuenteResponse(BaseModel):
     vigenteHasta: AwareDatetime
     simulada: bool
     indicadorRiesgo: Decimal = Field(ge=0, le=1)
+    variablesDisponibles: tuple[str, ...]
+
+
+class VariableResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nombre: Literal["indicador_riesgo"]
+    fuente: Literal["open_finance", "open_data"]
+    valorNormalizado: Decimal = Field(ge=0, le=1)
+    autorizadaPor: UUID
+
+
+class VariableExcluidaResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nombre: str
+    fuente: Literal["open_finance", "open_data"]
+    motivo: Literal["sin_consentimiento"]
+
+
+class ReglaRiesgoResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reglaId: Literal["riesgo-maximo-fuentes"]
+    version: Literal["1.0", "legacy"]
+    modeloVersion: Literal["perfil-riesgo-1", "perfil-mock-1"]
+    expresion: Literal["max(indicador_riesgo_por_fuente)"]
+
+
+class DegradacionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fuente: Literal["open_finance", "open_data"]
+    motivo: Literal["fuente_no_disponible", "fuente_vencida"]
+    politica: Literal["cache", "default"]
+    versionPolitica: Literal["degradacion-1"]
 
 
 class PerfilResponse(BaseModel):
@@ -29,6 +61,8 @@ class PerfilResponse(BaseModel):
     perfilId: UUID
     clienteId: UUID
     referenciaId: UUID
+    operationId: UUID
+    creditoId: str
     version: int = Field(ge=1)
     modeloVersion: str
     score: Decimal = Field(ge=0, le=1)
@@ -38,6 +72,11 @@ class PerfilResponse(BaseModel):
     calculadoEn: AwareDatetime
     vigenteHasta: AwareDatetime
     fuentes: tuple[FuenteResponse, ...]
+    variables: tuple[VariableResponse, ...]
+    variablesExcluidas: tuple[VariableExcluidaResponse, ...]
+    regla: ReglaRiesgoResponse
+    degradaciones: tuple[DegradacionResponse, ...]
+    hashDecision: str = Field(pattern=r"^[0-9a-f]{64}$")
     fallbackUsed: bool
 
 
@@ -52,6 +91,8 @@ class ProveedorPerfilHttp:
         referencia_id: UUID,
         consentimiento_id: UUID | None = None,
         consentimiento_version: int | None = None,
+        operation_id: UUID | None = None,
+        credito_id: str | None = None,
     ) -> PerfilRiesgo:
         body: dict[str, str | int] = {
             "clienteId": str(cliente_id),
@@ -60,12 +101,20 @@ class ProveedorPerfilHttp:
         if consentimiento_id is not None and consentimiento_version is not None:
             body["consentimientoId"] = str(consentimiento_id)
             body["consentimientoVersion"] = consentimiento_version
+        if operation_id is not None:
+            body["operationId"] = str(operation_id)
+        if credito_id is not None:
+            body["creditoId"] = credito_id
         perfil = self._consultar(
             "/v1/perfiles",
             cliente_id,
             body,
         )
         if perfil.evidencia is None or perfil.evidencia["referenciaId"] != str(referencia_id):
+            raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if operation_id is not None and perfil.evidencia["operationId"] != str(operation_id):
+            raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if credito_id is not None and perfil.evidencia["creditoId"] != credito_id:
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
         if consentimiento_id is not None and (
             perfil.evidencia["consentimientoId"] != str(consentimiento_id)

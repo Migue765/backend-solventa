@@ -1,6 +1,8 @@
 import json
+from datetime import date
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -97,6 +99,23 @@ class HttpIdentityGateway:
     def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
         payload = self._get(f"/v1/clientes/{client_id}", correlation_id, allow_not_found=True)
         return _client_from_json(payload) if payload else None
+
+    def get_client_by_document(
+        self, document_type: str, identification: str, correlation_id: str
+    ) -> User | None:
+        query = urlencode(
+            {
+                "tipoDocumento": document_type,
+                "numeroDocumento": identification,
+            }
+        )
+        payload = self._get(f"/v1/clientes?{query}", correlation_id, allow_not_found=True)
+        if not payload:
+            return None
+        client = _client_from_json(payload)
+        if client.document_type != document_type or client.identification != identification:
+            raise IdentityUnavailableError()
+        return client
 
     def _get(
         self,
@@ -196,11 +215,19 @@ def _user_from_json(data: dict[str, Any]) -> User:
         partners = data.get("socios", [])
         if not isinstance(partners, list) or not all(isinstance(value, str) for value in partners):
             raise ValueError("socios invalidos")
+        document_type = data.get("tipoDocumento")
+        identification = data.get("numeroDocumento")
+        if (document_type is None) != (identification is None):
+            raise ValueError("documento incompleto")
         return User(
             UUID(data["id"]),
             data["nombre"],
             data["correo"],
             data["rol"],
+            document_type=_text(document_type) if document_type is not None else "cc",
+            identification=_text(identification) if identification is not None else "1234567890",
+            phone=_optional_phone(data.get("telefono")),
+            birth_date=_optional_date(data.get("fechaNacimiento")),
             partner_ids=tuple(partners),
         )
     except (KeyError, TypeError, ValueError) as error:
@@ -211,11 +238,24 @@ def _client_from_json(data: object) -> User:
     if not isinstance(data, dict):
         raise IdentityUnavailableError()
     try:
-        return User(
+        document_type = data.get("tipoDocumento")
+        identification = data.get("numeroDocumento")
+        if (document_type is None) != (identification is None):
+            raise ValueError("documento incompleto")
+        common = (
             UUID(data["clienteId"]),
             _text(data["nombre"]),
             _text(data["correo"]),
             "cliente",
+        )
+        if document_type is None:
+            return User(*common)
+        return User(
+            *common,
+            document_type=_text(document_type),
+            identification=_text(identification),
+            phone=_optional_phone(data.get("telefono")),
+            birth_date=_optional_date(data.get("fechaNacimiento")),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IdentityUnavailableError() from error
@@ -244,3 +284,18 @@ def _seconds(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("segundos inválidos")
     return value
+
+
+def _optional_phone(value: object) -> str | None:
+    if value is None:
+        return None
+    phone = _text(value)
+    if len(phone) != 13 or not phone.startswith("+57") or not phone[3:].isdigit():
+        raise ValueError("telefono invalido")
+    return phone
+
+
+def _optional_date(value: object) -> date | None:
+    if value is None:
+        return None
+    return date.fromisoformat(_text(value))

@@ -55,6 +55,25 @@ llamada externa si el proveedor ejecuta pero pierde su respuesta antes de persis
 Un reintento completado no consume cuota, uno fallido nuevamente admitido si.
 No se guardan cuerpos originales en reservas ni se retornan PII en recuperacion.
 
+### Oferta explicable de vida hipotecaria (HU49)
+
+Para `mortgage-life`, la operacion persiste además una oferta inmutable en
+`ofertas_hipotecarias`, asociada por `socio_id` y `operation_id`. La oferta guarda
+precio, cobertura, condiciones, explicación y referencias de trazabilidad; también
+conserva la evidencia completa de la decisión con entradas, variables, fuentes,
+perfil, regla y versiones. Los hashes de oferta, decisión y contenido permiten
+comprobar integridad y reconstruir el cálculo sin consultar el catálogo o las reglas
+actuales.
+
+El precio usa el saldo hipotecario, el score del perfil autorizado y la regla
+versionada vigente. La respuesta explica esos factores en lenguaje comercial y
+expone únicamente referencias de trazabilidad; la evidencia completa permanece en
+Cotización. Recuperaciones y reintentos leen la oferta persistida y no vuelven a
+tarificar. Perfil ausente, producto no disponible o regla no vigente abortan antes
+de crear operación u oferta parcial.
+
+Aplicar `alembic upgrade head` para instalar la revisión `ofertas_hipotecarias`.
+
 Overrides administrativos para un socio, sin cambiar limites globales:
 
 ```sh
@@ -63,7 +82,7 @@ flask --app cotizacion.app:create_app configure-partner-limit --partner-id BANCO
 
 El comando conserva la ventana y consumo existentes. Para verificar 429 de forma
 acotada usar un socio sintetico nuevo, dos operaciones diferentes y una tercera;
-otra organizacion debe continuar. Para un benchmark aislado de100 muestras usar
+otra organizacion debe continuar. Para un benchmark aislado de 100 muestras usar
 un socio sintetico propio y `--per-minute 200`, sin elevar umbrales de latencia.
 No requiere nuevos secretos, Redis ni servicio paralelo.
 
@@ -195,6 +214,9 @@ El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe
 `Authorization: Bearer`. El servicio interno recibe además `clienteId`, `tipoCliente`,
 `tipoDocumento`, `identificacion`, `correo` y `telefono`; sus consultas usan `clienteId`.
 No se admiten campos adicionales ni datos de otro producto:
+
+En el canal socio, `mortgage-life` recibe además `referenciaCredito`; Cotizacion la conserva
+como `creditoId` real al solicitar HU48 y no la sustituye por `operationId`.
 
 | productoId | datosProducto (todos sus valores son strings) |
 |------------|----------------------------------------------|
