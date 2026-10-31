@@ -167,8 +167,22 @@ def test_perfil_vencido_no_produce_oferta(database_url, monkeypatch):
 
     respuesta = app.test_client().post(oferta_path(body), headers=AUTH)
 
-    assert respuesta.status_code == 503
-    assert respuesta.get_json()["error"] == "perfilamiento_no_disponible"
+    assert respuesta.status_code == 422
+    assert respuesta.get_json()["error"] == "perfil_vencido"
+    assert conteo(database_url, OfertaSocioModel) == 0
+
+
+def test_fuente_vencida_no_produce_oferta(database_url, monkeypatch):
+    app, body, profiling = operacion(database_url, monkeypatch)
+    for perfil in profiling.profiles.values():
+        perfil["fuentes"][0]["vigenteHasta"] = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        ).isoformat()
+
+    respuesta = app.test_client().post(oferta_path(body), headers=AUTH)
+
+    assert respuesta.status_code == 422
+    assert respuesta.get_json()["error"] == "fuente_vencida"
     assert conteo(database_url, OfertaSocioModel) == 0
 
 

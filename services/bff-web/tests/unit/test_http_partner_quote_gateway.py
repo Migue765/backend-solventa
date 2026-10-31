@@ -49,6 +49,8 @@ def test_rejects_an_offer_that_breaks_the_contract() -> None:
         (404, "oferta_no_encontrada", ("oferta_no_encontrada", 404)),
         (404, "operacion_no_encontrada", ("operacion_no_encontrada", 404)),
         (422, "cotizacion_vencida", ("cotizacion_vencida", 422)),
+        (422, "perfil_vencido", ("perfil_vencido", 422)),
+        (422, "fuente_vencida", ("fuente_vencida", 422)),
         (422, "decision_inconsistente", ("decision_inconsistente", 422)),
         (403, "consentimiento_no_vigente", ("consentimiento_no_vigente", 403)),
         (503, "perfilamiento_no_disponible", ("perfilamiento_no_disponible", 503)),

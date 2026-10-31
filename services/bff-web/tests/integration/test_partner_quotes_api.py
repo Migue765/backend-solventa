@@ -221,6 +221,8 @@ def test_offer_rejections_happen_before_cotizacion(
     ("code", "status", "public", "public_status"),
     [
         ("cotizacion_vencida", 422, "entradas_vencidas", 422),
+        ("perfil_vencido", 422, "entradas_vencidas", 422),
+        ("fuente_vencida", 422, "entradas_vencidas", 422),
         ("decision_inconsistente", 422, "oferta_no_disponible", 422),
         ("oferta_no_encontrada", 404, "oferta_no_encontrada", 404),
         ("perfilamiento_no_disponible", 503, "servicio_no_disponible", 503),
