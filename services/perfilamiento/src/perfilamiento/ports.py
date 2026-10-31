@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from perfilamiento.domain import Consentimiento, Fuente
@@ -11,6 +11,6 @@ class Consentimientos(Protocol):
 
 class FuentePerfilamiento(Protocol):
     @property
-    def nombre(self) -> str: ...
+    def nombre(self) -> Literal["open_finance", "open_data"]: ...
 
     def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente: ...

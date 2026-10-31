@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from bff_web.domain.auth import User
 from bff_web.domain.client_information import ClientInformationResult
 from flask import Flask
-from support import USER, FakeIdentity, KeyPair, sign_token
+from support import USER, FakeIdentity, KeyPair, bearer, sign_token
 
 PARTNER = User(
     UUID("5323bf51-1899-4a3e-9547-b8ccb9c2c84f"),
@@ -17,11 +17,12 @@ PARTNER = User(
 class ClientInformationGatewayStub:
     def __init__(self) -> None:
         self.payload: dict[str, object] | None = None
+        self.result: ClientInformationResult | None = None
 
     def consult(self, payload: dict[str, object], correlation_id: str) -> ClientInformationResult:
         self.payload = payload
         response = {key: value for key, value in payload.items() if key != "datosSolicitados"}
-        return ClientInformationResult.model_validate(
+        self.result = ClientInformationResult.model_validate(
             {
                 **response,
                 "estado": "completada",
@@ -39,6 +40,15 @@ class ClientInformationGatewayStub:
                 "consultadaEn": "2026-10-24T20:00:00Z",
             }
         )
+        return self.result
+
+    def recover(
+        self, socio_id: str, operation_id: UUID, correlation_id: str
+    ) -> ClientInformationResult:
+        assert self.result is not None
+        assert self.result.partner_id == socio_id
+        assert self.result.operation_id == operation_id
+        return self.result
 
 
 def _token(keypair: KeyPair) -> str:
@@ -110,6 +120,33 @@ def test_partner_resolves_client_by_document_before_consulting(
     assert gateway.payload["clienteId"] == str(USER.user_id)
     assert identity.calls[-1][0] == "get_client_by_document"
     assert identity.calls[-1][1][:2] == ("cc", "1234567890")
+
+
+def test_partner_recovers_authorized_information_by_operation(app: Flask, keypair: KeyPair) -> None:
+    gateway = ClientInformationGatewayStub()
+    app.extensions["client_information_gateway"] = gateway
+    operation_id = uuid4()
+    gateway.consult(
+        {
+            "operationId": str(operation_id),
+            "socioId": "BANCO-001",
+            "actorId": str(PARTNER.user_id),
+            "clienteId": str(USER.user_id),
+            "productoId": "mortgage-life",
+            "finalidad": "cotizacion",
+            "datosSolicitados": ["indicador_riesgo"],
+        },
+        "corr-base",
+    )
+
+    response = app.test_client().get(
+        f"/v1/socios/consultas-informacion-cliente/{operation_id}",
+        query_string={"socioId": "BANCO-001"},
+        headers={**bearer(_token(keypair)), "API-Version": "1"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["operationId"] == str(operation_id)
 
 
 def test_client_identifier_modes_are_exclusive_and_missing_document_is_not_found(

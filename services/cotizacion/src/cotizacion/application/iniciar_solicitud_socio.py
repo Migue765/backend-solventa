@@ -75,6 +75,7 @@ class IniciarSolicitudSocio:
                     comando.solicitud,
                     idempotency_key=uuid5(NAMESPACE_URL, namespace),
                     cotizacion_id=uuid5(NAMESPACE_URL, namespace + ":cotizacion"),
+                    operation_id=comando.operation_id,
                 )
             )
             instantanea = solicitud.cotizacion.instantanea

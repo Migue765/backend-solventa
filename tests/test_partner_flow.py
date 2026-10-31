@@ -85,7 +85,10 @@ def prepare(flow: Flow) -> tuple[dict[str, str], dict]:
         "operationId": str(uuid4()),
         "socioId": "BANK-E2E",
         "productoId": "mortgage-life",
-        "datosProducto": {"mortgageBalance": "100000000"},
+        "datosProducto": {
+            "mortgageBalance": "100000000",
+            "referenciaCredito": "HIP-E2E-001",
+        },
         "cliente": {
             "tipoCliente": "persona_natural",
             "tipoDocumento": "cc",

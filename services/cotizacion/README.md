@@ -215,6 +215,9 @@ El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe
 `tipoDocumento`, `identificacion`, `correo` y `telefono`; sus consultas usan `clienteId`.
 No se admiten campos adicionales ni datos de otro producto:
 
+En el canal socio, `mortgage-life` recibe además `referenciaCredito`; Cotizacion la conserva
+como `creditoId` real al solicitar HU48 y no la sustituye por `operationId`.
+
 | productoId | datosProducto (todos sus valores son strings) |
 |------------|----------------------------------------------|
 | `automotive` | `vehiclePlate` |

@@ -98,6 +98,39 @@ paths:
           description: idempotencia_conflicto
         "503":
           description: Dependencia o fuente no disponible; no contiene datos parciales
+  /v1/socios/consultas-informacion-cliente/{operationId}:
+    get:
+      tags: [Socios]
+      operationId: recuperarInformacionCliente
+      summary: Recupera una consulta autorizada por su operación
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Consulta persistida con consentimiento aún vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InformacionClienteAutorizada"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Socio o consentimiento no autorizado
+        "404":
+          description: consulta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/socios/clientes/por-documento:
     get:
       tags: [Socios]
@@ -144,7 +177,7 @@ paths:
                     type: string
                   consentimientoEstado:
                     type: string
-                    enum: [vigente, vencido, revocado, rechazado, ausente]
+                    enum: [vigente, insuficiente, vencido, revocado, rechazado, ausente]
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
@@ -1116,11 +1149,14 @@ components:
         datosProducto:
           type: object
           additionalProperties: false
-          required: [mortgageBalance]
+          required: [mortgageBalance, referenciaCredito]
           properties:
             mortgageBalance:
               type: string
               pattern: "^[1-9][0-9]{0,15}$"
+            referenciaCredito:
+              type: string
+              pattern: "^[A-Za-z0-9-]{4,30}$"
         cliente:
           type: object
           additionalProperties: false
@@ -1388,19 +1424,29 @@ components:
     Perfilamiento:
       type: object
       additionalProperties: false
-      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId,
-                 consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      required: [solicitudId, perfilId, operationId, creditoId, version, modeloVersion, score,
+                 nivel, consentimientoId, consentimientoVersion, calculadoEn, vigenteHasta,
+                 fuentes, variables, variablesExcluidas, regla, degradaciones, hashDecision,
+                 fallbackUsed]
       properties:
         solicitudId:
           type: string
         perfilId:
           type: string
           format: uuid
+        operationId:
+          type: string
+          format: uuid
+        creditoId:
+          type: string
+          minLength: 1
+          maxLength: 64
         version:
           type: integer
           minimum: 1
         modeloVersion:
           type: string
+          enum: [perfil-riesgo-1, perfil-mock-1]
         score:
           type: string
           description: Indicador sintetico entre 0 y 1, no informacion financiera real
@@ -1421,7 +1467,6 @@ components:
           format: date-time
         fallbackUsed:
           type: boolean
-          const: false
         fuentes:
           type: array
           minItems: 2
@@ -1429,7 +1474,8 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo]
+            required: [nombre, version, consultadaEn, vigenteHasta, simulada, indicadorRiesgo,
+                       variablesDisponibles]
             properties:
               nombre:
                 type: string
@@ -1447,6 +1493,86 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+              variablesDisponibles:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items:
+                  type: string
+        variables:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, valorNormalizado, autorizadaPor]
+            properties:
+              nombre:
+                type: string
+                const: indicador_riesgo
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              valorNormalizado:
+                type: string
+              autorizadaPor:
+                type: string
+                format: uuid
+        variablesExcluidas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, motivo]
+            properties:
+              nombre:
+                type: string
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              motivo:
+                type: string
+                const: sin_consentimiento
+        regla:
+          type: object
+          additionalProperties: false
+          required: [reglaId, version, modeloVersion, expresion]
+          properties:
+            reglaId:
+              type: string
+              const: riesgo-maximo-fuentes
+            version:
+              type: string
+              enum: ["1.0", legacy]
+            modeloVersion:
+              type: string
+              enum: [perfil-riesgo-1, perfil-mock-1]
+            expresion:
+              type: string
+              const: max(indicador_riesgo_por_fuente)
+        degradaciones:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, motivo, politica, versionPolitica]
+            properties:
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              motivo:
+                type: string
+                enum: [fuente_no_disponible, fuente_vencida]
+              politica:
+                type: string
+                enum: [cache, default]
+              versionPolitica:
+                type: string
+                const: degradacion-1
+        hashDecision:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     DesafioLogin:
       type: object
       additionalProperties: false

@@ -35,7 +35,8 @@ def construir_oferta_hipotecaria(
     if not isinstance(evidencia, dict):
         raise OfertaNoDisponibleError()
     fuentes = evidencia.get("fuentes")
-    if not isinstance(fuentes, list) or not fuentes:
+    degradaciones = evidencia.get("degradaciones")
+    if not isinstance(fuentes, list) or not fuentes or not isinstance(degradaciones, list):
         raise OfertaNoDisponibleError()
 
     resultado = ofertas_desde_decision(solicitud, solicitud.creada_en)
@@ -44,7 +45,7 @@ def construir_oferta_hipotecaria(
         raise OfertaNoDisponibleError()
     contenido = {
         **_oferta_a_dict(oferta),
-        "explicacion": _explicacion(oferta, detalle, perfil, regla),
+        "explicacion": _explicacion(oferta, detalle, perfil, regla, degradaciones),
         "trazabilidad": {
             "esquemaDecision": instantanea.contenido["esquema"],
             "hashDecision": instantanea.hash_decision,
@@ -103,6 +104,7 @@ def _explicacion(
     detalle: dict[str, Any],
     perfil: dict[str, Any],
     regla: dict[str, Any],
+    degradaciones: list[object],
 ) -> dict[str, Any]:
     saldo = Decimal(str(detalle["baseAsegurada"]))
     score = Decimal(str(perfil["score"]))
@@ -111,34 +113,53 @@ def _explicacion(
     tasa = Decimal(str(regla["tasa"]))
     factor_perfil = Decimal(str(regla["factorPerfil"]))
     prima = oferta.prima_mensual.monto
+    factores = [
+        {
+            "nombre": "Saldo hipotecario",
+            "valor": f"${saldo:,.0f} COP".replace(",", "."),
+            "impacto": "Define la suma asegurada y la base del cálculo.",
+        },
+        {
+            "nombre": "Perfil de riesgo autorizado",
+            "valor": f"Nivel {nivel}, score {score}",
+            "impacto": (
+                f"Ajusta la prima con el factor de perfil {factor_perfil} de la regla vigente."
+            ),
+        },
+        {
+            "nombre": "Regla y plan",
+            "valor": f"{regla['version']} / {plan['codigo']}",
+            "impacto": (
+                f"Aplica la tasa {tasa} y el factor de plan {plan['factor']} "
+                "con redondeo a pesos colombianos."
+            ),
+        },
+    ]
+    for degradacion in degradaciones:
+        if not isinstance(degradacion, dict):
+            raise OfertaNoDisponibleError()
+        fuente = degradacion.get("fuente")
+        politica = degradacion.get("politica")
+        motivo = degradacion.get("motivo")
+        if not all(isinstance(valor, str) and valor for valor in (fuente, politica, motivo)):
+            raise OfertaNoDisponibleError()
+        factores.append(
+            {
+                "nombre": "Disponibilidad de datos",
+                "valor": f"{fuente}: política {politica}",
+                "impacto": (
+                    f"Se aplicó una degradación trazable por {motivo}; "
+                    "la oferta conserva esta condición para su revisión."
+                ),
+            }
+        )
     return {
         "resumen": (
             f"La prima mensual de ${prima:,.0f} COP protege un saldo hipotecario de "
             f"${saldo:,.0f} COP. Se calculó con el perfil autorizado de riesgo {nivel} "
             f"y la regla {regla['version']}."
         ).replace(",", "."),
-        "factoresDeterminantes": [
-            {
-                "nombre": "Saldo hipotecario",
-                "valor": f"${saldo:,.0f} COP".replace(",", "."),
-                "impacto": "Define la suma asegurada y la base del cálculo.",
-            },
-            {
-                "nombre": "Perfil de riesgo autorizado",
-                "valor": f"Nivel {nivel}, score {score}",
-                "impacto": (
-                    f"Ajusta la prima con el factor de perfil {factor_perfil} de la regla vigente."
-                ),
-            },
-            {
-                "nombre": "Regla y plan",
-                "valor": f"{regla['version']} / {plan['codigo']}",
-                "impacto": (
-                    f"Aplica la tasa {tasa} y el factor de plan {plan['factor']} "
-                    "con redondeo a pesos colombianos."
-                ),
-            },
-        ],
+        "factoresDeterminantes": factores,
     }
 
 
