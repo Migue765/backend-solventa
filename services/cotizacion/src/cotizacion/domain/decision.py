@@ -100,6 +100,20 @@ def construir_instantanea(
     )
 
 
+def contenido_integro(instantanea: InstantaneaDecision) -> bool:
+    """Comprueba que el contenido guardado conserve el hash con el que fue registrado."""
+    contenido = instantanea.contenido
+    decision = {
+        clave: valor
+        for clave, valor in contenido.items()
+        if clave not in {"esquema", "cotizacionId", "clienteId", "productoId", "calculadaEn"}
+    }
+    return (
+        _hash(contenido) == instantanea.hash_contenido
+        and _hash(decision) == instantanea.hash_decision
+    )
+
+
 def _monto(dinero: Dinero | None) -> str:
     assert dinero is not None
     return str(dinero.monto)

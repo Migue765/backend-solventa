@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
@@ -7,10 +7,12 @@ from uuid import UUID, uuid4
 import pytest
 from bff_web.domain.auth import User
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
-from bff_web.domain.partner_operation import PartnerOffer, PartnerOperation
+from bff_web.domain.partner_offer import PartnerOffer as PartnerOfferSnapshot
+from bff_web.domain.partner_operation import PartnerOffer as PartnerOperationOffer
+from bff_web.domain.partner_operation import PartnerOperation
 from bff_web.domain.quotes import InsuranceProduct
 from flask import Flask
-from support import USER, FakeIdentity, KeyPair, sign_token
+from support import USER, FakeIdentity, KeyPair, partner_offer_payload, sign_token
 
 PARTNER = User(uuid4(), "Operador Banco", "operador@banco.co", "socio", partner_ids=("BANCO-001",))
 PATH = "/v1/socios/solicitudes-cotizacion"
@@ -75,7 +77,7 @@ class PartnerGateway:
             solicitudId="AQT-2026-123",
             cotizacionId=uuid4(),
             recibidaEn=datetime.now(UTC),
-            oferta=PartnerOffer.model_validate(
+            oferta=PartnerOperationOffer.model_validate(
                 {
                     "id": str(uuid4()),
                     "version": 1,
@@ -294,3 +296,98 @@ def test_client_and_advisor_cannot_enter_partner_portal(app: Flask, keypair: Key
             "/v1/socios/actual", headers={"Authorization": "Bearer " + token}
         )
         assert response.status_code == 403
+
+
+@dataclass
+class OfferGateway:
+    error: MortgageProfilingError | None = None
+    calls: list[tuple[str, str, UUID]] = field(default_factory=list)
+
+    def calculate_offer(self, socio_id: str, operation_id: UUID, _: str) -> PartnerOfferSnapshot:
+        return self._offer("calculate", socio_id, operation_id)
+
+    def get_offer(self, socio_id: str, operation_id: UUID, _: str) -> PartnerOfferSnapshot:
+        return self._offer("get", socio_id, operation_id)
+
+    def _offer(self, action: str, socio_id: str, operation_id: UUID) -> PartnerOfferSnapshot:
+        self.calls.append((action, socio_id, operation_id))
+        if self.error:
+            raise self.error
+        return PartnerOfferSnapshot.model_validate(partner_offer_payload(operation_id, socio_id))
+
+
+def offer_url(operation_id: UUID, socio: str = "BANCO-001") -> str:
+    return f"{PATH}/{operation_id}/oferta?socioId={socio}"
+
+
+def test_partner_calculates_and_recovers_offer(app: Flask, keypair: KeyPair) -> None:
+    gateway = OfferGateway()
+    app.extensions["partner_quote_gateway"] = gateway
+    operation_id = uuid4()
+    auth = headers(keypair, payload())
+
+    created = app.test_client().post(offer_url(operation_id), headers=auth)
+    recovered = app.test_client().get(offer_url(operation_id), headers=auth)
+
+    assert created.status_code == 201
+    assert created.headers["Cache-Control"] == "no-store"
+    assert created.get_json()["ofertas"][0]["factores"][0]["codigo"] == "ajuste_riesgo"
+    assert recovered.status_code == 200
+    assert recovered.get_json()["operationId"] == str(operation_id)
+    assert gateway.calls == [
+        ("calculate", "BANCO-001", operation_id),
+        ("get", "BANCO-001", operation_id),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("socio", "header_change", "claims", "expected"),
+    [
+        ("OTHER", {}, {}, 403),
+        ("", {}, {}, 403),
+        ("BANCO-001", {"API-Version": "2"}, {}, 400),
+        ("BANCO-001", {}, {"scope": "cliente"}, 403),
+        ("BANCO-001", {"Authorization": ""}, {}, 401),
+    ],
+)
+def test_offer_rejections_happen_before_cotizacion(
+    app: Flask,
+    keypair: KeyPair,
+    socio: str,
+    header_change: dict[str, str],
+    claims: dict[str, Any],
+    expected: int,
+) -> None:
+    gateway = OfferGateway()
+    app.extensions["partner_quote_gateway"] = gateway
+    auth = {**headers(keypair, payload(), **claims), **header_change}
+
+    response = app.test_client().post(offer_url(uuid4(), socio), headers=auth)
+
+    assert response.status_code == expected
+    assert gateway.calls == []
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "public", "public_status"),
+    [
+        ("cotizacion_vencida", 422, "entradas_vencidas", 422),
+        ("perfil_vencido", 422, "entradas_vencidas", 422),
+        ("fuente_vencida", 422, "entradas_vencidas", 422),
+        ("decision_inconsistente", 422, "oferta_no_disponible", 422),
+        ("oferta_no_encontrada", 404, "oferta_no_encontrada", 404),
+        ("perfilamiento_no_disponible", 503, "servicio_no_disponible", 503),
+    ],
+)
+def test_offer_errors_never_return_partial_offers(
+    app: Flask, keypair: KeyPair, code: str, status: int, public: str, public_status: int
+) -> None:
+    app.extensions["partner_quote_gateway"] = OfferGateway(
+        error=MortgageProfilingError(code, status)
+    )
+
+    response = app.test_client().post(offer_url(uuid4()), headers=headers(keypair, payload()))
+
+    assert response.status_code == public_status
+    assert response.get_json()["code"] == public
+    assert "ofertas" not in response.get_json()
