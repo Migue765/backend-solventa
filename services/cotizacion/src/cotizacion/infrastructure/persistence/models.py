@@ -81,6 +81,37 @@ class OperacionSocioModel(Base):
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class OfertaSocioModel(Base):
+    """Registro append-only: la oferta de una operación se inserta una vez y nunca se actualiza."""
+
+    __tablename__ = "ofertas_socios"
+    __table_args__ = (
+        UniqueConstraint("socio_id", "operation_id", name="uq_ofertas_socios_operacion"),
+        ForeignKeyConstraint(
+            ["socio_id", "operation_id"],
+            ["operaciones_socios.socio_id", "operaciones_socios.operation_id"],
+            ondelete="RESTRICT",
+        ),
+    )
+
+    oferta_socio_id: Mapped[UUID] = mapped_column(primary_key=True)
+    socio_id: Mapped[str] = mapped_column(String(50))
+    operation_id: Mapped[UUID]
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    producto_id: Mapped[str] = mapped_column(String(64))
+    solicitud_id: Mapped[str] = mapped_column(
+        ForeignKey("cotizaciones.solicitud_id", ondelete="RESTRICT")
+    )
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT")
+    )
+    hash_decision: Mapped[str] = mapped_column(String(64))
+    hash_contenido: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[dict[str, Any]] = mapped_column(JSON)
+    calculada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    vigente_hasta: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class OfertaHipotecariaModel(Base):
     __tablename__ = "ofertas_hipotecarias"
     __table_args__ = (

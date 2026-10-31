@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from cotizacion.application.iniciar_solicitud_socio import (
     SolicitudSocioComando,
 )
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.ofertas_socio import CalcularOfertaSocio
+from cotizacion.domain.oferta_socio import OfertaSocio
 from cotizacion.infrastructure.persistence.admision_socios import AdmisionSocios
 from cotizacion.infrastructure.persistence.repositorio_operaciones_socios import (
     RepositorioOperacionesSociosSql,
@@ -85,6 +88,65 @@ def consultar(operation_id: UUID) -> tuple[Response, int] | Response:
     response.headers["Retry-After"] = "1"
     response.headers["Cache-Control"] = "no-store"
     return response, 409
+
+
+@bp.post("/solicitudes-cotizacion/<uuid:operation_id>/oferta")
+def calcular_oferta(operation_id: UUID) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_valido()
+    if socio is None:
+        return jsonify(error="solicitud_invalida"), 400
+    caso = cast(CalcularOfertaSocio, current_app.extensions["calcular_oferta_socio"])
+    response = jsonify(_oferta_a_json(caso.ejecutar(socio, operation_id)))
+    response.headers["Cache-Control"] = "no-store"
+    return response, 201
+
+
+@bp.get("/solicitudes-cotizacion/<uuid:operation_id>/oferta")
+def consultar_oferta(operation_id: UUID) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_valido()
+    if socio is None:
+        return jsonify(error="solicitud_invalida"), 400
+    caso = cast(CalcularOfertaSocio, current_app.extensions["calcular_oferta_socio"])
+    response = jsonify(_oferta_a_json(caso.consultar(socio, operation_id)))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _socio_valido() -> str | None:
+    if request.headers.get("API-Version", "1") != "1":
+        return None
+    socio = request.args.get("socioId", "")
+    return socio if 0 < len(socio) <= 50 else None
+
+
+def _oferta_a_json(oferta: OfertaSocio) -> dict[str, object]:
+    contenido = oferta.contenido
+    return dict(
+        ofertaId=str(oferta.oferta_socio_id),
+        operationId=str(oferta.operation_id),
+        socioId=oferta.socio_id,
+        clienteId=str(oferta.cliente_id),
+        productoId=oferta.producto_id,
+        solicitudId=oferta.solicitud_id,
+        cotizacionId=str(oferta.cotizacion_id),
+        estado="vigente" if oferta.vigente_hasta > datetime.now(UTC) else "vencida",
+        calculadaEn=_iso(oferta.calculada_en),
+        vigenteHasta=_iso(oferta.vigente_hasta),
+        decision=contenido["decision"],
+        riesgo=contenido["riesgo"],
+        fuentes=contenido["fuentes"],
+        variables=contenido["variables"],
+        ofertas=contenido["ofertas"],
+        hashContenido=oferta.hash_contenido,
+    )
+
+
+def _iso(fecha: datetime) -> str:
+    return fecha.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _a_json(operacion: OperacionSocio) -> dict[str, object]:

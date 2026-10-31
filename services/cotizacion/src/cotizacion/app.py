@@ -19,14 +19,18 @@ from cotizacion.application.crear_cotizacion import CrearCotizacion
 from cotizacion.application.iniciar_operacion_hipotecaria import IniciarOperacionHipotecaria
 from cotizacion.application.iniciar_solicitud_socio import IniciarSolicitudSocio
 from cotizacion.application.ofertas import GestionarOfertas
+from cotizacion.application.ofertas_socio import CalcularOfertaSocio
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
+    EntradaOfertaInvalidaError,
     ErrorConsultaPerfil,
     OfertaNoDisponibleError,
+    OfertaSocioNoEncontradaError,
+    OperacionSocioNoEncontradaError,
     PagoNoEncontradoError,
     PagoNoPermitidoError,
     ReglaDeNegocioError,
@@ -42,6 +46,9 @@ from cotizacion.infrastructure.persistence.admision_socios import AdmisionRechaz
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
+)
+from cotizacion.infrastructure.persistence.repositorio_ofertas_socios import (
+    RepositorioOfertasSociosSql,
 )
 from cotizacion.infrastructure.persistence.repositorio_operaciones_hipotecarias import (
     RepositorioOperacionesHipotecarias,
@@ -105,6 +112,12 @@ def create_app(config: Config | None = None) -> Flask:
         registrar_solicitud,
         admision,
         habilitado=perfil_http is not None,
+    )
+    app.extensions["calcular_oferta_socio"] = CalcularOfertaSocio(
+        operaciones_socios_repo,
+        repositorio,
+        RepositorioOfertasSociosSql(sesiones),
+        perfiles=perfil_http,
     )
     app.extensions["iniciar_operacion_hipotecaria"] = IniciarOperacionHipotecaria(
         RepositorioOperacionesHipotecarias(sesiones),
@@ -198,6 +211,19 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(OfertaNoDisponibleError)
     def oferta_no_disponible(_: OfertaNoDisponibleError):
         return jsonify(error="oferta_no_disponible"), 422
+
+    @app.errorhandler(EntradaOfertaInvalidaError)
+    def entrada_oferta_invalida(error: EntradaOfertaInvalidaError) -> tuple[Response, int]:
+        logger.warning("Oferta de socio rechazada: %s", error.codigo)
+        return jsonify(error=error.codigo, correlationId=g.correlation_id), 422
+
+    @app.errorhandler(OperacionSocioNoEncontradaError)
+    def operacion_socio_no_encontrada(_: OperacionSocioNoEncontradaError):
+        return jsonify(error="operacion_no_encontrada", correlationId=g.correlation_id), 404
+
+    @app.errorhandler(OfertaSocioNoEncontradaError)
+    def oferta_socio_no_encontrada(_: OfertaSocioNoEncontradaError):
+        return jsonify(error="oferta_no_encontrada", correlationId=g.correlation_id), 404
 
     @app.errorhandler(PagoNoEncontradoError)
     def pago_no_encontrado(_: PagoNoEncontradoError):

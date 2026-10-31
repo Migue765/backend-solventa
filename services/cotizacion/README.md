@@ -95,6 +95,34 @@ suscripcion revalidan el consentimiento y el perfil; no hay fallback si fallan.
 Las solicitudes antiguas sin evidencia necesitan una nueva cotizacion.
 Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
 
+### Oferta de la operación del socio (SOL-330)
+
+Aplicar `alembic upgrade head`: la revisión `ofertas_socios` (`0013_ofertas_socios.py`,
+sobre `admision_socios`) agrega la tabla append-only `ofertas_socios`, única por
+socio/operación. No modifica operaciones, cotizaciones ni instantáneas existentes.
+
+`POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=` (ruta interna con
+`INTERNAL_API_TOKEN`, publicada solo por el BFF) combina el rating ya persistido con el
+riesgo individualizado vigente. **El score no se aplica dos veces**: las primas de los tres
+planes son las de la instantánea y los `factores` de cada plan las desglosan (base, tasa,
+ajuste por riesgo con su nivel A/B/C, factor del plan, duración y redondeo, o los factores
+del modelo climático). Antes de persistir se exige:
+
+- cotización vigente e instantánea íntegra (hashes de decisión y contenido);
+- perfil remoto válido para la misma referencia, con perfil y fuentes vigentes;
+- primas reproducibles con sus propias entradas.
+
+Si una entrada está ausente, vencida o es inconsistente responde `422`
+(`cotizacion_vencida`, `perfil_vencido`, `fuente_vencida`, `decision_inconsistente`,
+`decision_sin_tarificacion`) o `503` si Perfilamiento no responde, sin guardar nada.
+La oferta se guarda con `operationId`, fuentes, variables, regla, versiones,
+`hashDecision` y `hashContenido`, junto al evento `OfertaSocioRegistrada` en el outbox
+de la misma transacción. Un reintento o una carrera entre réplicas devuelve la oferta ya
+confirmada sin recalcular ni consultar el perfil. `GET` sobre la misma ruta solo lee:
+`404 oferta_no_encontrada` si aún no existe y `operacion_no_encontrada` si la operación
+no pertenece al socio. El cálculo hace una única lectura del perfil (timeout 0,7 s).
+Requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`.
+
 | Método | Ruta               | Descripción                    |
 |--------|--------------------|--------------------------------|
 | GET    | `/ping`            | Health check                   |
@@ -108,6 +136,7 @@ Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
 | GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
+| GET/POST | `/v1/socios/solicitudes-cotizacion/{operationId}/oferta` | Recupera o calcula y persiste la oferta del socio |
 
 ### Persistencia de suscripción
 

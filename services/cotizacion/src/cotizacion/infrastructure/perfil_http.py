@@ -184,14 +184,12 @@ class ProveedorPerfilHttp:
         ahora = datetime.now(UTC)
         if (
             payload.clienteId != cliente_id
-            or not payload.calculadoEn <= ahora < payload.vigenteHasta
+            or payload.calculadoEn > ahora
             or len(payload.fuentes) != len({fuente.nombre for fuente in payload.fuentes})
             or not {"open_finance", "open_data"}.issubset(
                 fuente.nombre for fuente in payload.fuentes
             )
-            or any(
-                not fuente.consultadaEn <= ahora < fuente.vigenteHasta for fuente in payload.fuentes
-            )
+            or any(fuente.consultadaEn > ahora for fuente in payload.fuentes)
             or payload.fallbackUsed
             != (
                 any(estado.estado in {"cache", "default"} for estado in payload.estadoFuentes)
@@ -215,6 +213,10 @@ class ProveedorPerfilHttp:
             )
         ):
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if payload.vigenteHasta <= ahora:
+            raise ErrorConsultaPerfil("perfil_vencido", 422)
+        if any(fuente.vigenteHasta <= ahora for fuente in payload.fuentes):
+            raise ErrorConsultaPerfil("fuente_vencida", 422)
         return PerfilRiesgo(
             perfil_id=str(payload.perfilId),
             score=payload.score,
