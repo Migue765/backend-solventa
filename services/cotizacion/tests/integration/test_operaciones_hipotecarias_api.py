@@ -26,8 +26,10 @@ class ProfilingServiceStub:
                 "perfilId": profile_id,
                 "clienteId": body["clienteId"],
                 "referenciaId": body["referenciaId"],
+                "operationId": body["operationId"],
+                "creditoId": body["creditoId"],
                 "version": 1,
-                "modeloVersion": "perfil-mock-1",
+                "modeloVersion": "perfil-riesgo-1",
                 "score": "0.35",
                 "nivel": "A",
                 "consentimientoId": body["consentimientoId"],
@@ -45,6 +47,24 @@ class ProfilingServiceStub:
                     }
                     for name in ("open_finance", "open_data")
                 ],
+                "variables": [
+                    {
+                        "nombre": "indicador_riesgo",
+                        "fuente": name,
+                        "valorNormalizado": "0.35",
+                        "autorizadaPor": body["consentimientoId"],
+                    }
+                    for name in ("open_finance", "open_data")
+                ],
+                "variablesExcluidas": [],
+                "regla": {
+                    "reglaId": "riesgo-maximo-fuentes",
+                    "version": "1.0",
+                    "modeloVersion": "perfil-riesgo-1",
+                    "expresion": "max(indicador_riesgo_por_fuente)",
+                },
+                "degradaciones": [],
+                "hashDecision": "a" * 64,
                 "fallbackUsed": False,
             }
             self.profiles[profile_id] = profile
@@ -109,6 +129,9 @@ def test_operation_is_completed_and_idempotent(
     assert first.get_json()["perfilamientoReferencia"]
     assert first.get_json()["solicitudId"].startswith("AQT-")
     assert profiling.created == 1
+    profile = next(iter(profiling.profiles.values()))
+    assert profile["operationId"] == operation_id
+    assert profile["creditoId"] == "HIP-2026-001"
 
 
 def test_same_operation_with_different_body_conflicts(

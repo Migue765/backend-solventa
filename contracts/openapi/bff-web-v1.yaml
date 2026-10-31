@@ -1388,19 +1388,29 @@ components:
     Perfilamiento:
       type: object
       additionalProperties: false
-      required: [solicitudId, perfilId, version, modeloVersion, score, nivel, consentimientoId,
-                 consentimientoVersion, calculadoEn, vigenteHasta, fuentes, fallbackUsed]
+      required: [solicitudId, perfilId, operationId, creditoId, version, modeloVersion, score,
+                 nivel, consentimientoId, consentimientoVersion, calculadoEn, vigenteHasta,
+                 fuentes, variables, variablesExcluidas, regla, degradaciones, hashDecision,
+                 fallbackUsed]
       properties:
         solicitudId:
           type: string
         perfilId:
           type: string
           format: uuid
+        operationId:
+          type: string
+          format: uuid
+        creditoId:
+          type: string
+          minLength: 1
+          maxLength: 64
         version:
           type: integer
           minimum: 1
         modeloVersion:
           type: string
+          enum: [perfil-riesgo-1, perfil-mock-1]
         score:
           type: string
           description: Indicador sintetico entre 0 y 1, no informacion financiera real
@@ -1421,7 +1431,6 @@ components:
           format: date-time
         fallbackUsed:
           type: boolean
-          const: false
         fuentes:
           type: array
           minItems: 2
@@ -1447,6 +1456,80 @@ components:
                 const: true
               indicadorRiesgo:
                 type: string
+        variables:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, valorNormalizado, autorizadaPor]
+            properties:
+              nombre:
+                type: string
+                const: indicador_riesgo
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              valorNormalizado:
+                type: string
+              autorizadaPor:
+                type: string
+                format: uuid
+        variablesExcluidas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nombre, fuente, motivo]
+            properties:
+              nombre:
+                type: string
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              motivo:
+                type: string
+                const: sin_consentimiento
+        regla:
+          type: object
+          additionalProperties: false
+          required: [reglaId, version, modeloVersion, expresion]
+          properties:
+            reglaId:
+              type: string
+              const: riesgo-maximo-fuentes
+            version:
+              type: string
+              enum: ["1.0", legacy]
+            modeloVersion:
+              type: string
+              enum: [perfil-riesgo-1, perfil-mock-1]
+            expresion:
+              type: string
+              const: max(indicador_riesgo_por_fuente)
+        degradaciones:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [fuente, motivo, politica, versionPolitica]
+            properties:
+              fuente:
+                type: string
+                enum: [open_finance, open_data]
+              motivo:
+                type: string
+                enum: [fuente_no_disponible, fuente_vencida]
+              politica:
+                type: string
+                enum: [cache, default]
+              versionPolitica:
+                type: string
+                const: degradacion-1
+        hashDecision:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     DesafioLogin:
       type: object
       additionalProperties: false

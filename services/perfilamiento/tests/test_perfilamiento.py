@@ -1,7 +1,10 @@
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
+from time import perf_counter
 from uuid import UUID, uuid4
 
 import pytest
@@ -65,10 +68,21 @@ def test_perfil_valido_es_versionado_minimo_y_trazable(repo: RepositorioPerfiles
     perfil = servicio.generar(cliente_id, referencia_id, "corr-prueba")
     assert perfil.score == 0.5 and perfil.nivel == "A"
     assert perfil.referencia_id == referencia_id
+    assert perfil.operation_id == referencia_id
+    assert perfil.credito_id == str(referencia_id)
     assert perfil.vigente_hasta == AHORA + timedelta(minutes=15)
     assert perfil.version == 1
     assert all(fuente.simulada for fuente in perfil.fuentes)
     assert not perfil.fallback_used
+    assert {variable.fuente for variable in perfil.variables} == {
+        "open_finance",
+        "open_data",
+    }
+    assert {variable.nombre for variable in perfil.variables_excluidas} == {
+        "saldo_promedio",
+        "zona_geografica",
+    }
+    assert perfil.regla.version == "1.0"
     assert servicio.obtener(perfil.perfil_id, cliente_id, "corr-lectura") == perfil
     assert servicio.generar(cliente_id, referencia_id, "corr-reintento") == perfil
     segundo = servicio.generar(cliente_id, uuid4(), "corr-prueba")
@@ -316,9 +330,12 @@ def test_sin_consentimiento_aplicable_no_consulta_fuentes(
         }
 
 
-@pytest.mark.parametrize("escenario", ["no_disponible", "vencido"])
-def test_fuentes_fallidas_no_crean_perfil_parcial(
-    repo: RepositorioPerfiles, escenario: str
+@pytest.mark.parametrize(
+    ("escenario", "motivo"),
+    [("no_disponible", "fuente_no_disponible"), ("vencido", "fuente_vencida")],
+)
+def test_fuentes_fallidas_aplican_default_trazable(
+    repo: RepositorioPerfiles, escenario: str, motivo: str
 ) -> None:
     cliente_id = uuid4()
     fuente = FuenteMock("open_data", "no_disponible" if escenario == "no_disponible" else "vencido")
@@ -328,11 +345,14 @@ def test_fuentes_fallidas_no_crean_perfil_parcial(
         (FuenteMock("open_finance"), fuente),
         lambda: AHORA,
     )
-    with pytest.raises(ErrorPerfilamiento) as caught:
-        servicio.generar(cliente_id, uuid4(), "corr-falla")
-    assert caught.value.status == (503 if escenario == "no_disponible" else 422)
+    perfil = servicio.generar(cliente_id, uuid4(), "corr-falla")
+    assert perfil.fallback_used
+    assert len(perfil.degradaciones) == 1
+    assert perfil.degradaciones[0].motivo == motivo
+    assert perfil.degradaciones[0].politica == "default"
+    assert {fuente.version for fuente in perfil.fuentes} == {"mock-1", "default-1"}
     with Session(repo.engine) as session:
-        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 0
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 1
         assert session.scalar(select(func.count()).select_from(ConsultaModel)) == 1
 
 
@@ -392,6 +412,55 @@ def test_no_entrega_perfil_alterado(repo: RepositorioPerfiles) -> None:
         fila.contenido = {**fila.contenido, "score": "0.01"}
     with pytest.raises(ErrorPerfilamiento, match="perfil_no_integro"):
         servicio.obtener(perfil.perfil_id, cliente_id, "corr-integridad")
+
+
+def test_legacy_profile_remains_readable_after_hu48_upgrade(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    perfil_id = uuid4()
+    referencia_id = uuid4()
+    contenido = {
+        "perfilId": str(perfil_id),
+        "clienteId": str(cliente_id),
+        "referenciaId": str(referencia_id),
+        "version": 1,
+        "modeloVersion": "perfil-mock-1",
+        "score": "0.50",
+        "nivel": "A",
+        "consentimientoId": str(uuid4()),
+        "consentimientoVersion": 1,
+        "calculadoEn": AHORA.isoformat(),
+        "vigenteHasta": (AHORA + timedelta(minutes=15)).isoformat(),
+        "fuentes": [
+            fuente.model_dump(mode="json", by_alias=True)
+            for fuente in (
+                FuenteMock("open_finance").consultar(cliente_id, AHORA),
+                FuenteMock("open_data").consultar(cliente_id, AHORA),
+            )
+        ],
+        "fallbackUsed": False,
+    }
+    hash_contenido = hashlib.sha256(
+        json.dumps(contenido, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with Session(repo.engine) as session, session.begin():
+        session.add(
+            PerfilModel(
+                perfil_id=perfil_id,
+                cliente_id=cliente_id,
+                version=1,
+                contenido=contenido,
+                hash_contenido=hash_contenido,
+            )
+        )
+
+    perfil = repo.obtener(perfil_id, cliente_id)
+
+    assert perfil.operation_id == referencia_id
+    assert perfil.credito_id == str(referencia_id)
+    assert perfil.regla.version == "legacy"
+    assert perfil.hash_decision
 
 
 def test_events_are_idempotent_durable_and_never_restore_an_old_version(
@@ -556,3 +625,166 @@ def test_concurrent_duplicates_produce_one_durable_ack(repo: RepositorioPerfiles
     with Session(repo.engine) as session:
         assert session.scalar(select(func.count()).select_from(EventoConsentimientoModel)) == 1
         assert session.scalar(select(func.count()).select_from(ConsultaModel)) == 1
+
+
+def test_risk_is_idempotent_by_operation_and_reconstructable(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente_id = uuid4()
+    referencia_id = uuid4()
+    operation_id = uuid4()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente_id),
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+
+    perfil = servicio.generar(
+        cliente_id,
+        referencia_id,
+        "corr-hu48",
+        operation_id=operation_id,
+        credito_id="HIP-2026-001",
+    )
+    reintento = servicio.generar(
+        cliente_id,
+        referencia_id,
+        "corr-hu48-reintento",
+        operation_id=operation_id,
+        credito_id="HIP-2026-001",
+    )
+
+    assert reintento == perfil
+    assert perfil.operation_id == operation_id
+    assert perfil.credito_id == "HIP-2026-001"
+    evidencia = {
+        "clienteId": str(perfil.cliente_id),
+        "creditoId": perfil.credito_id,
+        "operationId": str(perfil.operation_id),
+        "consentimientoId": str(perfil.consentimiento_id),
+        "consentimientoVersion": perfil.consentimiento_version,
+        "fuentes": [fuente.model_dump(mode="json", by_alias=True) for fuente in perfil.fuentes],
+        "variables": [
+            variable.model_dump(mode="json", by_alias=True) for variable in perfil.variables
+        ],
+        "variablesExcluidas": [
+            variable.model_dump(mode="json", by_alias=True)
+            for variable in perfil.variables_excluidas
+        ],
+        "regla": perfil.regla.model_dump(mode="json", by_alias=True),
+        "degradaciones": [
+            degradacion.model_dump(mode="json", by_alias=True)
+            for degradacion in perfil.degradaciones
+        ],
+        "score": str(perfil.score),
+    }
+    assert (
+        perfil.hash_decision
+        == hashlib.sha256(
+            json.dumps(evidencia, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 1
+
+    with pytest.raises(ErrorPerfilamiento, match="conflicto_idempotencia"):
+        servicio.generar(
+            cliente_id,
+            uuid4(),
+            "corr-hu48-conflicto",
+            operation_id=operation_id,
+            credito_id="HIP-OTRO",
+        )
+
+
+def test_concurrent_retries_persist_one_risk(repo: RepositorioPerfiles) -> None:
+    cliente_id = uuid4()
+    referencia_id = uuid4()
+    operation_id = uuid4()
+    barrera = Barrier(2)
+
+    class FuenteConcurrente:
+        nombre = "open_finance"
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            barrera.wait(timeout=5)
+            return FuenteMock("open_finance").consultar(cliente_id, ahora)
+
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente_id),
+        (FuenteConcurrente(), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+
+    def ejecutar(correlation_id: str):
+        return servicio.generar(
+            cliente_id,
+            referencia_id,
+            correlation_id,
+            operation_id=operation_id,
+            credito_id="HIP-CONCURRENTE",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        perfiles = list(executor.map(ejecutar, ("corr-a", "corr-b")))
+
+    assert perfiles[0] == perfiles[1]
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PerfilModel)) == 1
+
+
+def test_failed_source_uses_recent_authorized_cache(repo: RepositorioPerfiles) -> None:
+    cliente_id = uuid4()
+    consentimientos = ConsentimientosPrueba(cliente_id)
+    disponible = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    disponible.generar(cliente_id, uuid4(), "corr-cache-base")
+    degradado = ConsultarPerfil(
+        repo,
+        consentimientos,
+        (FuenteMock("open_finance", "no_disponible"), FuenteMock("open_data")),
+        lambda: AHORA + timedelta(minutes=1),
+    ).generar(cliente_id, uuid4(), "corr-cache")
+
+    assert degradado.fallback_used
+    assert degradado.degradaciones[0].politica == "cache"
+    assert degradado.degradaciones[0].version_politica == "degradacion-1"
+    assert any(fuente.version == "mock-1:cache" for fuente in degradado.fuentes)
+
+
+def test_hu48_latency_and_capacity_baseline(repo: RepositorioPerfiles) -> None:
+    cliente_id = uuid4()
+    servicio = ConsultarPerfil(
+        repo,
+        ConsentimientosPrueba(cliente_id),
+        (FuenteMock("open_finance"), FuenteMock("open_data")),
+        lambda: AHORA,
+    )
+    latencias_ms = []
+    inicio = perf_counter()
+    for indice in range(200):
+        operacion = uuid4()
+        medida = perf_counter()
+        servicio.generar(
+            cliente_id,
+            uuid4(),
+            f"corr-capacidad-{indice}",
+            operation_id=operacion,
+            credito_id=f"HIP-{indice:06}",
+        )
+        latencias_ms.append((perf_counter() - medida) * 1000)
+    duracion = perf_counter() - inicio
+    ordenadas = sorted(latencias_ms)
+    p95 = ordenadas[189]
+    p99 = ordenadas[197]
+    operaciones_hora = len(latencias_ms) / duracion * 3600
+
+    assert p95 <= 400
+    assert p99 <= 800
+    assert operaciones_hora >= 20_000

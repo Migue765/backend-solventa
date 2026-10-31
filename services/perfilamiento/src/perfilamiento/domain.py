@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -87,10 +89,39 @@ class Fuente(Documento):
     indicador_riesgo: Decimal = Field(alias="indicadorRiesgo", ge=0, le=1)
 
 
+class VariableRiesgo(Documento):
+    nombre: Literal["indicador_riesgo"]
+    fuente: Literal["open_finance", "open_data"]
+    valor_normalizado: Decimal = Field(alias="valorNormalizado", ge=0, le=1)
+    autorizada_por: UUID = Field(alias="autorizadaPor")
+
+
+class VariableExcluida(Documento):
+    nombre: str
+    fuente: Literal["open_finance", "open_data"]
+    motivo: Literal["sin_consentimiento"]
+
+
+class ReglaRiesgo(Documento):
+    regla_id: Literal["riesgo-maximo-fuentes"] = Field(alias="reglaId")
+    version: Literal["1.0", "legacy"]
+    modelo_version: Literal["perfil-riesgo-1", "perfil-mock-1"] = Field(alias="modeloVersion")
+    expresion: Literal["max(indicador_riesgo_por_fuente)"]
+
+
+class Degradacion(Documento):
+    fuente: Literal["open_finance", "open_data"]
+    motivo: Literal["fuente_no_disponible", "fuente_vencida"]
+    politica: Literal["cache", "default"]
+    version_politica: Literal["degradacion-1"] = Field(alias="versionPolitica")
+
+
 class Perfil(Documento):
     perfil_id: UUID = Field(alias="perfilId")
     cliente_id: UUID = Field(alias="clienteId")
     referencia_id: UUID = Field(alias="referenciaId")
+    operation_id: UUID = Field(alias="operationId")
+    credito_id: str = Field(alias="creditoId", min_length=1, max_length=64)
     version: int = Field(ge=1)
     modelo_version: str = Field(alias="modeloVersion")
     score: Decimal = Field(ge=0, le=1)
@@ -100,7 +131,63 @@ class Perfil(Documento):
     calculado_en: AwareDatetime = Field(alias="calculadoEn")
     vigente_hasta: AwareDatetime = Field(alias="vigenteHasta")
     fuentes: tuple[Fuente, ...]
+    variables: tuple[VariableRiesgo, ...]
+    variables_excluidas: tuple[VariableExcluida, ...] = Field(alias="variablesExcluidas")
+    regla: ReglaRiesgo
+    degradaciones: tuple[Degradacion, ...] = ()
+    hash_decision: str = Field(alias="hashDecision", pattern=r"^[0-9a-f]{64}$")
     fallback_used: bool = Field(default=False, alias="fallbackUsed")
+
+    @model_validator(mode="before")
+    @classmethod
+    def completar_evidencia_legada(cls, value: object) -> object:
+        if not isinstance(value, dict) or "operationId" in value or "operation_id" in value:
+            return value
+        contenido = dict(value)
+        referencia_id = contenido.get("referenciaId")
+        consentimiento_id = contenido.get("consentimientoId")
+        fuentes = contenido.get("fuentes", [])
+        variables = [
+            {
+                "nombre": "indicador_riesgo",
+                "fuente": fuente["nombre"],
+                "valorNormalizado": fuente["indicadorRiesgo"],
+                "autorizadaPor": consentimiento_id,
+            }
+            for fuente in fuentes
+            if isinstance(fuente, dict)
+        ]
+        regla = {
+            "reglaId": "riesgo-maximo-fuentes",
+            "version": "legacy",
+            "modeloVersion": contenido.get("modeloVersion", "perfil-mock-1"),
+            "expresion": "max(indicador_riesgo_por_fuente)",
+        }
+        evidencia = {
+            "clienteId": str(contenido.get("clienteId")),
+            "creditoId": str(referencia_id),
+            "operationId": str(referencia_id),
+            "consentimientoId": str(consentimiento_id),
+            "consentimientoVersion": contenido.get("consentimientoVersion"),
+            "fuentes": fuentes,
+            "variables": variables,
+            "variablesExcluidas": [],
+            "regla": regla,
+            "degradaciones": [],
+            "score": str(contenido.get("score")),
+        }
+        contenido.update(
+            operationId=referencia_id,
+            creditoId=str(referencia_id),
+            variables=variables,
+            variablesExcluidas=[],
+            regla=regla,
+            degradaciones=[],
+            hashDecision=hashlib.sha256(
+                json.dumps(evidencia, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        return contenido
 
     def validar(self, consentimiento: Consentimiento, ahora: datetime) -> None:
         consentimiento.validar(self.cliente_id, ahora)

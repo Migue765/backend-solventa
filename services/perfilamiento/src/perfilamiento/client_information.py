@@ -82,7 +82,9 @@ class ConsultarInformacionCliente:
         self._repositorio = repositorio
         self._consentimientos = consentimientos
         self._reloj = reloj
-        self._fuentes = {fuente.nombre: CircuitBreakerFuente(fuente, reloj) for fuente in fuentes}
+        self._fuentes: dict[str, CircuitBreakerFuente] = {
+            fuente.nombre: CircuitBreakerFuente(fuente, reloj) for fuente in fuentes
+        }
 
     def ejecutar(
         self, comando: ConsultarInformacionComando, correlation_id: str

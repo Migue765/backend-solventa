@@ -1,8 +1,9 @@
 # Perfilamiento HU11
 
-Implementa SOL-163 con puertos de consentimiento y fuentes externas. Open Finance y Open Data
-son mocks sinteticos: no consultan bancos, buros ni proveedores. El modelo `perfil-mock-1`
-usa el mayor indicador de las dos fixtures; no es una regla actuarial aprobada.
+Implementa SOL-163 y HU48 con puertos de consentimiento y fuentes externas. Open Finance y
+Open Data son mocks sinteticos: no consultan bancos, buros ni proveedores. El modelo
+`perfil-riesgo-1` y la regla `riesgo-maximo-fuentes` 1.0 usan el mayor indicador normalizado
+de las dos fixtures; no constituyen una regla actuarial aprobada.
 
 ```powershell
 python -m pip install -e ".\services\perfilamiento[dev]"
@@ -17,16 +18,19 @@ API interna con Bearer; `/health` no requiere autenticacion:
 
 | Metodo | Ruta | Entrada |
 |---|---|---|
-| POST | `/v1/perfiles` | `clienteId` y `referenciaId` UUID de la cotizacion |
+| POST | `/v1/perfiles` | Cliente, credito, `operationId` y referencia de la cotizacion |
 | POST | `/v1/consultas-informacion-cliente` | Contexto autorizado de HU44 e identificador idempotente |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
 
 El servicio consulta el consentimiento autoritativo antes de cada fuente y antes de entregar
-el perfil. Persiste una instantanea inmutable y su auditoria en la misma transaccion. Cada
-cliente tiene versiones crecientes; incluye modelo, consentimiento/version, fechas, fuentes,
-indicadores minimos e identificador de la cotizacion. No guarda movimientos bancarios ni documentos.
-El perfil vence a los quince minutos o antes si vence una fuente o la autorizacion.
+el perfil. Persiste una instantanea inmutable y su auditoria en la misma transaccion. La
+decision queda asociada al cliente, credito y `operationId`; un reintento recupera la misma
+instantanea y un cuerpo incompatible produce conflicto. Cada cliente tiene versiones
+crecientes. La evidencia incluye fuentes, variables normalizadas autorizadas, variables
+excluidas, regla/modelo versionados, degradaciones, resultado y `hashDecision`, suficiente
+para reconstruir y comprobar la decision. No guarda movimientos bancarios ni documentos.
+El perfil vence a los quince minutos, o a los cinco minutos cuando usa una degradacion.
 
 Las lecturas comprueban titularidad, integridad del contenido, vigencia y la version exacta del
 consentimiento. Revocar bloquea nuevas lecturas y usos; volver a autorizar no rehabilita perfiles
@@ -55,13 +59,18 @@ Ver el [rollout coordinado](../../deploy/k8s/identidad/README.md#sol-326-consent
 
 `PERFILAMIENTO_MOCK_ESCENARIO` acepta `disponible` (default), `no_disponible` o `vencido`, solo
 como configuracion del servicio. No se permite elegir el escenario desde una peticion publica.
-El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 422 por perfil vencido,
-409 por version concurrente y 503 por dependencia o integridad fallida. No se entregan perfiles
-parciales, ni un fallback que parezca exitoso.
+El cliente recibe 403 por consentimiento, 404 por perfil inexistente/ajeno, 409 por conflicto
+idempotente o version concurrente y 503 por dependencia o integridad fallida.
 
-El adaptador de Identidad limita cada llamada a 700 ms. En la generación de perfiles no existe
-cache Redis, batch, proyección analítica, circuit breaker ni fallback automático: no se inventan
-consumidores ni se acredita propagación hacia ellos. No se contempla conectar proveedores reales.
+Para HU48, una fuente fallida o vencida aplica la politica versionada `degradacion-1`: reutiliza
+por hasta 30 minutos la ultima senal autorizada e integra disponible para el mismo cliente; si
+no existe, usa el valor conservador sintetico `default-1`. El resultado marca `fallbackUsed`,
+reduce su vigencia a cinco minutos y registra fuente, motivo, politica y version. Nunca se usa
+una variable fuera del consentimiento ni se presenta una degradacion sin evidencia.
+
+El adaptador de Identidad limita cada llamada a 700 ms. No existe cache Redis, batch ni
+proyeccion analitica; la cache de degradacion se reconstruye exclusivamente desde perfiles
+durables e integros. No se contempla conectar proveedores reales.
 El hash local detecta alteraciones del contenido, pero no sustituye WORM ni una firma. El chequeo
 previo al uso no es una transacción distribuida con Identidad; con las fuentes locales simuladas
 no hay divulgación externa, y estas pruebas no demuestran la propiedad de cero divulgaciones para

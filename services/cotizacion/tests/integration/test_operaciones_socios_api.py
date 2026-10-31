@@ -167,7 +167,7 @@ def test_mortgage_offer_persists_explanation_and_complete_decision(database_url,
         "Regla y plan",
     ]
     assert offer["trazabilidad"]["perfilVersion"] == 1
-    assert offer["trazabilidad"]["modeloPerfilVersion"] == "perfil-mock-1"
+    assert offer["trazabilidad"]["modeloPerfilVersion"] == "perfil-riesgo-1"
     assert offer["trazabilidad"]["reglaVersion"] == "academico-v1"
     assert offer["trazabilidad"]["fuentes"] == [
         {"nombre": "open_finance", "version": "mock-1"},
@@ -196,6 +196,8 @@ def test_mortgage_offer_persists_explanation_and_complete_decision(database_url,
         evidence = persisted.evidencia_decision
         assert evidence["tarificacion"]["datosProducto"] == body["datosProducto"]
         assert evidence["perfil"]["evidencia"]["fuentes"]
+        assert evidence["perfil"]["evidencia"]["operationId"] == body["operationId"]
+        assert evidence["perfil"]["evidencia"]["creditoId"] == body["operationId"]
         assert evidence["regla"]["version"] == "academico-v1"
         assert evidence["resultado"]["primaEstimada"] == offer["prima"]["monto"]
 

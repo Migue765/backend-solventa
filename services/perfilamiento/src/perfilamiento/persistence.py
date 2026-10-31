@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import JSON, String, UniqueConstraint, create_engine, func, select
@@ -13,6 +13,7 @@ from perfilamiento.domain import (
     ConsultaInformacionCliente,
     ErrorPerfilamiento,
     EventoConsentimiento,
+    Fuente,
     Perfil,
 )
 
@@ -37,6 +38,14 @@ class ReferenciaPerfilModel(Base):
 
     cliente_id: Mapped[UUID] = mapped_column(primary_key=True)
     referencia_id: Mapped[UUID] = mapped_column(primary_key=True)
+    perfil_id: Mapped[UUID] = mapped_column(unique=True)
+
+
+class OperacionPerfilModel(Base):
+    __tablename__ = "operaciones_perfil"
+
+    cliente_id: Mapped[UUID] = mapped_column(primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
     perfil_id: Mapped[UUID] = mapped_column(unique=True)
 
 
@@ -89,7 +98,7 @@ class RepositorioPerfiles:
             )
             return (version or 0) + 1
 
-    def guardar(self, perfil: Perfil, auditoria: dict[str, object]) -> None:
+    def guardar(self, perfil: Perfil, auditoria: dict[str, object]) -> Perfil:
         contenido = perfil.model_dump(mode="json", by_alias=True)
         try:
             with self._sesiones.begin() as sesion:
@@ -109,8 +118,25 @@ class RepositorioPerfiles:
                         perfil_id=perfil.perfil_id,
                     )
                 )
+                sesion.add(
+                    OperacionPerfilModel(
+                        cliente_id=perfil.cliente_id,
+                        operation_id=perfil.operation_id,
+                        perfil_id=perfil.perfil_id,
+                    )
+                )
                 sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
+            return perfil
         except IntegrityError as error:
+            existente = self.buscar_por_operacion(perfil.cliente_id, perfil.operation_id)
+            if (
+                existente is not None
+                and existente.referencia_id == perfil.referencia_id
+                and existente.credito_id == perfil.credito_id
+                and existente.consentimiento_id == perfil.consentimiento_id
+                and existente.consentimiento_version == perfil.consentimiento_version
+            ):
+                return existente
             raise ErrorPerfilamiento("conflicto_version", 409) from error
 
     def obtener(self, perfil_id: UUID, cliente_id: UUID) -> Perfil:
@@ -134,6 +160,37 @@ class RepositorioPerfiles:
             if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
                 raise ErrorPerfilamiento("perfil_no_integro", 503)
             return Perfil.model_validate(fila.contenido)
+
+    def buscar_por_operacion(self, cliente_id: UUID, operation_id: UUID) -> Perfil | None:
+        with self._sesiones() as sesion:
+            operacion = sesion.get(
+                OperacionPerfilModel,
+                {"cliente_id": cliente_id, "operation_id": operation_id},
+            )
+            fila = sesion.get(PerfilModel, operacion.perfil_id) if operacion is not None else None
+            if fila is None:
+                return None
+            if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
+                raise ErrorPerfilamiento("perfil_no_integro", 503)
+            return Perfil.model_validate(fila.contenido)
+
+    def fuente_en_cache(self, cliente_id: UUID, nombre: str, ahora: datetime) -> Fuente | None:
+        with self._sesiones() as sesion:
+            filas = sesion.scalars(
+                select(PerfilModel)
+                .where(PerfilModel.cliente_id == cliente_id)
+                .order_by(PerfilModel.version.desc())
+            )
+            for fila in filas:
+                if not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido):
+                    raise ErrorPerfilamiento("perfil_no_integro", 503)
+                perfil = Perfil.model_validate(fila.contenido)
+                for fuente in perfil.fuentes:
+                    if fuente.nombre == nombre and ahora - fuente.consultada_en <= timedelta(
+                        minutes=30
+                    ):
+                        return fuente
+            return None
 
     def auditar(self, auditoria: dict[str, object]) -> None:
         with self._sesiones.begin() as sesion:
