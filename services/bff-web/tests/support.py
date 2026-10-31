@@ -460,3 +460,77 @@ def token_response(access_token: str = "access-jwt") -> dict[str, Any]:
             "numeroDocumento": USER.identification,
         },
     }
+
+
+def partner_offer_payload(operation_id: UUID, socio_id: str = "BANCO-001") -> dict[str, Any]:
+    """Respuesta de Cotizacion para la oferta persistida de una operacion de socio."""
+    now = datetime.now(UTC).isoformat()
+    factor = {"codigo": "ajuste_riesgo", "descripcion": "Ajuste por riesgo", "valor": "1.07"}
+    return {
+        "ofertaId": str(uuid4()),
+        "operationId": str(operation_id),
+        "socioId": socio_id,
+        "clienteId": str(uuid4()),
+        "productoId": "automotive",
+        "solicitudId": "AQT-2026-123",
+        "cotizacionId": str(uuid4()),
+        "estado": "vigente",
+        "calculadaEn": now,
+        "vigenteHasta": now,
+        "decision": {
+            "hashDecision": "a" * 64,
+            "modelo": "academico-v1",
+            "reglaId": str(uuid4()),
+            "reglaVersion": "academico-v1",
+        },
+        "riesgo": {
+            "perfilId": str(uuid4()),
+            "version": 1,
+            "modeloVersion": "perfil-mock-1",
+            "score": "0.35",
+            "nivel": "A",
+            "consentimientoId": str(uuid4()),
+            "consentimientoVersion": 1,
+            "calculadoEn": now,
+            "vigenteHasta": now,
+            "fallbackUsed": False,
+        },
+        "fuentes": [
+            {
+                "nombre": "open_finance",
+                "version": "mock-1",
+                "consultadaEn": now,
+                "vigenteHasta": now,
+                "simulada": True,
+                "indicadorRiesgo": "0.35",
+            }
+        ],
+        "variables": {
+            "baseAsegurada": "25000000",
+            "duracion": 1,
+            "periodicidad": "mensual",
+            "tasa": "0.0015",
+            "factorPerfil": "0.20",
+            "score": "0.35",
+            "moneda": "COP",
+        },
+        "ofertas": [
+            {
+                "ofertaId": str(uuid4()),
+                "version": 1,
+                "nombre": "Seguro Automotriz Total Esencial",
+                "descripcion": "Plan esencial",
+                "prima": {"monto": "40125.00", "moneda": "COP"},
+                "periodicidad": "mensual",
+                "recomendada": True,
+                "coberturaPrincipal": "Daños al vehículo",
+                "deducible": "$500000.00 COP por evento",
+                "vigencia": "Mensual",
+                "coberturas": ["Daños al vehículo"],
+                "condiciones": ["Condiciones del plan"],
+                "beneficiosAdicionales": [],
+                "factores": [factor],
+            }
+        ],
+        "hashContenido": "b" * 64,
+    }

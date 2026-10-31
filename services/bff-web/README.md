@@ -94,6 +94,14 @@ reutilizar la clave con otros datos. La admision generica garantiza UUID global
 unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
 propietario. Reintentos y lecturas siguen aislados por organizacion.
 
+`POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=...` (SOL-330)
+pide a Cotizacion la oferta explicable de una operacion completada: tres planes con
+precio, coberturas, condiciones y factores, mas riesgo, fuentes, variables y versiones.
+Exige el mismo JWT de socio y `socioId` en el claim `socios`; responde `201` incluso en
+reintentos, que devuelven la oferta persistida. `GET` sobre la misma ruta solo la lee.
+Entradas vencidas responden `422 entradas_vencidas`; una decision inconsistente,
+`422 oferta_no_disponible`; nunca se devuelve una oferta parcial.
+
 Errores previos a perfilamiento: `400 solicitud_invalida`, `401 sesion_invalida`,
 `403 alcance_insuficiente`/`socio_no_autorizado`, `404 cliente_no_encontrado`.
 Admision persistente de Cotizacion devuelve `429 cuota_socio_excedida` o
