@@ -8,7 +8,8 @@ import pytest
 from bff_web.domain.auth import User
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
 from bff_web.domain.partner_offer import PartnerOffer as PartnerOfferSnapshot
-from bff_web.domain.partner_operation import PartnerOffer as PartnerOperationOffer, PartnerOperation
+from bff_web.domain.partner_operation import PartnerOffer as PartnerOperationOffer
+from bff_web.domain.partner_operation import PartnerOperation
 from bff_web.domain.quotes import InsuranceProduct
 from flask import Flask
 from support import USER, FakeIdentity, KeyPair, partner_offer_payload, sign_token

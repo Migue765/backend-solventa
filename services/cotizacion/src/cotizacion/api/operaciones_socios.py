@@ -13,9 +13,9 @@ from cotizacion.application.iniciar_solicitud_socio import (
     OperacionSocio,
     SolicitudSocioComando,
 )
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.ofertas_socio import CalcularOfertaSocio
 from cotizacion.domain.oferta_socio import OfertaSocio
-from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.infrastructure.persistence.admision_socios import AdmisionSocios
 from cotizacion.infrastructure.persistence.repositorio_operaciones_socios import (
     RepositorioOperacionesSociosSql,

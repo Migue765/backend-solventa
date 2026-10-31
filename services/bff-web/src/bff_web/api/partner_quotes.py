@@ -14,8 +14,8 @@ from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import User
 from bff_web.domain.document_types import validate_identification
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
-from bff_web.domain.profiling import ProfilingError
 from bff_web.domain.partner_offer import PartnerOffer as PartnerOfferSnapshot
+from bff_web.domain.profiling import ProfilingError
 from bff_web.domain.quote_errors import QuoteServiceUnavailableError
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
 from bff_web.problems import problem_response
