@@ -146,6 +146,21 @@ Para HU49, esa oferta se recupera por `operationId` sin recalcular y añade
 `explicacion.factoresDeterminantes` y `trazabilidad` con las versiones del perfil,
 fuentes y regla. El BFF valida estrictamente esa estructura, pero no recibe ni expone
 la evidencia completa usada para reconstruir la decisión, que permanece en Cotizacion.
+
+La gestión de excepciones Open Finance está en `/v1/asesor/excepciones-open-finance`.
+Requiere JWT verificado con `rol=asesor`, `scope=asesor` y el `socioId` de la query
+presente en el claim `socios`; el actor de la decisión siempre es el `sub` del token.
+`GET /v1/asesor/excepciones-open-finance?socioId=...` lista únicamente pendientes;
+`GET /v1/asesor/excepciones-open-finance/{excepcionId}?socioId=...` expone causa,
+consentimiento asociado y trazabilidad mínima. `POST
+/v1/asesor/excepciones-open-finance/{excepcionId}/resolver?socioId=...` acepta
+`{decision:"aprobar"|"rechazar",motivo}`
+(3–500 caracteres) y confirma únicamente después de persistir la transición y su evento.
+La aprobación revalida el consentimiento vigente e idéntico; si falta o cambió, devuelve
+403 `consentimiento_ausente` o `consentimiento_no_vigente` sin resolver el caso. La
+decisión nunca concede ni amplía fuentes, datos o finalidad; el proceso original debe
+revalidar el consentimiento antes de continuar. `409 excepcion_ya_resuelta` indica que
+la bandeja ya fue atendida, y un caso de otro socio se oculta con 404 en detalle/decisión.
 La regla ALB `bff_web_partners` (prioridad 13) lleva estas rutas al BFF; CORS
 permite y expone `API-Version`. No desplegar solo Cotizacion: la ruta publica
 siempre debe pasar por autenticacion del BFF.

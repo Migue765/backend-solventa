@@ -23,6 +23,11 @@ API interna con Bearer; `/health` no requiere autenticacion:
 | GET | `/v1/consultas-informacion-cliente/{operationId}` | `socioId` en query; recupera HU44 y revalida consentimiento |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
+| POST | `/v1/excepciones-open-finance` | Registra un bloqueo real para revisión humana |
+| GET | `/v1/excepciones-open-finance?socioId=...` | Lista solo excepciones pendientes |
+| GET | `/v1/excepciones-open-finance/{excepcionId}?socioId=...` | Consulta detalle y trazabilidad |
+| GET | `/v1/excepciones-open-finance/operaciones/{operationId}?socioId=...` | Devuelve el resultado al proceso solicitante |
+| POST | `/v1/excepciones-open-finance/{excepcionId}/resolver?socioId=...` | Persiste aprobación o rechazo |
 
 El servicio consulta el consentimiento autoritativo antes de cada fuente y antes de entregar
 el perfil. Persiste una instantanea inmutable y su auditoria en la misma transaccion. La
@@ -77,6 +82,29 @@ El hash local detecta alteraciones del contenido, pero no sustituye WORM ni una 
 previo al uso no es una transacción distribuida con Identidad; con las fuentes locales simuladas
 no hay divulgación externa, y estas pruebas no demuestran la propiedad de cero divulgaciones para
 un adaptador real.
+
+## Excepciones Open Finance
+
+El productor interno crea una excepción solo cuando un bloqueo de fuente o regla impide
+continuar automáticamente. `bloqueaProcesamiento` debe ser `true`; no se enrutan fallbacks
+automáticos exitosos, errores de consentimiento, ni rechazos operativos como conflictos de
+idempotencia. La creación recibe `operationId`, `socioId`, `clienteId`, el ID/versión del
+consentimiento, `codigo` (`fuente_no_disponible`, `fuente_vencida` o `regla_no_aplicable`)
+y `motivoBloqueo`. Perfilamiento consulta y valida el consentimiento autoritativo antes de
+crear el caso. `socioId + operationId` es idempotente; un reuso con otro motivo o contexto
+responde `409 conflicto_idempotencia`.
+
+El BFF expone la bandeja/detalle/decisión del asesor; las rutas internas de esta tabla usan
+`INTERNAL_API_TOKEN`, no están expuestas directamente al navegador. Una resolución exige
+`X-Actor-ID` originado en el `sub` del JWT verificado y motivo de 3 a 500 caracteres.
+La aprobación revalida el consentimiento vigente y la misma versión. Nunca cambia consentimiento,
+fuentes, datos ni finalidad: el proceso solicitante debe volver a pasar su validación de
+consentimiento antes de continuar. El rechazo no necesita consentimiento vigente.
+
+La decisión, actor, fecha, motivo, alcance, estados previo/posterior y correlación se guardan
+atómicamente con un evento durable. La API solo confirma la resolución tras el commit; en caso
+de error no cambia el estado. El proceso solicitante consulta por `socioId + operationId` para
+obtener el resultado persistido. `init-db` crea aditivamente las dos tablas de excepciones.
 
 ## Consulta autorizada HU44
 

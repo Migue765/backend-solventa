@@ -2,7 +2,7 @@ module "ecr_perfilamiento" {
   source = "../../../modules/ecr"
 
   repository_name = "solventa/perfilamiento"
-  force_delete    = var.ecr_force_delete
+  force_delete    = false
   tags            = local.tags
 }
 
@@ -20,7 +20,9 @@ module "cicd_perfilamiento" {
   github_repository         = var.github_repository
   branch_name               = var.release_branch
   release_tag_patterns      = ["perfilamiento-v*"]
-  require_manual_approval   = var.require_manual_approval
+  require_manual_approval   = true
+  restrict_service_access   = true
+  artifact_force_destroy    = false
   vpc_id                    = module.network.vpc_id
   private_subnet_ids        = module.network.private_subnet_ids
   cluster_name              = module.eks.cluster_name
