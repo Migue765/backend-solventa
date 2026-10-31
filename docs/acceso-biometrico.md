@@ -227,3 +227,18 @@ Limpian solo sus claves unicas, nunca usan FLUSHDB/FLUSHALL. El stack de integra
 HTTP tambien se comprobo con Redis real 7.4.11 mediante tunel SSH loopback; no
 acredita failover, replicas ni infraestructura productiva.
 La huella fisica y propiedades Android requieren evidencia separada del dispositivo.
+
+## Trazabilidad SOL-314 / HU17
+
+Pruebas en `services/identidad/tests/integration/test_biometric_api.py`.
+
+| Criterio | Estado | Evidencia |
+| --- | --- | --- |
+| Sesion solo tras resultado seguro y autorizado, ligada al cliente | Parcial: prueba de posesion de clave P-256 y rol `cliente`; no hay resultado selfie/liveness | `test_enroll_login_rotate_logout_revoke_and_audit`, `test_role_change_denies_proof_management_and_bound_refresh` |
+| Resultado no autorizado no crea sesion | Cubierto | `test_invalid_proofs_never_create_sessions` |
+| Fallo permite reintento controlado | Cubierto para firma/nonce; no hay estado de verificacion KYC | `test_failed_proof_is_audited_without_sensitive_data_and_allows_controlled_retry`, `test_dependencies_fail_closed_and_quota_is_shared` |
+| Misma vigencia/controles que la sesion convencional | Cubierto | `test_biometric_session_has_same_lifetime_and_claims_as_conventional`, `test_expiration_boundary_and_concurrent_replay` |
+| No recibir ni almacenar plantillas, selfies ni veredictos del cliente | Cubierto (JSON estricto, campos extra rechazados) | `test_endpoints_reject_selfies_templates_and_client_verdicts` |
+| Auditoria de exito/fallo sin datos sensibles | Cubierto | `test_enroll_login_rotate_logout_revoke_and_audit`, `test_failed_proof_is_audited_without_sensitive_data_and_allows_controlled_retry` |
+| Sin sesion parcial al fallar | Cubierto | `test_audit_failure_rolls_back_session`, `test_signer_failure_does_not_create_session` |
+| Confirmar identidad solo si selfie/prueba de vida cumplen las validaciones de onboarding | **Pendiente**: requiere contrato de un verificador servidor y politica de onboarding | — |
