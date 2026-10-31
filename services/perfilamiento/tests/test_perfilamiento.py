@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from time import perf_counter
+from typing import Literal
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,7 +16,13 @@ from perfilamiento.client_information import (
     ConsultarInformacionCliente,
     ConsultarInformacionComando,
 )
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, EventoConsentimiento, Fuente
+from perfilamiento.domain import (
+    Consentimiento,
+    ErrorPerfilamiento,
+    EventoConsentimiento,
+    Fuente,
+    Perfil,
+)
 from perfilamiento.persistence import (
     ConsultaInformacionModel,
     ConsultaModel,
@@ -203,7 +210,7 @@ def test_consulta_revocada_bloquea_antes_de_consultar_fuentes(
     consentimientos.actual = consentimientos.actual.model_copy(update={"estado": "revocado"})
 
     class FuenteProhibida:
-        nombre = "open_finance"
+        nombre: Literal["open_finance"] = "open_finance"
 
         def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
             pytest.fail("No se consulta una fuente despues de la revocacion.")
@@ -232,7 +239,7 @@ def test_fuente_fallida_abre_circuito_sin_respuesta_parcial(
     cliente_id = uuid4()
 
     class FuenteFallida:
-        nombre = "open_finance"
+        nombre: Literal["open_finance"] = "open_finance"
         llamadas = 0
 
         def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
@@ -311,7 +318,7 @@ def test_sin_consentimiento_aplicable_no_consulta_fuentes(
         consentimientos.actual = consentimientos.actual.model_copy(update=cambios[estado])
 
     class FuenteNoAutorizada:
-        nombre = "open_finance"
+        nombre: Literal["open_finance"] = "open_finance"
 
         def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
             pytest.fail("No se debe consultar ninguna fuente sin el consentimiento requerido.")
@@ -361,7 +368,7 @@ def test_revocacion_en_vuelo_bloquea_entrega_y_reutilizacion(repo: RepositorioPe
     consentimientos = ConsentimientosPrueba(cliente_id)
 
     class FuenteQueRevoca:
-        nombre = "open_data"
+        nombre: Literal["open_data"] = "open_data"
 
         def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
             assert consentimientos.actual is not None
@@ -705,7 +712,7 @@ def test_concurrent_retries_persist_one_risk(repo: RepositorioPerfiles) -> None:
     barrera = Barrier(2)
 
     class FuenteConcurrente:
-        nombre = "open_finance"
+        nombre: Literal["open_finance"] = "open_finance"
 
         def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
             barrera.wait(timeout=5)
@@ -718,7 +725,7 @@ def test_concurrent_retries_persist_one_risk(repo: RepositorioPerfiles) -> None:
         lambda: AHORA,
     )
 
-    def ejecutar(correlation_id: str):
+    def ejecutar(correlation_id: str) -> Perfil:
         return servicio.generar(
             cliente_id,
             referencia_id,
