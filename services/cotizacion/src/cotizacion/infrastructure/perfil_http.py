@@ -16,7 +16,7 @@ from cotizacion.domain.tarifa import PerfilRiesgo
 
 class FuenteResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    nombre: Literal["open_finance", "open_data"]
+    nombre: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     version: str
     consultadaEn: AwareDatetime
     vigenteHasta: AwareDatetime
@@ -28,7 +28,7 @@ class FuenteResponse(BaseModel):
 class VariableResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     nombre: Literal["indicador_riesgo"]
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     valorNormalizado: Decimal = Field(ge=0, le=1)
     autorizadaPor: UUID
 
@@ -36,7 +36,7 @@ class VariableResponse(BaseModel):
 class VariableExcluidaResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     nombre: str
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     motivo: Literal["sin_consentimiento"]
 
 
@@ -50,10 +50,18 @@ class ReglaRiesgoResponse(BaseModel):
 
 class DegradacionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    fuente: Literal["open_finance", "open_data"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     motivo: Literal["fuente_no_disponible", "fuente_vencida"]
     politica: Literal["cache", "default"]
     versionPolitica: Literal["degradacion-1"]
+
+
+class EstadoFuenteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fuente: str
+    estado: Literal["disponible", "cache", "default", "fallida"]
+    intentos: int = Field(ge=0, le=2)
+    motivo: str | None = None
 
 
 class PerfilResponse(BaseModel):
@@ -78,6 +86,7 @@ class PerfilResponse(BaseModel):
     degradaciones: tuple[DegradacionResponse, ...]
     hashDecision: str = Field(pattern=r"^[0-9a-f]{64}$")
     fallbackUsed: bool
+    estadoFuentes: tuple[EstadoFuenteResponse, ...] = ()
 
 
 class ProveedorPerfilHttp:
@@ -176,9 +185,32 @@ class ProveedorPerfilHttp:
         if (
             payload.clienteId != cliente_id
             or payload.calculadoEn > ahora
-            or len(payload.fuentes) != 2
-            or {fuente.nombre for fuente in payload.fuentes} != {"open_finance", "open_data"}
+            or len(payload.fuentes) != len({fuente.nombre for fuente in payload.fuentes})
+            or not {"open_finance", "open_data"}.issubset(
+                fuente.nombre for fuente in payload.fuentes
+            )
             or any(fuente.consultadaEn > ahora for fuente in payload.fuentes)
+            or payload.fallbackUsed
+            != (
+                any(estado.estado in {"cache", "default"} for estado in payload.estadoFuentes)
+                if payload.estadoFuentes
+                else bool(payload.degradaciones)
+            )
+            or (
+                payload.estadoFuentes
+                and (
+                    len(payload.estadoFuentes) != len(payload.fuentes)
+                    or {estado.fuente for estado in payload.estadoFuentes}
+                    != {fuente.nombre for fuente in payload.fuentes}
+                    or any(estado.estado == "fallida" for estado in payload.estadoFuentes)
+                    or {
+                        estado.fuente
+                        for estado in payload.estadoFuentes
+                        if estado.estado in {"cache", "default"}
+                    }
+                    != {degradacion.fuente for degradacion in payload.degradaciones}
+                )
+            )
         ):
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
         if payload.vigenteHasta <= ahora:
