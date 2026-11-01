@@ -33,16 +33,17 @@ Consulta [la guía de CI](docs/ci.md) para ver alcance, nombres y lectura de res
 Instala las herramientas requeridas por el servicio en el que vas a trabajar:
 
 - Git.
-- Python
-- PostgreSQL local
-- Docker, .
-- Terraform
+- Python 3.12 o superior (lo exige `requires-python` en cada servicio).
+- PostgreSQL local, si el servicio usa base de datos.
+- Docker, para construir las imágenes de los servicios.
+- Terraform, solo para tareas de infraestructura.
 
 Comprueba las herramientas instaladas:
 
 ```bash
 git --version
 python --version
+docker --version
 terraform version
 ```
 
@@ -52,6 +53,7 @@ El comando `terraform version` solo es necesario si vas a trabajar con Terraform
 
 ```bash
 git clone https://github.com/Migue765/backend-solventa.git
+cd backend-solventa
 ```
 
 ## Estructura del repositorio
@@ -91,21 +93,21 @@ git clone https://github.com/Migue765/backend-solventa.git
 
 ## Microservicios previstos
 
-| Carpeta | Microservicio | Contexto |
-|---|---|---|
-| `bff-web` | BFF Web | Experiencias y API |
-| `bff-movil` | BFF Móvil | Experiencias y API |
-| `api-socios` | API de Socios | Distribución |
-| `identidad` | Consentimiento y KYC | Identidad y Cliente |
-| `perfilamiento` | Personalización y perfil de riesgo | Perfilamiento y Personalización |
-| `cotizacion` | Tarificación y Cotización | Cotización |
-| `polizas` | Suscripción, emisión y ciclo de vida | Producto y Suscripción / Pólizas |
-| `siniestros` | Siniestros | Siniestros |
-| `pagos` | Cobros, pagos y recaudo | Pagos y Recaudo |
-| `cumplimiento` | Fraude, analítica y auditoría | Cumplimiento y Auditoría |
-| `integraciones` | Adaptadores externos | Integraciones |
+| Carpeta | Microservicio | Contexto | Estado |
+|---|---|---|---|
+| `bff-web` | BFF Web | Experiencias y API | Implementado, con [README](services/bff-web/README.md) |
+| `bff-movil` | BFF Móvil | Experiencias y API | Implementado, con [README](services/bff-movil/README.md) |
+| `api-socios` | API de Socios | Distribución | Estructura inicial |
+| `identidad` | Consentimiento y KYC | Identidad y Cliente | Implementado, con [README](services/identidad/README.md) |
+| `perfilamiento` | Personalización y perfil de riesgo | Perfilamiento y Personalización | Implementado, con [README](services/perfilamiento/README.md) |
+| `cotizacion` | Tarificación y Cotización | Cotización | Implementado, con [README](services/cotizacion/README.md) |
+| `polizas` | Suscripción, emisión y ciclo de vida | Producto y Suscripción / Pólizas | Implementado, con [README](services/polizas/README.md) |
+| `siniestros` | Siniestros | Siniestros | Estructura inicial |
+| `pagos` | Cobros, pagos y recaudo | Pagos y Recaudo | Estructura inicial |
+| `cumplimiento` | Fraude, analítica y auditoría | Cumplimiento y Auditoría | Estructura inicial |
+| `integraciones` | Adaptadores externos | Integraciones | Estructura inicial |
 
-Esta tabla describe los servicios previstos. Verifica que la carpeta y la configuración de cada servicio existan antes de seguir sus instrucciones de ejecución.
+«Estructura inicial» indica que la carpeta existe, pero todavía no tiene código de dominio ni pruebas. Antes de seguir las instrucciones de ejecución de un servicio, revisa su README.
 
 ## Instalación y ejecución local de un microservicio
 
@@ -132,6 +134,19 @@ Activación en Windows PowerShell:
 ```
 
 No se incluye un comando universal para iniciar todos los servicios porque el punto de entrada y el gestor de dependencias deben verificarse por servicio. Cada microservicio debe documentar sus propios comandos una vez implementado.
+
+## Comandos de calidad
+
+Son los mismos que ejecuta el flujo `quality.yml` de GitHub Actions. Córrelos desde la raíz del repositorio, con el entorno virtual activo:
+
+```bash
+python -m ruff format --check .
+python -m ruff check .
+python -m mypy --config-file services/<servicio>/mypy.ini services/<servicio>/src services/<servicio>/tests
+python -m pytest services/<servicio>/tests
+```
+
+`ruff format` sin `--check` aplica el formato. Para no generar diferencias ajenas a tu cambio, pásale solo los archivos que modificaste.
 
 
 ## Reglas de arquitectura
