@@ -10,7 +10,11 @@ from alembic.config import Config
 from bff_web.domain.auth import User
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
-from cotizacion.infrastructure.persistence.models import PagoSimuladoModel, SagaEmisionModel
+from cotizacion.infrastructure.persistence.models import (
+    OutboxEventoModel,
+    PagoSimuladoModel,
+    SagaEmisionModel,
+)
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -196,26 +200,113 @@ def test_emission_failure_keeps_payment_and_retry_emits_once(
 def test_lost_emission_acknowledgement_retries_without_duplicate_policy(
     policy_runtime: Runtime, token: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, quotes, _ = policy_runtime
+    client, quotes, factory = policy_runtime
     gateway = quotes.application.extensions["polizas"]
+    policies = quotes.application.extensions["polizas_test_app"]
     original = gateway.emitir
 
     def lose_response(evidence: dict[str, object], correlation_id: str) -> UUID:
+        with factory() as session:
+            paid: PagoSimuladoModel = session.scalars(select(PagoSimuladoModel)).one()
+            assert str(paid.pago_id) == evidence["pagoId"]
+            saga = session.get(SagaEmisionModel, paid.suscripcion_id)
+            assert saga is not None and (saga.estado, saga.version) == ("pago_confirmado", 2)
+            event: OutboxEventoModel = session.scalars(
+                select(OutboxEventoModel).where(OutboxEventoModel.tipo == "PagoSimuladoConfirmado")
+            ).one()
+            assert event.payload["pagoId"] == evidence["pagoId"]
         original(evidence, correlation_id)
         raise ServicioPolizasNoDisponibleError()
 
     monkeypatch.setattr(gateway, "emitir", lose_response)
-    selection, _, failure = create_paid_request(client, token, "automotive", payment_status=503)
-    assert failure["code"] == "servicio_no_disponible"
-    policies = quotes.application.extensions["polizas_test_app"]
-    with Session(policies.extensions["polizas_engine"]) as session:
-        first_id: UUID = session.scalars(select(PolizaModel.poliza_id)).one()
-    monkeypatch.setattr(gateway, "emitir", original)
-    retry = client.post(
-        f"/v1/solicitudes-cotizacion/{selection['solicitudId']}/pago-simulado",
-        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
-        json={},
+    selection, started, failure = create_paid_request(
+        client, token, "automotive", payment_status=503
     )
-    assert retry.status_code == 200
-    dashboard = client.get("/v1/clientes/me/dashboard", headers=bearer(token)).get_json()
-    assert [p["id"] for p in dashboard["polizas"]] == [str(first_id)]
+    assert failure["code"] == "servicio_no_disponible"
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    headers = bearer(token)
+    payment_response = client.get(base + "/pago-simulado", headers=headers)
+    assert payment_response.status_code == 200
+    payment = payment_response.get_json()
+    assert payment["solicitudId"] == selection["solicitudId"]
+    assert payment["suscripcionId"] == started["id"]
+    assert payment["estado"] == "confirmado"
+    assert payment["simulada"] is True
+    assert payment["saga"] == {
+        "estado": "pago_confirmado",
+        "version": 2,
+        "actualizadaEn": payment["confirmadaEn"],
+    }
+    subscription_response = client.get(base + "/suscripcion", headers=headers)
+    assert subscription_response.status_code == 200
+    subscription = subscription_response.get_json()
+    assert subscription["id"] == started["id"]
+    assert subscription["saga"] == payment["saga"]
+    dashboard_response = client.get("/v1/clientes/me/dashboard", headers=headers)
+    assert dashboard_response.status_code == 200
+    dashboard = dashboard_response.get_json()
+    validate_contract(dashboard)
+    assert len(dashboard["polizas"]) == 1
+    policy = dashboard["polizas"][0]
+    assert policy["suscripcionId"] == started["id"]
+    assert dashboard["suscripciones"][0]["id"] == started["id"]
+    assert dashboard["suscripciones"][0]["saga"] == payment["saga"]
+    with Session(policies.extensions["polizas_engine"]) as session:
+        stored: PolizaModel = session.scalars(select(PolizaModel)).one()
+        first_id = stored.poliza_id
+        assert policy["id"] == str(first_id)
+        assert stored.pago_id == UUID(payment["id"])
+        assert stored.suscripcion_id == UUID(str(started["id"]))
+    with factory() as session:
+        paid: PagoSimuladoModel = session.scalars(select(PagoSimuladoModel)).one()
+        assert str(paid.pago_id) == payment["id"]
+        idempotency_key = paid.idempotency_key
+        saga = session.get(SagaEmisionModel, paid.suscripcion_id)
+        assert saga is not None and (saga.estado, saga.version) == ("pago_confirmado", 2)
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventoModel)
+                .where(OutboxEventoModel.tipo == "PolizaAcademicaEmitida")
+            )
+            == 0
+        )
+
+    monkeypatch.setattr(gateway, "emitir", original)
+    for _ in range(2):
+        retry = client.post(
+            base + "/pago-simulado",
+            headers={**headers, "Idempotency-Key": str(idempotency_key)},
+            json={},
+        )
+        assert retry.status_code == 200
+        assert retry.get_json() == payment
+        current_response = client.get(base + "/suscripcion", headers=headers)
+        assert current_response.status_code == 200
+        current = current_response.get_json()
+        assert current["id"] == started["id"]
+        assert current["saga"]["estado"] == "emitida"
+        assert current["saga"]["version"] == 3
+        snapshot_response = client.get(base + "/pago-simulado", headers=headers)
+        assert snapshot_response.status_code == 200
+        assert snapshot_response.get_json() == payment
+    recovered_response = client.get("/v1/clientes/me/dashboard", headers=headers)
+    assert recovered_response.status_code == 200
+    recovered = recovered_response.get_json()
+    validate_contract(recovered)
+    assert recovered["polizas"] == [policy]
+    assert recovered["suscripciones"][0]["saga"] == current["saga"]
+    with factory() as session:
+        paid = session.scalars(select(PagoSimuladoModel)).one()
+        assert str(paid.pago_id) == payment["id"]
+        for event_type, id_field, identifier in (
+            ("PagoSimuladoConfirmado", "pagoId", payment["id"]),
+            ("PolizaAcademicaEmitida", "polizaId", str(first_id)),
+        ):
+            event: OutboxEventoModel = session.scalars(
+                select(OutboxEventoModel).where(OutboxEventoModel.tipo == event_type)
+            ).one()
+            assert event.agregado_id == paid.suscripcion_id
+            assert event.payload[id_field] == identifier
+    with Session(policies.extensions["polizas_engine"]) as session:
+        assert session.scalars(select(PolizaModel.poliza_id)).one() == first_id

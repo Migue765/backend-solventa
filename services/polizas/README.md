@@ -62,6 +62,13 @@ no persistido**. Repetir POST pago de la misma solicitud recupera el mismo
 pago y completa la emision sin duplicarla, incluso si vencio la cotizacion.
 No se promete entrega automatica sin ese reintento; no hay worker implementado.
 
+Si se pierde el acuse despues de persistir la poliza, el dashboard puede listar
+esa poliza mientras GET suscripcion aun muestra `pago_confirmado` version 2.
+Las lecturas no completan la saga: repetir POST pago con la misma solicitud y
+clave recupera la operacion y permite avanzar a `emitida` version 3, sin duplicar
+pago, poliza ni eventos. La respuesta del pago sigue conservando su instantanea
+version 2; una poliza visible no sustituye la confirmacion de la saga.
+
 GET dashboard consulta las dos persistencias via HTTP, sin leer tablas ajenas,
 retorna `polizas` reales y falla con `503` si Polizas no responde. No emite ni
 modifica el negocio en una lectura. Sin `POLIZAS_SERVICE_URL` se conserva el
