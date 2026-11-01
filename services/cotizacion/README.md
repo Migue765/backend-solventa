@@ -231,6 +231,10 @@ por solicitud. El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
 `confirmadaEn`. Repetir una clave rechazada antigua devuelve su rechazo, pero
 no degrada GET/dashboard ni la saga posterior. No hay conciliacion automatica,
 resultado financiero pendiente/ambiguo, firma o documento implementados.
+Las fechas de pago, suscripcion y dashboard se serializan en UTC (`Z`), tambien
+cuando PostgreSQL devuelve un `timestamptz` con otro offset. Asi el replay conserva
+el mismo body y snapshot sin depender de la zona horaria de la conexion ni
+modificar el instante persistido.
 
 GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin resultado;
 una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuelve

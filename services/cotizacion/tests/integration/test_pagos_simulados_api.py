@@ -303,6 +303,25 @@ def cliente_simulador(database_url, resultado):
     ).test_client()
 
 
+@pytest.mark.parametrize("resultado", ["confirmado", "rechazado"])
+def test_dashboard_y_pago_conservan_el_mismo_instante_canonico(client, database_url, resultado):
+    base, query, _, _ = preparar(client)
+    simulador = cliente_simulador(database_url, resultado)
+    respuesta = pagar(simulador, base, query)
+    assert respuesta.status_code == 200
+    pago = respuesta.get_json()
+    repositorio = simulador.application.extensions["repositorio_cotizaciones"]
+    dashboard = repositorio.consultar_dashboard(UUID(query["clienteId"]))
+    assert len(dashboard["pagos"]) == 1
+    campo_fecha = "confirmadaEn" if resultado == "confirmado" else "rechazadaEn"
+    assert dashboard["pagos"][0]["id"] == pago["id"]
+    assert dashboard["pagos"][0][campo_fecha] == pago[campo_fecha]
+    assert pago[campo_fecha].endswith("Z")
+    suscripcion = simulador.get(base + "/suscripcion", query_string=query).get_json()
+    assert dashboard["suscripciones"][0]["saga"] == suscripcion["saga"]
+    assert suscripcion["saga"]["actualizadaEn"].endswith("Z")
+
+
 def test_rechazo_durable_recuperable_y_nuevo_intento_sin_reescribir_resultado(client, database_url):
     base, query, seleccion, suscripcion = preparar(client)
     rechazador = cliente_simulador(database_url, "rechazado")

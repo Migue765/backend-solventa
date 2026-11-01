@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -330,7 +330,9 @@ def _oferta_a_json(oferta: Oferta) -> dict[str, object]:
 
 
 def _fecha(fecha: datetime) -> str:
-    return fecha.isoformat().replace("+00:00", "Z")
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=UTC)
+    return fecha.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _producto_publico(producto_interno_id: UUID) -> str:

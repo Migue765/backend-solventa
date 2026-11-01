@@ -492,7 +492,7 @@ def _instantanea_a_dominio(modelo: InstantaneaDecisionModel | None) -> Instantan
 def _fecha_dashboard(fecha: datetime) -> str:
     if fecha.tzinfo is None:
         fecha = fecha.replace(tzinfo=UTC)
-    return fecha.isoformat().replace("+00:00", "Z")
+    return fecha.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _producto_id_dashboard(producto_id: UUID) -> str:
