@@ -173,9 +173,13 @@ registro actual, sin reescribir suscripciones, pagos, pólizas o eventos histór
 
 La UI debe refrescar antes de confirmar: un cambio de referencia/revisión retira
 la confirmación anterior. Regresar sin aceptar conserva el borrador; no se añade
-cancelación, cambio tras aceptación, consentimiento ni firma. Desplegar backend y
-migración antes del nuevo frontend; para rollback, retirar el nuevo recorrido y
-conservar la tabla. Downgrade rechaza eliminar revisiones/claves ya persistidas.
+cancelación, cambio tras aceptación, consentimiento ni firma. Aplicar la migración
+y actualizar todas las réplicas backend antes de habilitar el nuevo frontend;
+no operar con versiones backend mezcladas. Con revisiones provisionales
+persistidas, un rollback requiere una versión compatible con sus guardias o un
+procedimiento de contención definido y validado por separado. Retirar el nuevo
+recorrido y conservar la tabla no hace seguro volver a código que ignore esas
+revisiones. Downgrade rechaza eliminar revisiones/claves ya persistidas.
 
 ### Persistencia de suscripción
 
