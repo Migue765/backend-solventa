@@ -14,16 +14,20 @@ test('Calidad conserva comprobaciones existentes, sin CD ni checks extra de back
   assert.doesNotMatch(ci, /backport_policy:|deploy:|contents: write|deployments: write/);
   assert.ok(ci.includes('node --test .github/scripts/*.test.cjs'));
 });
-test('solo candidatos verifican política desde base confiable; errores vuelven a CI normal', () => {
-  const steps = read('quality.yml').split('\n      - name: ').slice(1);
-  assert.ok(steps[0].includes('ref: ${{ github.event.pull_request.base.sha }}'));
-  for (const step of steps.slice(0, 2)) assert.ok(step.includes("startsWith(github.head_ref, 'backport/release-pr-')"));
-  assert.ok(steps[1].includes("core.setOutput('skip_tests', 'false')"));
-  for (const step of steps.slice(2)) {
-    if (step.startsWith('Publicar resumen de validación\n')) assert.ok(step.includes('if: always()'));
-    else assert.ok(step.includes("steps.policy.outputs.skip_tests != 'true'"), step.split('\n')[0]);
-  }
-});
+for (const [ending, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  test(`solo candidatos verifican política desde base confiable; errores vuelven a CI normal (${ending})`, () => {
+    const ci = read('quality.yml').replace(/\r?\n/g, newline);
+    const steps = ci.split(/\r?\n      - name: /).slice(1);
+    assert.ok(steps[0].includes('ref: ${{ github.event.pull_request.base.sha }}'));
+    for (const step of steps.slice(0, 2)) assert.ok(step.includes("startsWith(github.head_ref, 'backport/release-pr-')"));
+    assert.ok(steps[1].includes("core.setOutput('skip_tests', 'false')"));
+    for (const step of steps.slice(2)) {
+      const name = step.split(/\r?\n/)[0];
+      if (name === 'Publicar resumen de validación') assert.match(step, /^\s+if: always\(\)\s*$/m);
+      else assert.ok(step.includes("steps.policy.outputs.skip_tests != 'true'"), name);
+    }
+  });
+}
 test('resumen con resultados JUnit por módulo sin repetir las pruebas', () => {
   const ci = read('quality.yml');
   assert.ok(ci.includes('python -m pytest tests --junitxml=reports/root.xml'));

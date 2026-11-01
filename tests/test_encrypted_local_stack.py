@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +46,55 @@ local_stack.main()
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "BFF web:" in result.stdout
+
+
+@pytest.mark.parametrize("module", ["tests.jmeter.local_stack", "tests.jmeter.run"])
+def test_cli_uses_checkout_before_foreign_service_installations(
+    tmp_path: Path, module: str
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    services = {
+        "bff_movil": "bff-movil",
+        "bff_web": "bff-web",
+        "cotizacion": "cotizacion",
+        "identidad": "identidad",
+        "perfilamiento": "perfilamiento",
+        "polizas": "polizas",
+    }
+    for package in services:
+        foreign = tmp_path / package
+        foreign.mkdir()
+        (foreign / "__init__.py").write_text(
+            'raise AssertionError("Imported a foreign service installation")\n'
+        )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib
+import json
+import sys
+from pathlib import Path
+
+importlib.import_module(sys.argv[1])
+root = Path.cwd()
+for package, service in json.loads(sys.argv[2]).items():
+    loaded = importlib.import_module(package)
+    expected = root / "services" / service / "src" / package / "__init__.py"
+    assert Path(loaded.__file__).resolve() == expected.resolve(), package
+""",
+            module,
+            json.dumps(services),
+        ],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def call(url: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, Any]]:
