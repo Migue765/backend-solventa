@@ -14,6 +14,11 @@ from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 import pytest
+from cotizacion.infrastructure.persistence.models import (
+    SeleccionOfertaModel,
+    SeleccionProvisionalModel,
+    SuscripcionModel,
+)
 from jwcrypto import jwe, jwk
 from perfilamiento.adapters import FuenteMock
 from perfilamiento.domain import Fuente
@@ -22,6 +27,155 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tests.jmeter.local_stack import LocalStack
+
+
+def test_provisional_selection_over_owned_encrypted_http_stack(
+    tmp_path: Path,
+    record_property: Callable[[str, object], None],
+) -> None:
+    with TemporaryDirectory(prefix="selection-http-", dir=tmp_path) as directory:
+        with LocalStack(Path(directory), encrypted_login_enabled=True) as stack:
+            ports = [server.server_port for server in stack.servers.values()]
+            threads = list(stack.threads.values())
+            assert not {4200, 4300}.intersection(ports)
+            email = f"selection-{uuid4().hex}@example.com"
+            password = "Local-Test-Password!"
+            status, _ = call(
+                stack.urls["identity"] + "/v1/usuarios",
+                {
+                    "nombre": "Cliente sintetico seleccion",
+                    "correo": email,
+                    "contrasena": password,
+                    "tipoDocumento": "passport",
+                    "numeroDocumento": uuid4().hex[:16].upper(),
+                    "telefono": "+573001234567",
+                    "fechaNacimiento": "1990-01-01",
+                },
+            )
+            assert status == 201
+            status, challenge = call(stack.urls["web"] + "/v1/sesiones/desafio")
+            assert status == 200
+            status, session = call(
+                stack.urls["web"] + "/v1/sesiones",
+                encrypted_login_payload(challenge, email, password),
+            )
+            assert status == 200
+            auth = {"Authorization": "Bearer " + session["accessToken"]}
+            consent_url = stack.urls["web"] + "/v1/consentimientos/perfilamiento"
+            status, _ = call(
+                consent_url,
+                {
+                    "autorizado": True,
+                    "version": 0,
+                    "solicitud": {
+                        "finalidad": "cotizacion",
+                        "alcances": ["open_finance", "open_data"],
+                        "fuentes": ["open_finance", "open_data"],
+                        "datos": ["indicador_riesgo"],
+                        "versionTerminos": "1.0",
+                        "vigenteHasta": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                    },
+                },
+                auth,
+                method="PUT",
+            )
+            assert status == 200
+            status, request = call(
+                stack.urls["web"] + "/v1/solicitudes-cotizacion",
+                {"productoId": "automotive", "datosProducto": {"vehiclePlate": "ABC123"}},
+                {**auth, "Idempotency-Key": str(uuid4())},
+            )
+            assert status == 201
+            base = stack.urls["web"] + "/v1/solicitudes-cotizacion/" + request["id"]
+            status, offers = call(base + "/ofertas", headers=auth)
+            assert status == 200
+            first, second = offers["ofertas"][:2]
+            key1, key2 = str(uuid4()), str(uuid4())
+
+            def choose(
+                offer: dict[str, Any], revision: int, key: str
+            ) -> tuple[int, dict[str, Any]]:
+                return call(
+                    base + "/seleccion-provisional",
+                    {
+                        "ofertaId": offer["id"],
+                        "version": offer["version"],
+                        "revisionEsperada": revision,
+                    },
+                    {**auth, "Idempotency-Key": key},
+                    method="PUT",
+                )
+
+            assert call(base + "/seleccion-provisional")[0] == 401
+            status, saved1 = choose(first, 0, key1)
+            assert status == 200
+            assert call(base + "/seleccion", headers=auth)[0] == 404
+            assert call(base + "/suscripcion", headers=auth)[0] == 404
+            status, saved2 = choose(second, 1, key2)
+            assert status == 200 and saved2["revision"] == 2
+            assert choose(first, 0, key1) == (200, saved1)
+            status, current = call(base + "/seleccion-provisional", headers=auth)
+            assert (
+                status == 200 and current["seleccion"] == saved2 and current["aceptacion"] is None
+            )
+            status, rejected = call(
+                base + "/seleccion",
+                {
+                    "ofertaId": first["id"],
+                    "version": first["version"],
+                    "revisionSeleccion": 1,
+                },
+                {**auth, "Idempotency-Key": str(uuid4())},
+                method="PUT",
+            )
+            assert status == 409 and rejected["code"] == "seleccion_desactualizada"
+            status, accepted = call(
+                base + "/seleccion",
+                {
+                    "ofertaId": second["id"],
+                    "version": second["version"],
+                    "revisionSeleccion": 2,
+                },
+                {**auth, "Idempotency-Key": str(uuid4())},
+                method="PUT",
+            )
+            assert status == 200 and accepted["ofertaId"] == second["id"]
+            status, terminal = call(base + "/seleccion-provisional", headers=auth)
+            assert status == 200
+            assert terminal["seleccion"] == saved2
+            assert terminal["aceptacion"] == accepted
+            assert terminal["estadoOferta"] == "aceptada"
+            assert call(base + "/suscripcion", headers=auth)[0] == 404
+            status, subscription = call(
+                base + "/suscripcion", {}, {**auth, "Idempotency-Key": str(uuid4())}
+            )
+            assert status == 201 and subscription["ofertaId"] == second["id"]
+            assert choose(first, 2, str(uuid4()))[0] == 409
+            repo = stack.apps["quotes"].extensions["repositorio_cotizaciones"]
+            with repo._sesiones() as sql:
+                assert sql.scalar(select(func.count()).select_from(SeleccionProvisionalModel)) == 2
+                assert (
+                    sql.scalar(
+                        select(func.count())
+                        .select_from(SeleccionProvisionalModel)
+                        .where(SeleccionProvisionalModel.activa)
+                    )
+                    == 1
+                )
+                assert sql.scalar(select(func.count()).select_from(SeleccionOfertaModel)) == 1
+                assert sql.scalar(select(func.count()).select_from(SuscripcionModel)) == 1
+            status, _ = call(consent_url, {"autorizado": False, "version": 1}, auth, method="PUT")
+            assert status == 200
+            assert call(base + "/seleccion-provisional", headers=auth)[0] == 403
+            assert choose(first, 0, key1)[0] == 403
+        assert all(not thread.is_alive() for thread in threads)
+        for port in ports:
+            with socket() as probe:
+                assert probe.connect_ex(("127.0.0.1", port)) != 0
+    assert not Path(directory).exists()
+    record_property("owned_ports_closed", ports)
+    record_property("owned_directory_removed", True)
+    record_property("provisional_revisions_acceptances_subscriptions", "2/1/1")
 
 
 def test_cli_dependency_is_declared_for_integrated_workflows() -> None:

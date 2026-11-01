@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
@@ -15,7 +15,13 @@ from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.documentos import validar_identificacion
-from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
+from cotizacion.domain.ofertas import (
+    EstadoSeleccionProvisional,
+    Oferta,
+    ResultadoOfertas,
+    SeleccionOferta,
+    SeleccionProvisional,
+)
 from cotizacion.domain.pago import PagoSimuladoRechazado, ResultadoPagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
@@ -134,6 +140,20 @@ class IniciarOperacionHipotecariaRequest(_Solicitud):
 class SeleccionarOfertaRequest(_Solicitud):
     oferta_id: UUID
     version: int = Field(ge=1)
+    revision_seleccion: int | None = Field(default=None, ge=1, strict=True)
+
+    @field_validator("revision_seleccion", mode="before")
+    @classmethod
+    def revision_no_nula(cls, valor: object) -> object:
+        if valor is None:
+            raise ValueError("La revision enviada debe ser un entero positivo.")
+        return valor
+
+
+class SeleccionarProvisionalRequest(_Solicitud):
+    oferta_id: UUID
+    version: int = Field(ge=1)
+    revision_esperada: int = Field(ge=0, strict=True)
 
 
 class ConfirmarPagoSimuladoRequest(_Solicitud):
@@ -278,6 +298,23 @@ def seleccion_oferta_a_json(seleccion: SeleccionOferta) -> dict[str, object]:
             _dinero(seleccion.prima_mensual) if seleccion.periodicidad == "mensual" else None
         ),
         "seleccionadaEn": _fecha(seleccion.seleccionada_en),
+    }
+
+
+def seleccion_provisional_a_json(seleccion: SeleccionProvisional) -> dict[str, object]:
+    return {
+        **seleccion_oferta_a_json(seleccion.seleccion),
+        "revision": seleccion.revision,
+        "vigenteHasta": _fecha(seleccion.vigente_hasta),
+    }
+
+
+def estado_seleccion_a_json(estado: EstadoSeleccionProvisional) -> dict[str, object]:
+    return {
+        "solicitudId": estado.solicitud_id,
+        "seleccion": seleccion_provisional_a_json(estado.seleccion) if estado.seleccion else None,
+        "aceptacion": seleccion_oferta_a_json(estado.aceptacion) if estado.aceptacion else None,
+        "estadoOferta": estado.estado_oferta.value if estado.estado_oferta else None,
     }
 
 

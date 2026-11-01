@@ -16,6 +16,7 @@ from bff_web.domain.profiling import PROFILING_ERRORS, ProfilingError
 from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
+    OfferSelectionConflictError,
     OfferUnavailableError,
     PaymentNotAllowedError,
     QuoteRequestConflictError,
@@ -32,6 +33,8 @@ from bff_web.domain.quotes import (
     OfferSelection,
     OffersResult,
     ProductCoverage,
+    ProvisionalOfferSelection,
+    ProvisionalSelectionState,
     QuoteRequestDraft,
     QuoteRequestRecord,
     RejectedSimulatedPayment,
@@ -176,15 +179,70 @@ class HttpQuoteGateway(QuoteGateway):
         offer_id: UUID,
         version: int,
         idempotency_key: UUID,
+        selection_revision: int | None = None,
     ) -> OfferSelection:
         query = urlencode({"clienteId": str(user_id)})
+        body: dict[str, object] = {"ofertaId": str(offer_id), "version": version}
+        if selection_revision is not None:
+            body["revisionSeleccion"] = selection_revision
         payload = self._request_json(
             f"/v1/solicitudes-cotizacion/{request_id}/seleccion?{query}",
             method="PUT",
             headers={"Idempotency-Key": str(idempotency_key)},
-            body={"ofertaId": str(offer_id), "version": version},
+            body=body,
         )
         return _safe_selection_from_json(payload)
+
+    def get_provisional_selection(
+        self, user_id: UUID, request_id: str
+    ) -> ProvisionalSelectionState:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/seleccion-provisional?{query}"
+        )
+        try:
+            if payload["solicitudId"] != request_id or payload["estadoOferta"] not in {
+                None,
+                "disponible",
+                "vencida",
+                "retirada",
+                "aceptada",
+            }:
+                raise ValueError("Estado provisional invalido")
+            return ProvisionalSelectionState(
+                request_id,
+                _provisional_from_json(payload["seleccion"])
+                if payload["seleccion"] is not None
+                else None,
+                _safe_selection_from_json(payload["aceptacion"])
+                if payload["aceptacion"] is not None
+                else None,
+                payload["estadoOferta"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise QuoteServiceUnavailableError() from error
+
+    def select_provisional_offer(
+        self,
+        user_id: UUID,
+        request_id: str,
+        offer_id: UUID,
+        version: int,
+        expected_revision: int,
+        idempotency_key: UUID,
+    ) -> ProvisionalOfferSelection:
+        query = urlencode({"clienteId": str(user_id)})
+        payload = self._request_json(
+            f"/v1/solicitudes-cotizacion/{request_id}/seleccion-provisional?{query}",
+            method="PUT",
+            headers={"Idempotency-Key": str(idempotency_key)},
+            body={
+                "ofertaId": str(offer_id),
+                "version": version,
+                "revisionEsperada": expected_revision,
+            },
+        )
+        return _provisional_from_json(payload)
 
     def start_subscription(
         self, user_id: UUID, request_id: str, idempotency_key: UUID
@@ -247,6 +305,18 @@ class HttpQuoteGateway(QuoteGateway):
         except HTTPError as error:
             if not map_domain_errors:
                 raise QuoteServiceUnavailableError() from error
+            if error.code == HTTPStatus.CONFLICT:
+                try:
+                    problem = json.load(error)
+                except (ValueError, OSError):
+                    raise QuoteRequestConflictError() from error
+                code = problem.get("error") if isinstance(problem, dict) else None
+                if isinstance(code, str) and code in {
+                    "seleccion_desactualizada",
+                    "seleccion_no_modificable",
+                }:
+                    raise OfferSelectionConflictError(code) from error
+                raise QuoteRequestConflictError() from error
             if error.code in {403, 404, 422, 503}:
                 try:
                     problem = json.load(error)
@@ -268,8 +338,6 @@ class HttpQuoteGateway(QuoteGateway):
                 raise QuoteServiceUnavailableError() from error
             if error.code == HTTPStatus.NOT_FOUND:
                 raise QuoteRequestNotFoundError() from error
-            if error.code == HTTPStatus.CONFLICT:
-                raise QuoteRequestConflictError() from error
             raise QuoteServiceUnavailableError() from error
         except (URLError, TimeoutError, json.JSONDecodeError) as error:
             raise QuoteServiceUnavailableError() from error
@@ -277,6 +345,18 @@ class HttpQuoteGateway(QuoteGateway):
         if not isinstance(payload, dict):
             raise QuoteServiceUnavailableError()
         return payload
+
+
+def _provisional_from_json(payload: dict[str, Any]) -> ProvisionalOfferSelection:
+    try:
+        revision = payload["revision"]
+        if type(revision) is not int or revision < 1:
+            raise ValueError("Revision provisional invalida")
+        return ProvisionalOfferSelection(
+            _safe_selection_from_json(payload), revision, _datetime(payload["vigenteHasta"])
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise QuoteServiceUnavailableError() from error
 
 
 def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:

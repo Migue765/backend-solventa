@@ -16,6 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -216,6 +217,39 @@ class SeleccionOfertaModel(Base):
     )
     moneda: Mapped[str] = mapped_column(String(3))
     seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+
+
+class SeleccionProvisionalModel(Base):
+    __tablename__ = "selecciones_provisionales"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_provisional_cliente_clave"),
+        CheckConstraint("revision >= 1", name="ck_provisional_revision"),
+        Index(
+            "uq_provisional_activa",
+            "cotizacion_id",
+            unique=True,
+            sqlite_where=text("activa = 1"),
+            postgresql_where=text("activa = true"),
+        ),
+    )
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cliente_id: Mapped[UUID]
+    solicitud_id: Mapped[str] = mapped_column(String(32))
+    activa: Mapped[bool]
+    oferta_id: Mapped[UUID]
+    version: Mapped[int] = mapped_column(Integer)
+    nombre_oferta: Mapped[str] = mapped_column(String(120))
+    prima_mensual: Mapped[Decimal] = mapped_column(MONTO)
+    periodicidad: Mapped[str] = mapped_column(String(20))
+    moneda: Mapped[str] = mapped_column(String(3))
+    seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    vigente_hasta: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[UUID]
     request_fingerprint: Mapped[str] = mapped_column(String(64))
 

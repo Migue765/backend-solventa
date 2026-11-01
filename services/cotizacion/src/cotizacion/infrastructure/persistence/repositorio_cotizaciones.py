@@ -2,13 +2,21 @@ from datetime import UTC, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, raiseload, sessionmaker
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion, EstadoCotizacion
 from cotizacion.domain.decision import InstantaneaDecision
 from cotizacion.domain.dinero import Dinero
-from cotizacion.domain.ofertas import SeleccionOferta
+from cotizacion.domain.errors import (
+    ConflictoIdempotenciaError,
+    OfertaNoDisponibleError,
+    SeleccionDesactualizadaError,
+    SeleccionNoModificableError,
+    SolicitudNoEncontradaError,
+)
+from cotizacion.domain.ofertas import SeleccionOferta, SeleccionProvisional
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import (
@@ -28,6 +36,7 @@ from cotizacion.infrastructure.persistence.models import (
     PagoSimuladoModel,
     SagaEmisionModel,
     SeleccionOfertaModel,
+    SeleccionProvisionalModel,
     SuscripcionModel,
 )
 
@@ -221,9 +230,36 @@ class RepositorioCotizacionesSqlAlchemy:
             )
             return _solicitud_a_dominio(modelo) if modelo else None
 
-    def guardar_seleccion(self, seleccion: SeleccionOferta) -> None:
+    def guardar_seleccion(
+        self, seleccion: SeleccionOferta, cliente_id: UUID, revision: int | None = None
+    ) -> SeleccionOferta:
         with self._sesiones.begin() as sesion:
-            sesion.merge(
+            vigente_hasta = _bloquear_seleccion(sesion, seleccion, cliente_id)
+            existente = sesion.get(SeleccionOfertaModel, seleccion.cotizacion_id)
+            if existente is not None:
+                if existente.idempotency_key == seleccion.idempotency_key:
+                    if existente.request_fingerprint != seleccion.request_fingerprint:
+                        raise ConflictoIdempotenciaError()
+                    return _seleccion_a_dominio(existente)
+                if (
+                    existente.oferta_id != seleccion.oferta_id
+                    or existente.version != seleccion.version
+                ):
+                    raise OfertaNoDisponibleError()
+            provisional = _seleccion_activa(sesion, seleccion.cotizacion_id)
+            if provisional is not None or revision is not None:
+                if (
+                    provisional is None
+                    or provisional.revision != revision
+                    or provisional.oferta_id != seleccion.oferta_id
+                    or provisional.version != seleccion.version
+                ):
+                    raise SeleccionDesactualizadaError()
+            if existente is not None:
+                return _seleccion_a_dominio(existente)
+            if vigente_hasta <= datetime.now(UTC):
+                raise OfertaNoDisponibleError()
+            sesion.add(
                 SeleccionOfertaModel(
                     cotizacion_id=seleccion.cotizacion_id,
                     solicitud_id=seleccion.solicitud_id,
@@ -238,6 +274,7 @@ class RepositorioCotizacionesSqlAlchemy:
                     request_fingerprint=seleccion.request_fingerprint,
                 )
             )
+            return seleccion
 
     def obtener_seleccion(self, solicitud_id: str) -> SeleccionOferta | None:
         with self._sesiones() as sesion:
@@ -248,21 +285,106 @@ class RepositorioCotizacionesSqlAlchemy:
             )
             if modelo is None:
                 return None
-            seleccionada_en = modelo.seleccionada_en
-            if seleccionada_en.tzinfo is None:
-                seleccionada_en = seleccionada_en.replace(tzinfo=UTC)
-            return SeleccionOferta(
-                solicitud_id=modelo.solicitud_id,
-                cotizacion_id=modelo.cotizacion_id,
-                oferta_id=modelo.oferta_id,
-                version=modelo.version,
-                nombre_oferta=modelo.nombre_oferta,
-                prima_mensual=Dinero(modelo.prima_mensual, modelo.moneda),
-                seleccionada_en=seleccionada_en,
-                idempotency_key=modelo.idempotency_key,
-                request_fingerprint=modelo.request_fingerprint,
-                periodicidad=modelo.periodicidad,
+            return _seleccion_a_dominio(modelo)
+
+    def buscar_seleccion_provisional(
+        self, cliente_id: UUID, clave: UUID
+    ) -> SeleccionProvisional | None:
+        with self._sesiones() as sesion:
+            modelo = sesion.scalar(
+                select(SeleccionProvisionalModel).where(
+                    SeleccionProvisionalModel.cliente_id == cliente_id,
+                    SeleccionProvisionalModel.idempotency_key == clave,
+                )
             )
+            return _provisional_a_dominio(modelo) if modelo else None
+
+    def consultar_estado_seleccion(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> tuple[SeleccionProvisional | None, SeleccionOferta | None]:
+        with self._sesiones() as sesion:
+            fila = sesion.execute(
+                select(
+                    CotizacionModel.cotizacion_id, SeleccionProvisionalModel, SeleccionOfertaModel
+                )
+                .outerjoin(
+                    SeleccionProvisionalModel,
+                    (SeleccionProvisionalModel.cotizacion_id == CotizacionModel.cotizacion_id)
+                    & SeleccionProvisionalModel.activa,
+                )
+                .outerjoin(
+                    SeleccionOfertaModel,
+                    SeleccionOfertaModel.cotizacion_id == CotizacionModel.cotizacion_id,
+                )
+                .where(
+                    CotizacionModel.solicitud_id == solicitud_id,
+                    CotizacionModel.cliente_id == cliente_id,
+                )
+            ).one_or_none()
+            if fila is None:
+                raise SolicitudNoEncontradaError()
+            return (
+                _provisional_a_dominio(fila[1]) if fila[1] else None,
+                _seleccion_a_dominio(fila[2]) if fila[2] else None,
+            )
+
+    def guardar_seleccion_provisional(
+        self, provisional: SeleccionProvisional, cliente_id: UUID, revision_esperada: int
+    ) -> SeleccionProvisional:
+        seleccion = provisional.seleccion
+        try:
+            with self._sesiones.begin() as sesion:
+                vigente_hasta = _bloquear_seleccion(sesion, seleccion, cliente_id)
+                repetida = sesion.scalar(
+                    select(SeleccionProvisionalModel).where(
+                        SeleccionProvisionalModel.cliente_id == cliente_id,
+                        SeleccionProvisionalModel.idempotency_key == seleccion.idempotency_key,
+                    )
+                )
+                if repetida is not None:
+                    if repetida.request_fingerprint != seleccion.request_fingerprint:
+                        raise ConflictoIdempotenciaError()
+                    return _provisional_a_dominio(repetida)
+                if sesion.get(SeleccionOfertaModel, seleccion.cotizacion_id) is not None:
+                    raise SeleccionNoModificableError()
+                actual = _seleccion_activa(sesion, seleccion.cotizacion_id)
+                if (actual.revision if actual else 0) != revision_esperada:
+                    raise SeleccionDesactualizadaError()
+                if min(vigente_hasta, provisional.vigente_hasta) <= datetime.now(UTC):
+                    raise OfertaNoDisponibleError()
+                if actual is not None:
+                    actual.activa = False
+                    sesion.flush()
+                sesion.add(
+                    SeleccionProvisionalModel(
+                        cotizacion_id=seleccion.cotizacion_id,
+                        revision=revision_esperada + 1,
+                        cliente_id=cliente_id,
+                        solicitud_id=seleccion.solicitud_id,
+                        activa=True,
+                        oferta_id=seleccion.oferta_id,
+                        version=seleccion.version,
+                        nombre_oferta=seleccion.nombre_oferta,
+                        prima_mensual=seleccion.prima_mensual.monto,
+                        periodicidad=seleccion.periodicidad,
+                        moneda=seleccion.prima_mensual.moneda,
+                        seleccionada_en=seleccion.seleccionada_en,
+                        vigente_hasta=provisional.vigente_hasta,
+                        idempotency_key=seleccion.idempotency_key,
+                        request_fingerprint=seleccion.request_fingerprint,
+                    )
+                )
+            return provisional
+        except IntegrityError as error:
+            # La misma clave puede competir en solicitudes distintas del mismo cliente.
+            repetida_dominio = self.buscar_seleccion_provisional(
+                cliente_id, seleccion.idempotency_key
+            )
+            if repetida_dominio is None:
+                raise
+            if repetida_dominio.seleccion.request_fingerprint != seleccion.request_fingerprint:
+                raise ConflictoIdempotenciaError() from error
+            return repetida_dominio
 
     def guardar_suscripcion(self, suscripcion: Suscripcion) -> None:
         with self._sesiones.begin() as sesion:
@@ -360,6 +482,59 @@ def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
             )
             for orden, c in enumerate(cotizacion.coberturas)
         ],
+    )
+
+
+def _fecha_seleccion(fecha: datetime) -> datetime:
+    return fecha.replace(tzinfo=UTC) if fecha.tzinfo is None else fecha.astimezone(UTC)
+
+
+def _bloquear_seleccion(sesion: Session, seleccion: SeleccionOferta, cliente_id: UUID) -> datetime:
+    # Un UPDATE sin cambio de negocio serializa tambien SQLite, donde FOR UPDATE no bloquea.
+    vigencia = sesion.scalar(
+        update(CotizacionModel)
+        .where(
+            CotizacionModel.cotizacion_id == seleccion.cotizacion_id,
+            CotizacionModel.solicitud_id == seleccion.solicitud_id,
+            CotizacionModel.cliente_id == cliente_id,
+        )
+        .values(estado=CotizacionModel.estado)
+        .returning(CotizacionModel.valida_hasta)
+    )
+    if vigencia is None:
+        raise SolicitudNoEncontradaError()
+    return _fecha_seleccion(vigencia)
+
+
+def _seleccion_activa(sesion: Session, cotizacion_id: UUID) -> SeleccionProvisionalModel | None:
+    return sesion.scalar(
+        select(SeleccionProvisionalModel).where(
+            SeleccionProvisionalModel.cotizacion_id == cotizacion_id,
+            SeleccionProvisionalModel.activa,
+        )
+    )
+
+
+def _seleccion_a_dominio(
+    modelo: SeleccionOfertaModel | SeleccionProvisionalModel,
+) -> SeleccionOferta:
+    return SeleccionOferta(
+        solicitud_id=modelo.solicitud_id,
+        cotizacion_id=modelo.cotizacion_id,
+        oferta_id=modelo.oferta_id,
+        version=modelo.version,
+        nombre_oferta=modelo.nombre_oferta,
+        prima_mensual=Dinero(modelo.prima_mensual, modelo.moneda),
+        seleccionada_en=_fecha_seleccion(modelo.seleccionada_en),
+        idempotency_key=modelo.idempotency_key,
+        request_fingerprint=modelo.request_fingerprint,
+        periodicidad=modelo.periodicidad,
+    )
+
+
+def _provisional_a_dominio(modelo: SeleccionProvisionalModel) -> SeleccionProvisional:
+    return SeleccionProvisional(
+        _seleccion_a_dominio(modelo), modelo.revision, _fecha_seleccion(modelo.vigente_hasta)
     )
 
 

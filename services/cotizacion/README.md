@@ -133,10 +133,49 @@ Requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`.
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
 | GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
-| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o confirma la aceptación histórica |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion-provisional` | Reanuda o cambia una elección sin aceptar |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
 | GET/POST | `/v1/socios/solicitudes-cotizacion/{operationId}/oferta` | Recupera o calcula y persiste la oferta del socio |
+
+### Selección provisional y aceptación (SOL-300 / SOL-304)
+
+Aplicar `alembic upgrade head`: `selecciones_provisionales`
+(`0017_selecciones_provisionales.py`, sobre `conciliacion_emision`) crea únicamente
+la tabla de revisiones provisionales. No rellena históricos ni convierte
+`selecciones_oferta`, que sigue representando la aceptación terminal.
+
+PUT `/seleccion-provisional` recibe `{ofertaId, version, revisionEsperada}` y una
+clave UUID. GET devuelve `{solicitudId, seleccion, aceptacion, estadoOferta}`.
+`seleccion` puede ser null; su snapshot reutiliza el DTO de selección y añade
+`revision` y `vigenteHasta`. Un cambio exige la revisión actual (0 inicialmente).
+La clave queda ligada al cliente, operación, oferta, versión y revisión esperada:
+replay recupera el acuse original, incluso después de otro cambio, sin reactivarlo.
+GET muestra la verdad actual; no modifica vigencia ni el estado de aceptación.
+
+La transacción bloquea la cotización mediante UPDATE sin cambio de negocio,
+recomprueba revisión, titularidad, aceptación terminal y vigencia, desactiva la
+revisión previa e inserta la nueva. Un índice parcial permite una sola activa;
+la unicidad cliente/clave conserva deduplicación entre réplicas. Un rollback
+revierte también el cambio de activa. Se aplica el mismo bloqueo a la aceptación,
+que ahora inserta una sola vez en vez de reemplazar mediante merge.
+
+PUT histórico `/seleccion` sigue siendo aceptación explícita. Si hay provisional
+exige `revisionSeleccion` y la misma referencia; sin provisional conserva el
+payload previo. No existe compatibilidad incondicional entre versiones mezcladas.
+Una selección obsoleta produce `409 seleccion_desactualizada`; intentar editar
+tras aceptación, `409 seleccion_no_modificable`; reutilizar clave con otros datos,
+`409 conflicto_idempotencia`. Las ofertas no elegibles producen
+`422 oferta_no_disponible`. La aceptación no inicia por sí sola HU15.
+Cliente/operación se conservan por la cotización asociada y oferta/fecha en el
+registro actual, sin reescribir suscripciones, pagos, pólizas o eventos históricos.
+
+La UI debe refrescar antes de confirmar: un cambio de referencia/revisión retira
+la confirmación anterior. Regresar sin aceptar conserva el borrador; no se añade
+cancelación, cambio tras aceptación, consentimiento ni firma. Desplegar backend y
+migración antes del nuevo frontend; para rollback, retirar el nuevo recorrido y
+conservar la tabla. Downgrade rechaza eliminar revisiones/claves ya persistidas.
 
 ### Persistencia de suscripción
 

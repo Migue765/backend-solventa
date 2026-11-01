@@ -34,7 +34,9 @@ from cotizacion.domain.errors import (
     PagoNoEncontradoError,
     PagoNoPermitidoError,
     ReglaDeNegocioError,
+    SeleccionDesactualizadaError,
     SeleccionNoEncontradaError,
+    SeleccionNoModificableError,
     ServicioPolizasNoDisponibleError,
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
@@ -182,6 +184,19 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(ConflictoIdempotenciaError)
     def conflicto_idempotencia(_: ConflictoIdempotenciaError):
         return jsonify(error="conflicto_idempotencia", correlationId=g.correlation_id), 409
+
+    @app.errorhandler(SeleccionDesactualizadaError)
+    @app.errorhandler(SeleccionNoModificableError)
+    def conflicto_seleccion(
+        error: SeleccionDesactualizadaError | SeleccionNoModificableError,
+    ) -> tuple[Response, int]:
+        codigo = (
+            "seleccion_desactualizada"
+            if isinstance(error, SeleccionDesactualizadaError)
+            else "seleccion_no_modificable"
+        )
+        logger.warning("Seleccion: %s", codigo, extra={"correlationId": g.correlation_id})
+        return jsonify(error=codigo, correlationId=g.correlation_id), 409
 
     @app.errorhandler(AdmisionRechazada)
     def admision_rechazada(error: AdmisionRechazada) -> tuple[Response, int]:

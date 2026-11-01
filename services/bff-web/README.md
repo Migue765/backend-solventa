@@ -217,7 +217,37 @@ Ver [operación coordinada](../../docs/operacion-login-cifrado.md) antes de habi
 
 Las rutas `GET /v1/solicitudes-cotizacion/{id}/ofertas` y
 `GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion` también requieren Bearer.
-Comparan ofertas simuladas y consultan o guardan una selección idempotente.
+Comparan ofertas simuladas y consultan o registran la aceptación explícita e idempotente.
+El PUT histórico no es una selección provisional y no debe adelantarse a HU14.
+
+La nueva ruta `GET/PUT /v1/solicitudes-cotizacion/{id}/seleccion-provisional`
+requiere el mismo Bearer y controles de titularidad/perfil; no concede consentimiento.
+PUT recibe `{ofertaId, version, revisionEsperada}` e `Idempotency-Key` UUID.
+La revisión inicial es `0`; cada cambio confirmado devuelve el DTO de selección
+actual más `revision` y `vigenteHasta`. No marca la oferta como aceptada ni crea
+una suscripción. GET devuelve
+`{solicitudId, seleccion: <snapshot>|null, aceptacion: <DTO histórico>|null, estadoOferta}`
+y es de solo lectura/no-store. La aceptación existente prevalece al reanudar.
+
+Cada elección nueva usa una clave nueva; su reintento conserva clave y payload.
+Repetir una clave antigua recupera su snapshot, nunca reactiva esa elección.
+La UI debe consultar GET antes de confirmar HU14; si cambió la oferta o revisión
+mostrada, debe retirar el checkbox/confirmación y presentar el resumen nuevo.
+Entonces PUT `/seleccion` envía `{ofertaId, version, revisionSeleccion}` y conserva
+su respuesta histórica. Solo después de aceptación exitosa se permite POST
+`/suscripcion`. Regresar/error no debe dispararlo.
+
+La compatibilidad legacy sin `revisionSeleccion` se mantiene **solo si no hay
+provisional**. Una operación con provisional exige su revisión incluso desde un
+cliente antiguo. No habilitar el nuevo recorrido entre réplicas backend de versiones
+mezcladas: migrar y actualizar backend antes del frontend.
+
+Errores identificables: `409 seleccion_desactualizada` (revisión/referencia incorrecta
+o ausente), `409 seleccion_no_modificable` (nueva provisional tras aceptación),
+`409 conflicto_idempotencia` (misma clave/otros datos), `422 oferta_no_disponible`
+(oferta vencida/retirada/inexistente o intento de reemplazar aceptación histórica).
+Los replays válidos conservan el acuse, sin mutar; no son permiso para aceptar
+una oferta que ya perdió vigencia. Se conservan 401, 403, 404 y 503 del flujo actual.
 
 ### Tablero real del cliente
 

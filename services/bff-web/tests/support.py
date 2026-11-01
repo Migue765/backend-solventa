@@ -25,6 +25,8 @@ from bff_web.domain.quotes import (
     OfferSelection,
     OffersResult,
     ProductCoverage,
+    ProvisionalOfferSelection,
+    ProvisionalSelectionState,
     QuoteRequestDraft,
     QuoteRequestRecord,
     SimulatedPayment,
@@ -332,7 +334,24 @@ class StubQuoteGateway(QuoteGateway):
         offer_id: UUID,
         version: int,
         idempotency_key: UUID,
+        selection_revision: int | None = None,
     ) -> OfferSelection:
+        raise NotImplementedError
+
+    def get_provisional_selection(
+        self, user_id: UUID, request_id: str
+    ) -> ProvisionalSelectionState:
+        raise NotImplementedError
+
+    def select_provisional_offer(
+        self,
+        user_id: UUID,
+        request_id: str,
+        offer_id: UUID,
+        version: int,
+        expected_revision: int,
+        idempotency_key: UUID,
+    ) -> ProvisionalOfferSelection:
         raise NotImplementedError
 
     def start_subscription(

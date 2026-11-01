@@ -3,7 +3,7 @@ from typing import cast
 from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -16,6 +16,7 @@ from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
     InsuranceProductUnavailableError,
+    OfferSelectionConflictError,
     OfferUnavailableError,
     PaymentNotAllowedError,
     QuoteRequestConflictError,
@@ -30,6 +31,7 @@ from bff_web.domain.quotes import (
     Offer,
     OfferSelection,
     OffersResult,
+    ProvisionalOfferSelection,
     QuoteRequestDraft,
     QuoteRequestRecord,
     RejectedSimulatedPayment,
@@ -72,6 +74,24 @@ class OfferSelectionPayload(BaseModel):
 
     offer_id: UUID = Field(alias="ofertaId")
     version: int = Field(ge=1)
+    selection_revision: int | None = Field(
+        default=None, alias="revisionSeleccion", ge=1, strict=True
+    )
+
+    @field_validator("selection_revision", mode="before")
+    @classmethod
+    def non_null_revision(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("La revision enviada debe ser un entero positivo.")
+        return value
+
+
+class ProvisionalSelectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    offer_id: UUID = Field(alias="ofertaId")
+    version: int = Field(ge=1)
+    expected_revision: int = Field(alias="revisionEsperada", ge=0, strict=True)
 
 
 class SimulatedPaymentPayload(BaseModel):
@@ -266,13 +286,21 @@ def select_offer(request_id: str) -> Response:
             "Revisa la oferta, su versión y la clave de idempotencia.",
         )
     try:
-        selection = _gateway().select_offer(
-            user_id,
-            request_id,
-            payload.offer_id,
-            payload.version,
-            idempotency_key,
-        )
+        if payload.selection_revision is None:
+            selection = _gateway().select_offer(
+                user_id, request_id, payload.offer_id, payload.version, idempotency_key
+            )
+        else:
+            selection = _gateway().select_offer(
+                user_id,
+                request_id,
+                payload.offer_id,
+                payload.version,
+                idempotency_key,
+                selection_revision=payload.selection_revision,
+            )
+    except OfferSelectionConflictError as error:
+        return _selection_conflict(error)
     except QuoteRequestNotFoundError:
         return _not_found()
     except QuoteRequestConflictError:
@@ -292,6 +320,79 @@ def select_offer(request_id: str) -> Response:
     except QuoteServiceUnavailableError:
         return _unavailable()
     return jsonify(_selection_json(selection))
+
+
+@bp.get("/solicitudes-cotizacion/<request_id>/seleccion-provisional")
+def get_provisional_selection(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        state = _gateway().get_provisional_selection(user_id, request_id)
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(
+        {
+            "solicitudId": state.request_id,
+            "seleccion": _provisional_json(state.selection) if state.selection else None,
+            "aceptacion": _selection_json(state.acceptance) if state.acceptance else None,
+            "estadoOferta": state.offer_status,
+        }
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.put("/solicitudes-cotizacion/<request_id>/seleccion-provisional")
+def select_provisional_offer(request_id: str) -> Response:
+    user_id = _authenticated_user_id()
+    if user_id is None:
+        return _unauthorized()
+    try:
+        payload = ProvisionalSelectionPayload.model_validate(request.get_json(silent=False))
+        clave = UUID(request.headers["Idempotency-Key"])
+    except (KeyError, TypeError, ValueError, ValidationError, BadRequest, UnsupportedMediaType):
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Revisa la seleccion y su revision."
+        )
+    try:
+        selection = _gateway().select_provisional_offer(
+            user_id, request_id, payload.offer_id, payload.version, payload.expected_revision, clave
+        )
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except OfferSelectionConflictError as error:
+        return _selection_conflict(error)
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de solicitud",
+            "La clave ya fue utilizada con otros datos.",
+        )
+    except OfferUnavailableError:
+        return problem_response(
+            422,
+            "oferta_no_disponible",
+            "Oferta no disponible",
+            "Actualiza las ofertas y selecciona una vigente.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(_provisional_json(selection))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _selection_conflict(error: OfferSelectionConflictError) -> Response:
+    return problem_response(
+        409,
+        error.code,
+        "Conflicto de seleccion",
+        "Actualiza la seleccion registrada. Una aceptacion existente no puede modificarse.",
+    )
 
 
 @bp.post("/solicitudes-cotizacion/<request_id>/suscripcion")
@@ -523,6 +624,14 @@ def _offer_json(offer: Offer) -> dict[str, object]:
         "recomendada": offer.recommended,
         "estado": offer.status,
         "vigenteHasta": _date_json(offer.valid_until),
+    }
+
+
+def _provisional_json(selection: ProvisionalOfferSelection) -> dict[str, object]:
+    return {
+        **_selection_json(selection.selection),
+        "revision": selection.revision,
+        "vigenteHasta": _date_json(selection.valid_until),
     }
 
 

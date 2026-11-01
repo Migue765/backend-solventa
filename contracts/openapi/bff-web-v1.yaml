@@ -924,13 +924,13 @@ paths:
   /v1/solicitudes-cotizacion/{solicitudId}/seleccion:
     get:
       tags: [Ofertas]
-      summary: Consulta la oferta seleccionada
+      summary: Consulta la aceptacion registrada
       operationId: consultarSeleccionOferta
       parameters:
         - $ref: "#/components/parameters/SolicitudId"
       responses:
         "200":
-          description: Selección vigente
+          description: Aceptacion registrada, sin sustituir la validacion al continuar.
           content:
             application/json:
               schema:
@@ -941,7 +941,11 @@ paths:
           $ref: "#/components/responses/NoEncontrado"
     put:
       tags: [Ofertas]
-      summary: Registra o reemplaza la oferta seleccionada
+      summary: Confirma explicitamente la aceptacion de una oferta
+      description: |
+        Conserva el contrato historico cuando no hay seleccion provisional.
+        Si existe una provisional, exige revisionSeleccion y la misma referencia.
+        No reemplaza una aceptacion terminal ni inicia una suscripcion.
       operationId: seleccionarOferta
       parameters:
         - $ref: "#/components/parameters/SolicitudId"
@@ -969,6 +973,68 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "422":
           $ref: "#/components/responses/ReglaNegocio"
+  /v1/solicitudes-cotizacion/{solicitudId}/seleccion-provisional:
+    get:
+      tags: [Ofertas]
+      summary: Reanuda la seleccion provisional sin aceptar ni mutar
+      operationId: consultarSeleccionProvisional
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Estado actual; seleccion y aceptacion pueden ser null.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoSeleccionProvisional"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Perfil o consentimiento no autorizado.
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    put:
+      tags: [Ofertas]
+      summary: Persiste una nueva revision provisional, sin aceptacion
+      operationId: seleccionarOfertaProvisional
+      description: |
+        revisionEsperada es la revision del GET o 0 si no existe seleccion.
+        Un replay devuelve el acuse original y nunca reactiva una revision vieja.
+        GET es la verdad actual. La confirmacion HU14 debe renovar el resumen
+        y retirar la confirmacion si cambia la referencia o revision mostrada.
+        Conflictos: seleccion_desactualizada, seleccion_no_modificable o conflicto_idempotencia.
+      parameters:
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSeleccionProvisional"
+      responses:
+        "200":
+          description: Snapshot de la revision registrada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeleccionProvisional"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: Perfil o consentimiento no autorizado.
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/solicitudes-cotizacion/{solicitudId}/suscripcion:
     get:
       tags: [Suscripciones]
@@ -2956,9 +3022,21 @@ components:
         version:
           type: integer
           minimum: 1
+        revisionSeleccion:
+          type: integer
+          minimum: 1
+          description: Obligatoria si la operacion tiene una seleccion provisional.
     SeleccionOferta:
       allOf:
-        - $ref: "#/components/schemas/NuevaSeleccionOferta"
+        - type: object
+          required: [ofertaId, version]
+          properties:
+            ofertaId:
+              type: string
+              format: uuid
+            version:
+              type: integer
+              minimum: 1
         - type: object
           required: [solicitudId, nombreOferta, primaMensual, prima, periodicidad, seleccionadaEn]
           properties:
@@ -2980,6 +3058,50 @@ components:
             seleccionadaEn:
               type: string
               format: date-time
+    NuevaSeleccionProvisional:
+      type: object
+      additionalProperties: false
+      required: [ofertaId, version, revisionEsperada]
+      properties:
+        ofertaId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        revisionEsperada:
+          type: integer
+          minimum: 0
+    SeleccionProvisional:
+      allOf:
+        - $ref: "#/components/schemas/SeleccionOferta"
+        - type: object
+          required: [revision, vigenteHasta]
+          properties:
+            revision:
+              type: integer
+              minimum: 1
+            vigenteHasta:
+              type: string
+              format: date-time
+    EstadoSeleccionProvisional:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, seleccion, aceptacion, estadoOferta]
+      properties:
+        solicitudId:
+          type: string
+        seleccion:
+          oneOf:
+            - $ref: "#/components/schemas/SeleccionProvisional"
+            - type: "null"
+        aceptacion:
+          oneOf:
+            - $ref: "#/components/schemas/SeleccionOferta"
+            - type: "null"
+        estadoOferta:
+          type: [string, "null"]
+          enum: [disponible, vencida, retirada, aceptada, null]
     Suscripcion:
       type: object
       additionalProperties: false
