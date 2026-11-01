@@ -32,7 +32,8 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
-    SimulatedPayment,
+    RejectedSimulatedPayment,
+    SimulatedPaymentResult,
     Subscription,
     TravelDestination,
 )
@@ -389,7 +390,7 @@ def get_simulated_payment(request_id: str) -> Response:
             404,
             "pago_no_encontrado",
             "Pago simulado no encontrado",
-            "Esta solicitud todavía no tiene un pago simulado confirmado.",
+            "Esta solicitud todavía no tiene un resultado de pago simulado.",
         )
     except QuoteRequestNotFoundError:
         return _not_found()
@@ -398,25 +399,31 @@ def get_simulated_payment(request_id: str) -> Response:
     return jsonify(_payment_json(payment))
 
 
-def _payment_json(payment: SimulatedPayment) -> dict[str, object]:
-    return {
+def _payment_json(payment: SimulatedPaymentResult) -> dict[str, object]:
+    result: dict[str, object] = {
         "id": str(payment.payment_id),
         "solicitudId": payment.request_id,
         "suscripcionId": str(payment.subscription_id),
         "ofertaId": str(payment.offer_id),
         "ofertaVersion": payment.offer_version,
-        "estado": "confirmado",
         "simulada": True,
         "referenciaInterna": f"SIM-{payment.payment_id}",
         "importe": _money_json(payment.amount),
         "periodicidad": payment.billing_period,
-        "confirmadaEn": _date_json(payment.confirmed_at),
         "saga": {
             "estado": payment.saga.status,
             "version": payment.saga.version,
             "actualizadaEn": _date_json(payment.saga.updated_at),
         },
     }
+    if isinstance(payment, RejectedSimulatedPayment):
+        return {
+            **result,
+            "estado": "rechazado",
+            "rechazadaEn": _date_json(payment.rejected_at),
+            "motivo": "rechazo_simulado",
+        }
+    return {**result, "estado": "confirmado", "confirmadaEn": _date_json(payment.confirmed_at)}
 
 
 def _authenticated_user_id() -> UUID | None:

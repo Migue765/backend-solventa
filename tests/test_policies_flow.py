@@ -5,12 +5,15 @@ from threading import Thread
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from alembic import command
 from alembic.config import Config
 from bff_web.domain.auth import User
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
+from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.models import (
+    IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
     SagaEmisionModel,
@@ -18,6 +21,7 @@ from cotizacion.infrastructure.persistence.models import (
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cryptography.hazmat.primitives.asymmetric import rsa
+from openapi_schema_validator import OAS31Validator
 from polizas.app import create_app
 from polizas.infrastructure.models import PolizaModel
 from sqlalchemy import func, select
@@ -310,3 +314,154 @@ def test_lost_emission_acknowledgement_retries_without_duplicate_policy(
             assert event.payload[id_field] == identifier
     with Session(policies.extensions["polizas_engine"]) as session:
         assert session.scalars(select(PolizaModel.poliza_id)).one() == first_id
+
+
+def test_rejected_payment_is_visible_only_to_owner_and_never_emits(
+    policy_runtime: Runtime,
+    token: str,
+    keypair: rsa.RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, quotes, factory = policy_runtime
+    repository = quotes.application.extensions["repositorio_pagos"]
+    monkeypatch.setattr(repository, "_proveedor", SimuladorPago("rechazado"))
+    gateway = quotes.application.extensions["polizas"]
+    original = gateway.emitir
+
+    def emission_forbidden(*_: object) -> UUID:
+        raise AssertionError("Un rechazo nunca debe invocar al emisor")
+
+    monkeypatch.setattr(gateway, "emitir", emission_forbidden)
+    selection, subscription, rejection = create_paid_request(client, token, "automotive")
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    headers = bearer(token)
+    assert rejection["estado"] == "rechazado"
+    assert rejection["simulada"] is True
+    assert rejection["motivo"] == "rechazo_simulado"
+    assert "confirmadaEn" not in rejection
+    assert rejection["saga"] == subscription["saga"]
+    contract = yaml.safe_load(
+        (ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text(encoding="utf-8")
+    )
+    payment_schema = {
+        "$ref": "#/components/schemas/PagoSimulado",
+        "components": contract["components"],
+    }
+    validator = OAS31Validator(payment_schema, format_checker=OAS31Validator.FORMAT_CHECKER)
+    validator.validate(rejection)
+    assert not validator.is_valid({**rejection, "confirmadaEn": rejection["rechazadaEn"]})
+    assert not validator.is_valid({**rejection, "estado": "confirmado"})
+    assert not validator.is_valid({**rejection, "saga": {"estado": "emitida", "version": 3}})
+    retrieved = client.get(base + "/pago-simulado", headers=headers)
+    assert retrieved.status_code == 200 and retrieved.get_json() == rejection
+    assert client.get(base + "/suscripcion", headers=headers).get_json() == subscription
+    dashboard_response = client.get("/v1/clientes/me/dashboard", headers=headers)
+    assert dashboard_response.status_code == 200
+    dashboard = dashboard_response.get_json()
+    validate_contract(dashboard)
+    assert dashboard["polizas"] == []
+    assert dashboard["pagos"] == [
+        {
+            key: rejection[key]
+            for key in (
+                "id",
+                "solicitudId",
+                "suscripcionId",
+                "estado",
+                "simulada",
+                "importe",
+                "periodicidad",
+                "rechazadaEn",
+                "motivo",
+            )
+        }
+    ]
+    policies = quotes.application.extensions["polizas_test_app"]
+    with Session(policies.extensions["polizas_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(PolizaModel)) == 0
+    with factory() as session:
+        attempt: IntentoPagoSimuladoModel = session.scalars(select(IntentoPagoSimuladoModel)).one()
+        key = str(attempt.idempotency_key)
+        assert str(attempt.intento_id) == rejection["id"]
+        assert session.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventoModel)
+                .where(
+                    OutboxEventoModel.tipo.in_(["PagoSimuladoConfirmado", "PolizaAcademicaEmitida"])
+                )
+            )
+            == 0
+        )
+    other = bearer(sign_token(keypair, User(uuid4(), "Otro", "otro@solventa.co", "cliente")))
+    assert client.get(base + "/pago-simulado", headers=other).status_code == 404
+    assert (
+        client.post(
+            base + "/pago-simulado", headers={**other, "Idempotency-Key": key}, json={}
+        ).status_code
+        == 404
+    )
+    assert client.get("/v1/clientes/me/dashboard", headers=other).get_json()["pagos"] == []
+    second_rejection = client.post(
+        base + "/pago-simulado", headers={**headers, "Idempotency-Key": str(uuid4())}, json={}
+    )
+    assert second_rejection.status_code == 200
+    latest = second_rejection.get_json()
+    validator.validate(latest)
+    assert latest["estado"] == "rechazado" and latest["id"] != rejection["id"]
+    assert client.get(base + "/pago-simulado", headers=headers).get_json() == latest
+    latest_dashboard = client.get("/v1/clientes/me/dashboard", headers=headers).get_json()
+    validate_contract(latest_dashboard)
+    assert len(latest_dashboard["pagos"]) == 1
+    assert latest_dashboard["pagos"][0]["id"] == latest["id"]
+    assert latest_dashboard["polizas"] == []
+    monkeypatch.setattr(repository, "_proveedor", SimuladorPago("confirmado"))
+    replay = client.post(
+        base + "/pago-simulado", headers={**headers, "Idempotency-Key": key}, json={}
+    )
+    assert replay.status_code == 200 and replay.get_json() == rejection
+    assert client.get(base + "/pago-simulado", headers=headers).get_json() == latest
+    assert client.get("/v1/clientes/me/dashboard", headers=headers).get_json() == latest_dashboard
+    monkeypatch.setattr(gateway, "emitir", original)
+    approved = client.post(
+        base + "/pago-simulado", headers={**headers, "Idempotency-Key": str(uuid4())}, json={}
+    )
+    assert approved.status_code == 200 and approved.get_json()["estado"] == "confirmado"
+    validator.validate(approved.get_json())
+    current = client.get("/v1/clientes/me/dashboard", headers=headers).get_json()
+    validate_contract(current)
+    assert len(current["polizas"]) == 1
+    assert len(current["pagos"]) == 1 and current["pagos"][0]["estado"] == "confirmado"
+    assert current["suscripciones"][0]["saga"]["estado"] == "emitida"
+    another_key = client.post(
+        base + "/pago-simulado", headers={**headers, "Idempotency-Key": str(uuid4())}, json={}
+    )
+    assert another_key.status_code == 200 and another_key.get_json() == approved.get_json()
+    assert (
+        client.post(
+            base + "/pago-simulado", headers={**headers, "Idempotency-Key": key}, json={}
+        ).get_json()
+        == rejection
+    )
+    after_replay = client.get("/v1/clientes/me/dashboard", headers=headers).get_json()
+    assert after_replay == current
+    assert client.get(base + "/pago-simulado", headers=headers).get_json() == approved.get_json()
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 3
+        assert session.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+        for event_type, expected in (
+            ("PagoSimuladoRechazado", 2),
+            ("PagoSimuladoConfirmado", 1),
+            ("PolizaAcademicaEmitida", 1),
+        ):
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventoModel)
+                    .where(OutboxEventoModel.tipo == event_type)
+                )
+                == expected
+            )
+    with Session(policies.extensions["polizas_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(PolizaModel)) == 1

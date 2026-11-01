@@ -260,13 +260,13 @@ moneda, cliente, tarjeta ni referencia bancaria; cotización toma el importe y l
 periodicidad exactos de la selección aprobada persistida. Para mostrar el importe
 antes de confirmar se consulta GET selección y se contrasta oferta/versión con
 GET suscripción. No hay proveedor ni cobro real, firma o cobertura real.
-Con Polizas habilitado, un pago nuevo genera una emision academica idempotente
+Con Polizas habilitado, un pago nuevo confirmado genera una emision academica idempotente
 antes de responder. Si esa emision falla, POST devuelve `503` aunque el pago
 simulado ya este persistido: repetir POST en la misma solicitud completa el flujo
 sin duplicarlo. GET pago es solo lectura y no emite.
 Las reglas autorizadas y el despliegue estan en `services/polizas/README.md`.
 
-Ambos métodos devuelven `200` con `id`, `solicitudId`, `suscripcionId`, `ofertaId`,
+Para el confirmado, ambos métodos devuelven `200` con `id`, `solicitudId`, `suscripcionId`, `ofertaId`,
 `ofertaVersion`, `estado: confirmado`, `simulada: true`,
 `referenciaInterna: SIM-<UUID>`, `importe: {monto, moneda}`, `periodicidad`,
 `confirmadaEn` y la instantánea `saga: {estado: pago_confirmado, version, actualizadaEn}`.
@@ -274,7 +274,26 @@ GET suscripción refleja la transición persistida. Repetir POST devuelve el mis
 pago sin duplicar eventos, incluso tras vencer la oferta o avanzar posteriormente
 la saga. La clave de creación no puede reutilizarse en otra solicitud (`409`).
 
-GET sin pago devuelve **404 `pago_no_encontrado` solo después de comprobar ownership**;
+El servidor de Cotizacion admite `PAGO_SIMULADO_RESULTADO=confirmado` (default) o
+`rechazado`; el navegador no puede enviar ni sobrescribir ese escenario.
+El rechazo definitivo es **HTTP 200, `estado: rechazado`**, no una excepcion:
+conserva los campos compartidos, pero reemplaza `confirmadaEn` por `rechazadaEn`
+y `motivo: rechazo_simulado`. Su `id`/`referenciaInterna` identifican el intento;
+`saga` conserva `pago_pendiente` version 1. No se confirma pago ni se emite poliza.
+El BFF rechaza como 503 respuestas de rechazo incoherentes o con `confirmadaEn`.
+
+Repetir POST con la misma clave devuelve el resultado persistido aunque cambie
+el escenario. Solo una nueva accion explicita tras rechazo definitivo debe usar
+otra clave para un nuevo intento. No cambiar la clave por un timeout, 503,
+recarga o recuperacion de emision. Si ya existe un confirmado, una clave nueva
+recupera el mismo pago; una clave utilizada en otra solicitud produce 409.
+GET pago y `dashboard.pagos` priorizan el confirmado; sin el devuelven el ultimo
+rechazo, que en dashboard lleva `rechazadaEn`/`motivo` y no `confirmadaEn`.
+Un replay de una clave rechazada antigua no cambia ese resultado actual.
+La UI debe discriminar por `estado`, no interpretar todo HTTP 200 como pago exitoso.
+No hay resultado financiero ambiguo/pendiente ni conciliador automatico.
+
+GET sin resultado devuelve **404 `pago_no_encontrado` solo después de comprobar ownership**;
 404 `solicitud_no_encontrada` significa ajena/inexistente y no debe habilitar pago.
 POST sin suscripción devuelve 404; suscripción no aprobada, selección inválida,
 cotización vencida o saga no pendiente devuelven 422 `pago_no_permitido`.

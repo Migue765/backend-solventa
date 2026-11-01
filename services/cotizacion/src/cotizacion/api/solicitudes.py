@@ -26,6 +26,7 @@ from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
 from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
+from cotizacion.domain.pago import PagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -202,7 +203,7 @@ def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
         return jsonify(error="solicitud_invalida"), 400
     pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
     polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
-    if polizas is not None:
+    if polizas is not None and isinstance(pago, PagoSimulado):
         repositorio = cast(RepositorioPagosSqlAlchemy, current_app.extensions["repositorio_pagos"])
         evidencia = repositorio.evidencia_emision(pago)
         if evidencia is not None:

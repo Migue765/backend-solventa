@@ -23,6 +23,7 @@ from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
     InstantaneaDecisionModel,
+    IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
     SagaEmisionModel,
@@ -50,6 +51,21 @@ class RepositorioCotizacionesSqlAlchemy:
 
     def consultar_dashboard(self, cliente_id: UUID) -> dict[str, object]:
         # Una sola consulta mantiene coherente la proyeccion incluso durante un pago.
+        ultimo_rechazo = (
+            select(IntentoPagoSimuladoModel.intento_id)
+            .where(
+                IntentoPagoSimuladoModel.solicitud_id == CotizacionModel.solicitud_id,
+                IntentoPagoSimuladoModel.cliente_id == cliente_id,
+                IntentoPagoSimuladoModel.resultado == "rechazado",
+            )
+            .order_by(
+                IntentoPagoSimuladoModel.evaluado_en.desc(),
+                IntentoPagoSimuladoModel.intento_id.desc(),
+            )
+            .limit(1)
+            .correlate(CotizacionModel)
+            .scalar_subquery()
+        )
         consulta = (
             select(
                 CotizacionModel,
@@ -57,6 +73,7 @@ class RepositorioCotizacionesSqlAlchemy:
                 SuscripcionModel,
                 SagaEmisionModel,
                 PagoSimuladoModel,
+                IntentoPagoSimuladoModel,
             )
             .outerjoin(
                 SeleccionOfertaModel,
@@ -76,6 +93,10 @@ class RepositorioCotizacionesSqlAlchemy:
                 (PagoSimuladoModel.suscripcion_id == SuscripcionModel.suscripcion_id)
                 & (PagoSimuladoModel.cliente_id == cliente_id),
             )
+            .outerjoin(
+                IntentoPagoSimuladoModel,
+                IntentoPagoSimuladoModel.intento_id == ultimo_rechazo,
+            )
             .where(CotizacionModel.cliente_id == cliente_id)
             .options(raiseload(CotizacionModel.coberturas), raiseload(CotizacionModel.instantanea))
             .order_by(CotizacionModel.creada_en.desc(), CotizacionModel.cotizacion_id)
@@ -84,7 +105,7 @@ class RepositorioCotizacionesSqlAlchemy:
         suscripciones: list[dict[str, object]] = []
         pagos: list[dict[str, object]] = []
         with self._sesiones() as sesion:
-            for cotizacion, seleccion, suscripcion, saga, pago in sesion.execute(consulta):
+            for cotizacion, seleccion, suscripcion, saga, pago, rechazo in sesion.execute(consulta):
                 cotizaciones.append(
                     {
                         "id": str(cotizacion.cotizacion_id),
@@ -143,6 +164,20 @@ class RepositorioCotizacionesSqlAlchemy:
                             "importe": {"monto": str(pago.monto), "moneda": pago.moneda},
                             "periodicidad": pago.periodicidad,
                             "confirmadaEn": _fecha_dashboard(pago.confirmada_en),
+                        }
+                    )
+                elif rechazo is not None:
+                    pagos.append(
+                        {
+                            "id": str(rechazo.intento_id),
+                            "solicitudId": rechazo.solicitud_id,
+                            "suscripcionId": str(rechazo.suscripcion_id),
+                            "estado": "rechazado",
+                            "simulada": True,
+                            "importe": {"monto": str(rechazo.monto), "moneda": rechazo.moneda},
+                            "periodicidad": rechazo.periodicidad,
+                            "rechazadaEn": _fecha_dashboard(rechazo.evaluado_en),
+                            "motivo": "rechazo_simulado",
                         }
                     )
         return {"cotizaciones": cotizaciones, "suscripciones": suscripciones, "pagos": pagos}

@@ -5,7 +5,7 @@ from uuid import UUID
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.pago import ResultadoPagoSimulado, ResultadoSimuladorPago
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -47,9 +47,15 @@ class SuscripcionRepository(Protocol):
 class PagoSimuladoRepository(Protocol):
     def confirmar_pago_simulado(
         self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID, ahora: datetime
-    ) -> PagoSimulado: ...
+    ) -> ResultadoPagoSimulado: ...
 
-    def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> PagoSimulado: ...
+    def obtener_pago_simulado(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> ResultadoPagoSimulado: ...
+
+
+class ProveedorPagoSimulado(Protocol):
+    def evaluar(self) -> ResultadoSimuladorPago: ...
 
 
 class PerfilRiesgoGateway(Protocol):

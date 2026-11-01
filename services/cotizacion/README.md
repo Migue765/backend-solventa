@@ -192,7 +192,7 @@ la instantanea de confirmacion version 2, sin efectos de escritura.
 Consultar [Polizas](../polizas/README.md) para reglas de vigencia, persistencia,
 contrato y activacion principal.
 
-POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
+Para un resultado confirmado, POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
 `referenciaInterna: SIM-<UUID>` e `importe: {monto, moneda}`. La referencia es
 interna, no bancaria. El reintento recupera el mismo registro incluso con una
 nueva clave o después de vencer la oferta/avanzar la saga; no vuelve a modificarla.
@@ -200,7 +200,39 @@ Solo la clave de creación queda asociada al registro y usarla en otra solicitud
 del mismo cliente devuelve `409 conflicto_idempotencia`. El objeto `saga` del pago
 es la instantánea de confirmación; GET suscripción informa cualquier estado posterior.
 
-GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin pago;
+El proveedor integrado `SimuladorPago` usa exclusivamente
+`PAGO_SIMULADO_RESULTADO=confirmado` (predeterminado) o `rechazado` en el servidor.
+Un valor distinto falla al crear la configuracion; no se admite elegir escenario
+en el body, query o cabeceras del navegador. No se agrega un servicio externo.
+
+Con `rechazado`, POST responde **200** con `estado: rechazado`, `rechazadaEn`,
+`motivo: rechazo_simulado` y sin `confirmadaEn`. Conserva los IDs, importe,
+periodicidad y referencia interna; `id` identifica el intento rechazado, no un
+pago confirmado. La saga conserva `pago_pendiente` version 1 y su fecha original.
+La migracion aditiva `intentos_pago_simulado` guarda intentos y sus claves
+sin modificar ni rellenar pagos historicos. El rechazo y su outbox
+`PagoSimuladoRechazado` son atomicos: no crea pago confirmado, evento de
+confirmacion ni poliza, incluso si Polizas esta habilitado.
+Antes de arrancar esta version, aplicar las migraciones de Cotizacion hasta
+`head` por el procedimiento existente; el dashboard tambien consulta la nueva tabla.
+
+La misma clave recupera el resultado original aunque cambie el escenario del
+servidor o venza la oferta. Una clave nueva tras rechazo permite otra evaluacion
+solo si siguen cumpliendose las precondiciones. Si ya existe un confirmado,
+una clave nueva devuelve ese mismo pago (200, mismo body) sin evaluar ni
+duplicar; la recuperacion de emision conserva su posible 503. Una clave de otra
+solicitud del mismo cliente devuelve 409, incluidos pagos historicos.
+Las carreras comparten la unicidad de intentos; dos claves que confirman la misma
+solicitud convergen al mismo pago. Si un rechazo concurre con una confirmacion,
+puede persistir primero como intento independiente, pero no reemplaza al confirmado.
+
+GET pago y `dashboard.pagos` devuelven el confirmado si existe, o el ultimo rechazo
+por solicitud. El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
+`confirmadaEn`. Repetir una clave rechazada antigua devuelve su rechazo, pero
+no degrada GET/dashboard ni la saga posterior. No hay conciliacion automatica,
+resultado financiero pendiente/ambiguo, firma o documento implementados.
+
+GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin resultado;
 una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuelve
 404; una no aprobada, selección inválida, oferta vencida o saga no pendiente devuelve
 `422 pago_no_permitido`. Un fallo de persistencia revierte todo y nunca se informa éxito.

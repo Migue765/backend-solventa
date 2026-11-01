@@ -10,6 +10,7 @@ from cotizacion.config import Config
 from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
+    IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
     SagaEmisionModel,
@@ -122,7 +123,18 @@ def test_distingue_pago_ausente_de_solicitud_ajena(client):
         assert respuesta.get_json()["error"] == "no_encontrado"
 
 
-@pytest.mark.parametrize("datos", [{"importe": "1"}, {"tarjeta": "1234"}, [], None, ""])
+@pytest.mark.parametrize(
+    "datos",
+    [
+        {"importe": "1"},
+        {"tarjeta": "1234"},
+        {"estado": "confirmado"},
+        {"estado": "rechazado"},
+        [],
+        None,
+        "",
+    ],
+)
 def test_rechaza_datos_cliente(client, datos):
     base, query, _, _ = preparar(client)
     respuesta = pagar(client, base, query, data=json.dumps(datos), content_type="application/json")
@@ -156,15 +168,19 @@ def test_requiere_clave_uuid(client, clave):
         (CotizacionModel, {"valida_hasta": datetime.now(UTC) - timedelta(days=1)}),
     ],
 )
-def test_no_confirma_estados_o_selecciones_invalidos(client, database_url, modelo, valores):
+@pytest.mark.parametrize("resultado", ["confirmado", "rechazado"])
+def test_no_confirma_estados_o_selecciones_invalidos(
+    client, database_url, modelo, valores, resultado
+):
     base, query, _, _ = preparar(client)
     with Session(create_engine(database_url)) as sesion, sesion.begin():
         sesion.execute(update(modelo).values(**valores))
-    respuesta = pagar(client, base, query)
+    respuesta = pagar(cliente_simulador(database_url, resultado), base, query)
     assert respuesta.status_code == 422
     assert respuesta.get_json()["error"] == "pago_no_permitido"
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 0
 
 
 def test_sin_suscripcion_no_paga(client):
@@ -176,10 +192,17 @@ def test_sin_suscripcion_no_paga(client):
     assert pagar(client, base, {"clienteId": payload["clienteId"]}).status_code == 404
 
 
-def test_replay_sobrevive_expiracion_y_avance_saga(client, database_url):
+def test_replay_sobrevive_expiracion_y_avance_saga(client, database_url, monkeypatch):
     base, query, _, _ = preparar(client)
     clave = str(uuid4())
     pago = pagar(client, base, query, clave).get_json()
+
+    def no_evaluar():
+        raise AssertionError("Un pago confirmado nunca vuelve a evaluar el simulador")
+
+    monkeypatch.setattr(
+        client.application.extensions["repositorio_pagos"]._proveedor, "evaluar", no_evaluar
+    )
     with Session(create_engine(database_url)) as sesion, sesion.begin():
         sesion.execute(
             update(CotizacionModel).values(valida_hasta=datetime.now(UTC) - timedelta(days=1))
@@ -192,6 +215,7 @@ def test_replay_sobrevive_expiracion_y_avance_saga(client, database_url):
     assert client.get(base + "/pago-simulado", query_string=query).get_json() == pago
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
         saga = sesion.get(SagaEmisionModel, UUID(pago["suscripcionId"]))
         assert (saga.estado, saga.version) == ("emitida", 3)
 
@@ -223,6 +247,7 @@ def test_peticiones_concurrentes_no_duplican_pago_ni_evento(client, database_url
     assert all(pago == pagos[0] for pago in pagos)
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
         assert (
             sesion.scalar(
                 select(func.count())
@@ -270,3 +295,214 @@ def test_clave_concurrente_en_distintas_solicitudes_no_confirma_ambas(client, da
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
         assert sorted(sesion.scalars(select(SagaEmisionModel.version))) == [1, 2]
+
+
+def cliente_simulador(database_url, resultado):
+    return create_app(
+        Config(database_url=database_url, pago_simulado_resultado=resultado)
+    ).test_client()
+
+
+def test_rechazo_durable_recuperable_y_nuevo_intento_sin_reescribir_resultado(client, database_url):
+    base, query, seleccion, suscripcion = preparar(client)
+    rechazador = cliente_simulador(database_url, "rechazado")
+    clave = str(uuid4())
+    respuesta = pagar(rechazador, base, query, clave, json={})
+    assert respuesta.status_code == 200
+    rechazo = respuesta.get_json()
+    assert rechazo == {
+        "id": rechazo["id"],
+        "solicitudId": seleccion["solicitudId"],
+        "suscripcionId": suscripcion["id"],
+        "ofertaId": seleccion["ofertaId"],
+        "ofertaVersion": seleccion["version"],
+        "estado": "rechazado",
+        "simulada": True,
+        "referenciaInterna": f"SIM-{rechazo['id']}",
+        "importe": seleccion["prima"],
+        "periodicidad": seleccion["periodicidad"],
+        "rechazadaEn": rechazo["rechazadaEn"],
+        "motivo": "rechazo_simulado",
+        "saga": suscripcion["saga"],
+    }
+    confirmado = cliente_simulador(database_url, "confirmado")
+    assert pagar(confirmado, base, query, clave).get_json() == rechazo
+    assert confirmado.get(base + "/pago-simulado", query_string=query).get_json() == rechazo
+    assert confirmado.get(base + "/suscripcion", query_string=query).get_json() == suscripcion
+    with Session(create_engine(database_url)) as sesion:
+        assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+        intento = sesion.scalars(select(IntentoPagoSimuladoModel)).one()
+        assert str(intento.intento_id) == rechazo["id"]
+        eventos = sesion.scalars(
+            select(OutboxEventoModel).where(OutboxEventoModel.tipo.like("PagoSimulado%"))
+        ).all()
+        assert len(eventos) == 1 and eventos[0].tipo == "PagoSimuladoRechazado"
+        assert eventos[0].payload["intentoId"] == rechazo["id"]
+    pagado = pagar(confirmado, base, query)
+    assert pagado.status_code == 200
+    pago = pagado.get_json()
+    assert pago["estado"] == "confirmado" and pago["id"] != rechazo["id"]
+    assert "rechazadaEn" not in pago and "motivo" not in pago
+    assert confirmado.get(base + "/pago-simulado", query_string=query).get_json() == pago
+    assert pagar(rechazador, base, query).get_json() == pago
+    assert pagar(confirmado, base, query, clave).get_json() == rechazo
+    assert confirmado.get(base + "/pago-simulado", query_string=query).get_json() == pago
+    with Session(create_engine(database_url)) as sesion:
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 2
+        assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+
+
+def test_rechazo_no_filtra_solicitud_ajena_ni_reutiliza_clave(client, database_url):
+    base, query, _, _ = preparar(client)
+    rechazador = cliente_simulador(database_url, "rechazado")
+    clave = str(uuid4())
+    assert pagar(rechazador, base, query, clave).get_json()["estado"] == "rechazado"
+    otra_base, _, _, _ = preparar(client, query["clienteId"])
+    assert pagar(client, otra_base, query, clave).status_code == 409
+    ajeno = {"clienteId": str(uuid4())}
+    assert pagar(rechazador, base, ajeno, clave).status_code == 404
+    assert rechazador.get(base + "/pago-simulado", query_string=ajeno).status_code == 404
+
+
+def test_replay_rechazado_sobrevive_expiracion_sin_reconsultar_simulador(client, database_url):
+    base, query, _, _ = preparar(client)
+    rechazador = cliente_simulador(database_url, "rechazado")
+    clave = str(uuid4())
+    rechazo = pagar(rechazador, base, query, clave).get_json()
+    with Session(create_engine(database_url)) as sesion, sesion.begin():
+        sesion.execute(
+            update(CotizacionModel).values(valida_hasta=datetime.now(UTC) - timedelta(days=1))
+        )
+    assert pagar(client, base, query, clave).get_json() == rechazo
+    assert pagar(client, base, query).status_code == 422
+
+
+@pytest.mark.parametrize("resultados", [("rechazado", "rechazado"), ("confirmado", "rechazado")])
+def test_misma_clave_concurrente_conserva_un_resultado_y_un_evento(
+    client, database_url, resultados
+):
+    base, query, _, _ = preparar(client)
+    clientes = [cliente_simulador(database_url, resultado) for resultado in resultados]
+    barrera = Barrier(2)
+    clave = str(uuid4())
+
+    def procesar(cliente):
+        barrera.wait(timeout=15)
+        respuesta = pagar(cliente, base, query, clave)
+        assert respuesta.status_code == 200, respuesta.get_json()
+        return respuesta.get_json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        respuestas = list(pool.map(procesar, clientes))
+    assert respuestas[0] == respuestas[1]
+    with Session(create_engine(database_url)) as sesion:
+        intento = sesion.scalars(select(IntentoPagoSimuladoModel)).one()
+        assert intento.resultado == respuestas[0]["estado"]
+        assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == (
+            1 if intento.resultado == "confirmado" else 0
+        )
+        assert (
+            len(
+                sesion.scalars(
+                    select(OutboxEventoModel).where(OutboxEventoModel.tipo.like("PagoSimulado%"))
+                ).all()
+            )
+            == 1
+        )
+
+
+def test_rechazo_y_clave_se_revierten_si_falla_su_auditoria(client, database_url):
+    base, query, _, suscripcion = preparar(client)
+    rechazador = cliente_simulador(database_url, "rechazado")
+
+    def fallar(*_):
+        raise RuntimeError("Fallo controlado del outbox")
+
+    event.listen(OutboxEventoModel, "before_insert", fallar)
+    try:
+        assert pagar(rechazador, base, query).status_code == 500
+    finally:
+        event.remove(OutboxEventoModel, "before_insert", fallar)
+    with Session(create_engine(database_url)) as sesion:
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 0
+        assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+    assert client.get(base + "/suscripcion", query_string=query).get_json() == suscripcion
+
+
+def test_migracion_de_intentos_preserva_pago_historico(client, database_url, alembic_config):
+    from alembic import command
+
+    base, query, _, _ = preparar(client)
+    clave = str(uuid4())
+    pago = pagar(client, base, query, clave).get_json()
+    command.downgrade(alembic_config, "ofertas_socios_hipotecarias")
+    with Session(create_engine(database_url)) as sesion:
+        antes = dict(sesion.execute(select(PagoSimuladoModel.__table__)).mappings().one())
+        eventos = sesion.scalar(select(func.count()).select_from(OutboxEventoModel))
+    command.upgrade(alembic_config, "head")
+    with Session(create_engine(database_url)) as sesion:
+        assert dict(sesion.execute(select(PagoSimuladoModel.__table__)).mappings().one()) == antes
+        assert sesion.scalar(select(func.count()).select_from(OutboxEventoModel)) == eventos
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 0
+    rechazador = cliente_simulador(database_url, "rechazado")
+    assert pagar(rechazador, base, query, clave).get_json() == pago
+    assert rechazador.get(base + "/pago-simulado", query_string=query).get_json() == pago
+    otra_base, _, _, _ = preparar(client, query["clienteId"])
+    conflicto = pagar(rechazador, otra_base, query, clave)
+    assert conflicto.status_code == 409
+    assert conflicto.get_json()["error"] == "conflicto_idempotencia"
+
+
+def test_dos_claves_concurrentes_con_resultados_distintos_convergen_al_confirmado(
+    client, database_url
+):
+    base, query, _, _ = preparar(client)
+    clientes = [cliente_simulador(database_url, estado) for estado in ("confirmado", "rechazado")]
+    barrera = Barrier(2)
+
+    def procesar(cliente):
+        barrera.wait(timeout=15)
+        respuesta = pagar(cliente, base, query)
+        assert respuesta.status_code == 200, respuesta.get_json()
+        return respuesta.get_json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        confirmado, concurrente = list(pool.map(procesar, clientes))
+    assert confirmado["estado"] == "confirmado"
+    if concurrente["estado"] == "confirmado":
+        assert concurrente == confirmado
+    else:
+        assert concurrente["estado"] == "rechazado"
+        assert concurrente["id"] != confirmado["id"]
+    assert client.get(base + "/pago-simulado", query_string=query).get_json() == confirmado
+    with Session(create_engine(database_url)) as sesion:
+        assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+        assert (
+            sesion.scalar(
+                select(func.count())
+                .select_from(OutboxEventoModel)
+                .where(OutboxEventoModel.tipo == "PagoSimuladoConfirmado")
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("resultado", ["confirmado", "rechazado"])
+def test_clave_rechazada_no_puede_evaluar_otras_solicitudes_en_carrera(
+    client, database_url, resultado
+):
+    usuario = str(uuid4())
+    bases = [preparar(client, usuario)[0] for _ in range(2)]
+    clientes = [cliente_simulador(database_url, estado) for estado in ("rechazado", resultado)]
+    clave = str(uuid4())
+    barrera = Barrier(2)
+
+    def procesar(index):
+        barrera.wait(timeout=15)
+        return pagar(clientes[index], bases[index], {"clienteId": usuario}, clave).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        estados = list(pool.map(procesar, range(2)))
+    assert sorted(estados) == [200, 409]
+    with Session(create_engine(database_url)) as sesion:
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1

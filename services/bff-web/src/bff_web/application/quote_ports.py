@@ -9,7 +9,7 @@ from bff_web.domain.quotes import (
     OffersResult,
     QuoteRequestDraft,
     QuoteRequestRecord,
-    SimulatedPayment,
+    SimulatedPaymentResult,
     Subscription,
     TravelDestination,
 )
@@ -54,6 +54,6 @@ class QuoteGateway(Protocol):
 
     def confirm_simulated_payment(
         self, user_id: UUID, request_id: str, idempotency_key: UUID
-    ) -> SimulatedPayment: ...
+    ) -> SimulatedPaymentResult: ...
 
-    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment: ...
+    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPaymentResult: ...

@@ -39,6 +39,7 @@ from cotizacion.domain.errors import (
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
+from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.perfil_http import ProveedorPerfilHttp
 from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
 from cotizacion.infrastructure.perfil_simulado import ProveedorPerfilSimulado
@@ -89,7 +90,11 @@ def create_app(config: Config | None = None) -> Flask:
         vigencia=timedelta(days=config.vigencia_dias),
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
-    pagos = RepositorioPagosSqlAlchemy(sesiones, emitir_polizas=bool(config.polizas_url))
+    pagos = RepositorioPagosSqlAlchemy(
+        sesiones,
+        emitir_polizas=bool(config.polizas_url),
+        proveedor=SimuladorPago(config.pago_simulado_resultado),
+    )
     app.extensions["repositorio_pagos"] = pagos
     app.extensions["polizas"] = (
         PolizasHttp(config.polizas_url, config.internal_api_token) if config.polizas_url else None

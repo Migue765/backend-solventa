@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -340,3 +341,30 @@ class PagoSimuladoModel(Base):
     confirmada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     saga_version: Mapped[int] = mapped_column(Integer)
     emision_solicitada: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+class IntentoPagoSimuladoModel(Base):
+    __tablename__ = "intentos_pago_simulado"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_intentos_pago_idempotencia"),
+        CheckConstraint(
+            "resultado IN ('confirmado', 'rechazado')", name="ck_intentos_pago_resultado"
+        ),
+    )
+
+    intento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    solicitud_id: Mapped[str] = mapped_column(String(32), index=True)
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="RESTRICT")
+    )
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[UUID]
+    oferta_id: Mapped[UUID]
+    oferta_version: Mapped[int]
+    monto: Mapped[Decimal] = mapped_column(MONTO)
+    moneda: Mapped[str] = mapped_column(String(3))
+    periodicidad: Mapped[str] = mapped_column(String(20))
+    resultado: Mapped[str] = mapped_column(String(20))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    saga_version: Mapped[int]
+    saga_actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))

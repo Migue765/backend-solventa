@@ -34,7 +34,9 @@ from bff_web.domain.quotes import (
     ProductCoverage,
     QuoteRequestDraft,
     QuoteRequestRecord,
+    RejectedSimulatedPayment,
     SimulatedPayment,
+    SimulatedPaymentResult,
     Subscription,
     SubscriptionDecision,
     TravelDestination,
@@ -202,7 +204,7 @@ class HttpQuoteGateway(QuoteGateway):
 
     def confirm_simulated_payment(
         self, user_id: UUID, request_id: str, idempotency_key: UUID
-    ) -> SimulatedPayment:
+    ) -> SimulatedPaymentResult:
         query = urlencode({"clienteId": str(user_id)})
         payload = self._request_json(
             f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}",
@@ -212,7 +214,7 @@ class HttpQuoteGateway(QuoteGateway):
         )
         return _safe_payment_from_json(payload)
 
-    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment:
+    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPaymentResult:
         query = urlencode({"clienteId": str(user_id)})
         payload = self._request_json(
             f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}"
@@ -298,19 +300,54 @@ def _record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:
     )
 
 
-def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPayment:
+def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPaymentResult:
     try:
         if (
             payload["simulada"] is not True
-            or payload["estado"] != "confirmado"
+            or payload["estado"] not in {"confirmado", "rechazado"}
             or payload["referenciaInterna"] != f"SIM-{UUID(payload['id'])}"
             or payload["periodicidad"] not in {"mensual", "por_viaje", "por_vuelo", "por_periodo"}
-            or payload["saga"]["estado"] != "pago_confirmado"
         ):
             raise ValueError("Respuesta de pago simulado invalida")
         amount = Decimal(payload["importe"]["monto"])
         if not amount.is_finite() or amount <= 0:
             raise ValueError("Importe invalido")
+        if payload["estado"] == "rechazado":
+            if (
+                "confirmadaEn" in payload
+                or payload["motivo"] != "rechazo_simulado"
+                or payload["saga"]["estado"] != "pago_pendiente"
+                or type(payload["saga"]["version"]) is not int
+                or payload["saga"]["version"] != 1
+                or not isinstance(payload["rechazadaEn"], str)
+                or not isinstance(payload["saga"]["actualizadaEn"], str)
+            ):
+                raise ValueError("Respuesta de rechazo simulado invalida")
+            rejected_at = _datetime(payload["rechazadaEn"])
+            updated_at = _datetime(payload["saga"]["actualizadaEn"])
+            if rejected_at.tzinfo is None or updated_at.tzinfo is None:
+                raise ValueError("Las fechas del rechazo requieren zona horaria")
+            return RejectedSimulatedPayment(
+                payment_id=UUID(payload["id"]),
+                request_id=payload["solicitudId"],
+                subscription_id=UUID(payload["suscripcionId"]),
+                offer_id=UUID(payload["ofertaId"]),
+                offer_version=payload["ofertaVersion"],
+                amount=Money(amount, payload["importe"]["moneda"]),
+                billing_period=payload["periodicidad"],
+                rejected_at=rejected_at,
+                saga=IssuanceSaga(
+                    status=payload["saga"]["estado"],
+                    version=payload["saga"]["version"],
+                    updated_at=updated_at,
+                ),
+            )
+        if (
+            payload["saga"]["estado"] != "pago_confirmado"
+            or "rechazadaEn" in payload
+            or "motivo" in payload
+        ):
+            raise ValueError("Respuesta de pago confirmado invalida")
         return SimulatedPayment(
             payment_id=UUID(payload["id"]),
             request_id=payload["solicitudId"],

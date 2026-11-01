@@ -144,3 +144,19 @@ class SimulatedPayment:
     billing_period: str
     confirmed_at: datetime
     saga: IssuanceSaga
+
+
+@dataclass(frozen=True)
+class RejectedSimulatedPayment:
+    payment_id: UUID
+    request_id: str
+    subscription_id: UUID
+    offer_id: UUID
+    offer_version: int
+    amount: Money
+    billing_period: str
+    rejected_at: datetime
+    saga: IssuanceSaga
+
+
+SimulatedPaymentResult = SimulatedPayment | RejectedSimulatedPayment

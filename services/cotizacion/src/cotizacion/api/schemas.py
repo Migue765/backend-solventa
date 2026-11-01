@@ -16,7 +16,7 @@ from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.documentos import validar_identificacion
 from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.pago import PagoSimuladoRechazado, ResultadoPagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -140,19 +140,34 @@ class ConfirmarPagoSimuladoRequest(_Solicitud):
     pass
 
 
-def pago_simulado_a_json(pago: PagoSimulado) -> dict[str, object]:
-    fecha = pago.confirmada_en.isoformat().replace("+00:00", "Z")
-    return {
+def pago_simulado_a_json(pago: ResultadoPagoSimulado) -> dict[str, object]:
+    resultado: dict[str, object] = {
         "id": str(pago.pago_id),
         "solicitudId": pago.solicitud_id,
         "suscripcionId": str(pago.suscripcion_id),
         "ofertaId": str(pago.oferta_id),
         "ofertaVersion": pago.oferta_version,
-        "estado": "confirmado",
         "simulada": True,
         "referenciaInterna": f"SIM-{pago.pago_id}",
         "importe": _dinero(pago.importe),
         "periodicidad": pago.periodicidad,
+    }
+    if isinstance(pago, PagoSimuladoRechazado):
+        return {
+            **resultado,
+            "estado": "rechazado",
+            "rechazadaEn": _fecha(pago.rechazada_en),
+            "motivo": "rechazo_simulado",
+            "saga": {
+                "estado": "pago_pendiente",
+                "version": pago.saga_version,
+                "actualizadaEn": _fecha(pago.saga_actualizada_en),
+            },
+        }
+    fecha = _fecha(pago.confirmada_en)
+    return {
+        **resultado,
+        "estado": "confirmado",
         "confirmadaEn": fecha,
         "saga": {
             "estado": "pago_confirmado",

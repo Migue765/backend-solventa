@@ -5,6 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from cotizacion.application.ports import ProveedorPagoSimulado
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
@@ -14,11 +15,18 @@ from cotizacion.domain.errors import (
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.pago import (
+    PagoSimulado,
+    PagoSimuladoRechazado,
+    ResultadoPagoSimulado,
+    ResultadoSimuladorPago,
+)
 from cotizacion.domain.productos import PRODUCTOS
+from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
+    IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
     SagaEmisionModel,
@@ -28,9 +36,15 @@ from cotizacion.infrastructure.persistence.models import (
 
 
 class RepositorioPagosSqlAlchemy:
-    def __init__(self, sesiones: sessionmaker[Session], emitir_polizas: bool = False) -> None:
+    def __init__(
+        self,
+        sesiones: sessionmaker[Session],
+        emitir_polizas: bool = False,
+        proveedor: ProveedorPagoSimulado | None = None,
+    ) -> None:
         self._sesiones = sesiones
         self._emitir_polizas = emitir_polizas
+        self._proveedor = proveedor if proveedor is not None else SimuladorPago()
 
     def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None:
         with self._sesiones() as sesion:
@@ -94,17 +108,32 @@ class RepositorioPagosSqlAlchemy:
                 )
             )
 
-    def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> PagoSimulado:
+    def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> ResultadoPagoSimulado:
         with self._sesiones() as sesion:
             self._solicitud(sesion, solicitud_id, cliente_id)
             pago = self._existente(sesion, solicitud_id, cliente_id)
             if pago is None:
-                raise PagoNoEncontradoError()
+                rechazo = sesion.scalar(
+                    select(IntentoPagoSimuladoModel)
+                    .where(
+                        IntentoPagoSimuladoModel.solicitud_id == solicitud_id,
+                        IntentoPagoSimuladoModel.cliente_id == cliente_id,
+                        IntentoPagoSimuladoModel.resultado == "rechazado",
+                    )
+                    .order_by(
+                        IntentoPagoSimuladoModel.evaluado_en.desc(),
+                        IntentoPagoSimuladoModel.intento_id.desc(),
+                    )
+                    .limit(1)
+                )
+                if rechazo is None:
+                    raise PagoNoEncontradoError()
+                return _rechazo_a_dominio(rechazo)
             return pago
 
     def confirmar_pago_simulado(
         self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID, ahora: datetime
-    ) -> PagoSimulado:
+    ) -> ResultadoPagoSimulado:
         try:
             with self._sesiones.begin() as sesion:
                 solicitud = self._solicitud(sesion, solicitud_id, cliente_id)
@@ -137,8 +166,60 @@ class RepositorioPagosSqlAlchemy:
                     or _utc(solicitud.valida_hasta) <= ahora
                 ):
                     raise PagoNoPermitidoError()
+                resultado_simulado = self._proveedor.evaluar()
+                if not isinstance(resultado_simulado, ResultadoSimuladorPago):
+                    raise ValueError("El simulador devolvio un resultado invalido.")
+                intento = IntentoPagoSimuladoModel(
+                    intento_id=uuid4(),
+                    solicitud_id=solicitud_id,
+                    suscripcion_id=suscripcion.suscripcion_id,
+                    cliente_id=cliente_id,
+                    idempotency_key=idempotency_key,
+                    oferta_id=seleccion.oferta_id,
+                    oferta_version=seleccion.version,
+                    monto=seleccion.prima_mensual,
+                    moneda=seleccion.moneda,
+                    periodicidad=seleccion.periodicidad,
+                    resultado=resultado_simulado.value,
+                    evaluado_en=ahora,
+                    saga_version=saga.version,
+                    saga_actualizada_en=_utc(saga.actualizada_en),
+                )
+                sesion.add(intento)
+                # La clave se reserva para ambos resultados en la misma transaccion.
+                sesion.flush()
+                if resultado_simulado is ResultadoSimuladorPago.RECHAZADO:
+                    pendiente = sesion.scalar(
+                        update(SagaEmisionModel)
+                        .where(
+                            SagaEmisionModel.suscripcion_id == suscripcion.suscripcion_id,
+                            SagaEmisionModel.estado == "pago_pendiente",
+                            SagaEmisionModel.version == intento.saga_version,
+                        )
+                        .values(version=SagaEmisionModel.version)
+                        .returning(SagaEmisionModel.suscripcion_id)
+                    )
+                    if pendiente is None:
+                        raise PagoNoPermitidoError()
+                    sesion.add(
+                        OutboxEventoModel(
+                            evento_id=uuid4(),
+                            tipo="PagoSimuladoRechazado",
+                            agregado_id=suscripcion.suscripcion_id,
+                            payload={
+                                "intentoId": str(intento.intento_id),
+                                "solicitudId": solicitud_id,
+                                "suscripcionId": str(suscripcion.suscripcion_id),
+                                "simulada": True,
+                                "motivo": "rechazo_simulado",
+                            },
+                            creado_en=ahora,
+                            intentos=0,
+                        )
+                    )
+                    return _rechazo_a_dominio(intento)
                 pago = PagoSimuladoModel(
-                    pago_id=uuid4(),
+                    pago_id=intento.intento_id,
                     solicitud_id=solicitud_id,
                     suscripcion_id=suscripcion.suscripcion_id,
                     cliente_id=cliente_id,
@@ -216,8 +297,19 @@ class RepositorioPagosSqlAlchemy:
     @staticmethod
     def _existente(
         sesion: Session, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID | None = None
-    ) -> PagoSimulado | None:
+    ) -> ResultadoPagoSimulado | None:
         if idempotency_key is not None:
+            intento = sesion.scalar(
+                select(IntentoPagoSimuladoModel).where(
+                    IntentoPagoSimuladoModel.cliente_id == cliente_id,
+                    IntentoPagoSimuladoModel.idempotency_key == idempotency_key,
+                )
+            )
+            if intento is not None:
+                if intento.solicitud_id != solicitud_id:
+                    raise ConflictoIdempotenciaError()
+                if intento.resultado == "rechazado":
+                    return _rechazo_a_dominio(intento)
             por_clave = sesion.scalar(
                 select(PagoSimuladoModel).where(
                     PagoSimuladoModel.cliente_id == cliente_id,
@@ -250,4 +342,19 @@ def _a_dominio(pago: PagoSimuladoModel) -> PagoSimulado:
         periodicidad=pago.periodicidad,
         confirmada_en=_utc(pago.confirmada_en),
         saga_version=pago.saga_version,
+    )
+
+
+def _rechazo_a_dominio(intento: IntentoPagoSimuladoModel) -> PagoSimuladoRechazado:
+    return PagoSimuladoRechazado(
+        pago_id=intento.intento_id,
+        solicitud_id=intento.solicitud_id,
+        suscripcion_id=intento.suscripcion_id,
+        oferta_id=intento.oferta_id,
+        oferta_version=intento.oferta_version,
+        importe=Dinero(intento.monto, intento.moneda),
+        periodicidad=intento.periodicidad,
+        rechazada_en=_utc(intento.evaluado_en),
+        saga_version=intento.saga_version,
+        saga_actualizada_en=_utc(intento.saga_actualizada_en),
     )

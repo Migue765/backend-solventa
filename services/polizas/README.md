@@ -1,7 +1,7 @@
 # Polizas academicas
 
 Servicio interno con base de datos propia. Una suscripcion aprobada y un **pago
-simulado nuevo** generan una poliza academica persistida. No hay aseguradora,
+simulado nuevo confirmado** generan una poliza academica persistida. No hay aseguradora,
 firma, cobro ni cobertura real. Cada respuesta incluye `simulada: true`.
 El BFF conserva la autenticacion JWT y deriva el cliente del principal; nunca
 acepta un cliente indicado por el navegador para consultar el tablero.
@@ -52,6 +52,10 @@ La migracion `emision_polizas` agrega una marca inicialmente falsa a los pagos
 historicos. Solo los pagos creados con la integracion habilitada tienen
 `emision_solicitada=true`; una lectura o reintento de pagos anteriores no emite.
 No hay backfill ni consumidor automatico de eventos historicos.
+
+Un intento rechazado por el simulador de Cotizacion no invoca este servicio,
+no confirma un pago ni genera poliza. El rechazo es un resultado de negocio
+persistido separado de un fallo de emision o acuse perdido.
 
 El pago y su outbox se confirman primero en Cotizacion. A continuacion se
 solicita la emision idempotente y solo tras recibir un ID se avanza la saga
