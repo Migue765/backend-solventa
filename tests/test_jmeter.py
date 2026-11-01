@@ -1,11 +1,14 @@
 import csv
+import json
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import yaml
+from identidad.domain.consent import ConsentScope  # type: ignore[import-untyped]
 
-from tests.jmeter.plans import PRODUCTS, main_plan, persistence_plan
+from tests.jmeter.plans import CONSENT, PRODUCTS, main_plan, persistence_plan
 from tests.jmeter.results import evaluate, percentile
 
 
@@ -51,6 +54,51 @@ def test_generated_plans_use_real_http_and_safe_assertions(tmp_path: Path) -> No
     recovery = tmp_path / "restart.jmx"
     persistence_plan(recovery)
     assert len(ET.parse(recovery).findall(".//HTTPSamplerProxy")) == 3
+
+
+def test_generated_consents_have_current_scope_and_runtime_expiry(tmp_path: Path) -> None:
+    path = tmp_path / "consents.jmx"
+    main_plan(path)
+    root = ET.parse(path).getroot()
+    samplers = [
+        sampler
+        for sampler in root.findall(".//HTTPSamplerProxy")
+        if sampler.findtext("stringProp[@name='HTTPSampler.path']") == CONSENT
+        and sampler.findtext("stringProp[@name='HTTPSampler.method']") == "PUT"
+    ]
+    assert len(samplers) == 4
+    for sampler in samplers:
+        raw = sampler.findtext(".//stringProp[@name='Argument.value']")
+        assert raw is not None
+        body = json.loads(raw)
+        if body["autorizado"]:
+            scope = body["solicitud"]
+            assert scope["vigenteHasta"] == "${consentValidUntil}"
+            assert set(scope) == {
+                "finalidad",
+                "alcances",
+                "fuentes",
+                "datos",
+                "versionTerminos",
+                "vigenteHasta",
+            }
+            assert scope["finalidad"] == "cotizacion"
+            assert scope["alcances"] == scope["fuentes"] == ["open_finance", "open_data"]
+            assert scope["datos"] == ["indicador_riesgo"]
+            ConsentScope.model_validate(
+                {
+                    **scope,
+                    "vigenteHasta": (datetime.now(UTC) + timedelta(days=29)).isoformat(),
+                }
+            )
+        else:
+            assert body == {"autorizado": False, "version": 1}
+    scripts = [node.text or "" for node in root.findall(".//stringProp[@name='script']")]
+    assert any(
+        "vars.put('consentValidUntil', java.time.Instant.now().plusSeconds(2505600).toString())"
+        in script
+        for script in scripts
+    )
 
 
 def test_missing_or_empty_results_fail(tmp_path: Path) -> None:

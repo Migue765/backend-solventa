@@ -45,6 +45,9 @@ aplicaciones Flask existentes en loopback y puertos efimeros. Usa JWT RSA/JWKS r
 tokens internos aleatorios y el hashing de contrasenas normal de Identidad. No reemplaza
 gateways, no usa Flask test_client ni mocks de servicios propios. Las llamadas entre
 BFF, Identidad, Perfilamiento, Cotizacion y Polizas viajan por HTTP.
+El BFF recibe tambien el puerto efimero del Perfilamiento de su propia
+instancia para consultas de informacion del cliente; no usa el default
+`localhost:5003` de una aplicacion ajena.
 
 `DATABASE_URL`, `DB_SCHEMA` y `POLIZAS_DATABASE_URL` deben estar sin definir: el
 bootstrap se niega a arrancar si pudieran redirigir una migracion fuera del entorno.
@@ -172,7 +175,30 @@ No hay usuarios sembrados. Registrar `POST /v1/usuarios` (movil:
 `/movil/v1/usuarios`) con `nombre`, `correo` unico `@example.com` y `contrasena`
 `Solventa123!`; login en `/v1/sesiones` o `/movil/v1/sesiones`. Antes de cotizar,
 web debe autorizar `PUT /v1/consentimientos/perfilamiento` con Bearer y
-`{"autorizado":true,"version":0}`. Perfilamiento y Polizas estan habilitados.
+un body completo. Por ejemplo, preparar el JSON con una vigencia calculada
+al ejecutar (maximo 30 dias), no con una fecha fija:
+
+```powershell
+$consentimiento = @{
+  autorizado = $true
+  version = 0
+  solicitud = @{
+    finalidad = 'cotizacion'
+    alcances = @('open_finance', 'open_data')
+    fuentes = @('open_finance', 'open_data')
+    datos = @('indicador_riesgo')
+    versionTerminos = '1.0'
+    vigenteHasta = (Get-Date).ToUniversalTime().AddDays(29).ToString('o')
+  }
+} | ConvertTo-Json -Depth 4
+```
+
+Enviar `$consentimiento` al endpoint indicado con el JWT local, sin imprimirlo.
+Para revocar una autorizacion vigente se envia `autorizado:false` y su version
+actual, sin `solicitud`. Reautorizar requiere nuevamente la solicitud completa.
+Los planes generados usan el mismo alcance y calculan su vigencia de 29 dias
+en cada iteracion mediante `java.time.Instant.now()`, no al generar el JMX.
+Perfilamiento y Polizas estan habilitados.
 La vigencia de la DB dura todo el proceso, por lo que recargas y relogins consultan
 persistencia real. SIGINT/SIGTERM cierra servidores y elimina datos temporales.
 Para CI de otros repos, fijar el SHA que contiene este bootstrap, no un develop anterior.

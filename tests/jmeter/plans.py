@@ -21,6 +21,20 @@ PRODUCTS = (
 )
 
 
+def _consent_payload(authorized: bool, version: int) -> dict[str, object]:
+    body: dict[str, object] = {"autorizado": authorized, "version": version}
+    if authorized:
+        body["solicitud"] = {
+            "finalidad": "cotizacion",
+            "alcances": ["open_finance", "open_data"],
+            "fuentes": ["open_finance", "open_data"],
+            "datos": ["indicador_riesgo"],
+            "versionTerminos": "1.0",
+            "vigenteHasta": "${consentValidUntil}",
+        }
+    return body
+
+
 def product_data() -> dict[str, dict[str, str]]:
     start = date.today() + timedelta(days=30)
     end = start + timedelta(days=7)
@@ -94,7 +108,9 @@ class Plan:
             "vars.put('email', props.get('runId') + '-' + ctx.getThreadNum() + '-' + "
             "vars.getIteration() + '@example.com'); "
             "vars.put('otherEmail', 'other-' + vars.get('email')); "
-            "vars.put('key', UUID.randomUUID().toString())",
+            "vars.put('key', UUID.randomUUID().toString()); "
+            "vars.put('consentValidUntil', "
+            "java.time.Instant.now().plusSeconds(2505600).toString())",
         )
 
     def script(self, label: str, script: str) -> None:
@@ -207,7 +223,7 @@ class Plan:
             "consent." + str(version + 1),
             "PUT",
             CONSENT,
-            body={"autorizado": authorized, "version": version},
+            body=_consent_payload(authorized, version),
             check=f"assert data.version == {version + 1}",
         )
 
@@ -393,7 +409,7 @@ def main_plan(path: Path, threads: int = 1, loops: int = 1, smoke: bool = True) 
             "PUT",
             CONSENT,
             409,
-            {"autorizado": True, "version": 0},
+            _consent_payload(True, 0),
         )
         plan.request("catalog.missing", "GET", "/v1/productos-seguro/missing", 404)
         plan.request(

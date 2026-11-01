@@ -164,6 +164,7 @@ class LocalStack:
                         identity_url=identity,
                         jwt_issuer=issuer,
                         quote_service_url=quotes,
+                        profiling_service_url=profile,
                         internal_api_token=self.internal_token,
                         encrypted_login_enabled=self.encrypted_login_enabled,
                     )

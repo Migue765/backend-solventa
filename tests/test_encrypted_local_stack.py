@@ -4,8 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 import pytest
 from jwcrypto import jwe, jwk
@@ -97,17 +98,38 @@ for package, service in json.loads(sys.argv[2]).items():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def call(url: str, payload: dict[str, object] | None = None) -> tuple[int, dict[str, Any]]:
+def call(
+    url: str,
+    payload: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, Any]]:
     request = Request(
         url,
         data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     try:
         with urlopen(request, timeout=10) as response:
             return response.status, json.load(response)
     except HTTPError as error:
         return error.code, json.load(error)
+
+
+def encrypted_login_payload(
+    challenge: dict[str, Any], email: str, password: str
+) -> dict[str, object]:
+    header = {
+        "alg": "RSA-OAEP-256",
+        "enc": "A256GCM",
+        "kid": challenge["clavePublica"]["kid"],
+        "typ": "solventa-login+jwe",
+    }
+    plaintext = json.dumps(
+        {"desafioId": challenge["desafioId"], "correo": email, "contrasena": password}
+    )
+    envelope = jwe.JWE(plaintext.encode(), protected=json.dumps(header))
+    envelope.add_recipient(jwk.JWK(**challenge["clavePublica"]))
+    return {"correo": email, "credencialCifrada": envelope.serialize(compact=True)}
 
 
 @pytest.mark.parametrize("encrypted", [False, True])
@@ -129,20 +151,64 @@ def test_local_stack_login_flag(tmp_path: Path, encrypted: bool) -> None:
         )
         assert mobile_status == 200
         if encrypted:
-            header = {
-                "alg": "RSA-OAEP-256",
-                "enc": "A256GCM",
-                "kid": challenge["clavePublica"]["kid"],
-                "typ": "solventa-login+jwe",
-            }
-            plaintext = json.dumps(
-                {"desafioId": challenge["desafioId"], "correo": email, "contrasena": password}
-            )
-            envelope = jwe.JWE(plaintext.encode(), protected=json.dumps(header))
-            envelope.add_recipient(jwk.JWK(**challenge["clavePublica"]))
-            payload: dict[str, object] = {
-                "correo": email,
-                "credencialCifrada": envelope.serialize(compact=True),
-            }
+            payload = encrypted_login_payload(challenge, email, password)
             assert call(web + "/v1/sesiones", payload)[0] == 200
             assert call(web + "/v1/sesiones", payload)[0] == 400
+
+
+def test_local_bff_uses_only_its_own_profile_http_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with LocalStack(tmp_path, encrypted_login_enabled=True) as stack:
+        email, password = "partner@example.com", "Local-Test-Password!"
+        created = (
+            stack.apps["identity"]
+            .test_cli_runner()
+            .invoke(
+                args=[
+                    "create-partner-user",
+                    "--name",
+                    "Socio sintetico",
+                    "--email",
+                    email,
+                    "--partner-id",
+                    "LOCAL-PARTNER",
+                    "--partner-name",
+                    "Banco sintetico",
+                ],
+                input=f"{password}\n{password}\n",
+            )
+        )
+        assert created.exit_code == 0, created.output
+        challenge_status, challenge = call(stack.urls["web"] + "/v1/sesiones/desafio")
+        assert challenge_status == 200
+        status, session = call(
+            stack.urls["web"] + "/v1/sesiones",
+            encrypted_login_payload(challenge, email, password),
+        )
+        assert status == 200 and session["usuario"]["socios"] == ["LOCAL-PARTNER"]
+        outbound: list[str] = []
+
+        def owned_profile_only(request: Request, *, timeout: float) -> Any:
+            if not request.full_url.startswith(stack.urls["profile"] + "/"):
+                raise URLError("El BFF intento usar un Perfilamiento ajeno al stack")
+            outbound.append(request.full_url)
+            return urlopen(request, timeout=timeout)
+
+        monkeypatch.setattr(
+            "bff_web.infrastructure.http_client_information_gateway.urlopen",
+            owned_profile_only,
+        )
+        operation_id = uuid4()
+        path = f"/v1/socios/consultas-informacion-cliente/{operation_id}?socioId=LOCAL-PARTNER"
+        assert call(stack.urls["web"] + path)[0] == 401
+        assert not outbound
+        status, result = call(
+            stack.urls["web"] + path,
+            headers={"Authorization": "Bearer " + session["accessToken"]},
+        )
+        assert status == 404 and result["code"] == "consulta_no_encontrada"
+        assert outbound == [
+            f"{stack.urls['profile']}/v1/consultas-informacion-cliente/{operation_id}"
+            "?socioId=LOCAL-PARTNER"
+        ]
