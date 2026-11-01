@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
@@ -5,7 +6,7 @@ from uuid import UUID
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta
-from cotizacion.domain.pago import ResultadoPagoSimulado, ResultadoSimuladorPago
+from cotizacion.domain.pago import PagoSimulado, ResultadoPagoSimulado, ResultadoSimuladorPago
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -56,6 +57,23 @@ class PagoSimuladoRepository(Protocol):
 
 class ProveedorPagoSimulado(Protocol):
     def evaluar(self) -> ResultadoSimuladorPago: ...
+
+
+@dataclass(frozen=True)
+class ReservaEmision:
+    pago: PagoSimulado
+    token: UUID
+    intentos: int
+
+
+class RepositorioEmision(Protocol):
+    def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None: ...
+
+    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None: ...
+
+
+class EmisorPolizas(Protocol):
+    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> UUID: ...
 
 
 class PerfilRiesgoGateway(Protocol):

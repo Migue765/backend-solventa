@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
@@ -368,3 +369,27 @@ class IntentoPagoSimuladoModel(Base):
     evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     saga_version: Mapped[int]
     saga_actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ConciliacionEmisionModel(Base):
+    __tablename__ = "conciliaciones_emision"
+    __table_args__ = (
+        CheckConstraint(
+            "estado IN ('pendiente', 'en_proceso', 'completada', 'agotada')",
+            name="ck_conciliacion_emision_estado",
+        ),
+        CheckConstraint("intentos >= 0", name="ck_conciliacion_emision_intentos"),
+        Index("ix_conciliacion_emision_pendiente", "estado", "proximo_intento_en"),
+    )
+
+    pago_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pagos_simulados.pago_id", ondelete="RESTRICT"), primary_key=True
+    )
+    autorizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    estado: Mapped[str] = mapped_column(String(20))
+    intentos: Mapped[int] = mapped_column(Integer)
+    proximo_intento_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[UUID | None]
+    lease_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultimo_error: Mapped[str | None] = mapped_column(String(80))
+    completada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

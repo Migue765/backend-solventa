@@ -17,6 +17,7 @@ from cotizacion.api.schemas import (
     solicitud_a_json,
     suscripcion_a_json,
 )
+from cotizacion.application.emision import completar_emision_academica
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.perfilamiento import validar_perfil
@@ -205,10 +206,7 @@ def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
     polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
     if polizas is not None and isinstance(pago, PagoSimulado):
         repositorio = cast(RepositorioPagosSqlAlchemy, current_app.extensions["repositorio_pagos"])
-        evidencia = repositorio.evidencia_emision(pago)
-        if evidencia is not None:
-            poliza_id = polizas.emitir(evidencia, g.correlation_id)
-            repositorio.marcar_emitida(pago, poliza_id)
+        completar_emision_academica(pago, repositorio, polizas, g.correlation_id)
     return jsonify(pago_simulado_a_json(pago))
 
 

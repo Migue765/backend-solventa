@@ -229,7 +229,7 @@ puede persistir primero como intento independiente, pero no reemplaza al confirm
 GET pago y `dashboard.pagos` devuelven el confirmado si existe, o el ultimo rechazo
 por solicitud. El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
 `confirmadaEn`. Repetir una clave rechazada antigua devuelve su rechazo, pero
-no degrada GET/dashboard ni la saga posterior. No hay conciliacion automatica,
+no degrada GET/dashboard ni la saga posterior. No hay conciliacion financiera,
 resultado financiero pendiente/ambiguo, firma o documento implementados.
 Las fechas de pago, suscripcion y dashboard se serializan en UTC (`Z`), tambien
 cuando PostgreSQL devuelve un `timestamptz` con otro offset. Asi el replay conserva
@@ -241,6 +241,60 @@ una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuel
 404; una no aprobada, selección inválida, oferta vencida o saga no pendiente devuelve
 `422 pago_no_permitido`. Un fallo de persistencia revierte todo y nunca se informa éxito.
 El contrato público y códigos del BFF están en `contracts/openapi/bff-web-v1.yaml`.
+
+### Recuperacion automatica de emision academica (opt-in)
+
+`COTIZACION_CONCILIACION_EMISION_HABILITADA=false` es el valor predeterminado.
+Solo `true`/`false` son validos. Activarla requiere tambien `POLIZAS_SERVICE_URL`,
+`INTERNAL_API_TOKEN` y la migracion `conciliacion_emision` aplicada antes de
+arrancar. No se activa ni despliega en AWS como parte de esta implementacion.
+
+La tabla nueva `conciliaciones_emision` empieza vacia: NO migra, barre ni
+reactiva pagos historicos, tampoco los que ya tenian `emision_solicitada=true`.
+La elegibilidad (`pago_id`, `autorizada_en`) se crea en la MISMA transaccion
+del pago nuevo confirmado mientras la opcion esta activa. Un rechazo, una
+consulta o un replay de un confirmado anterior no crean elegibilidad.
+Desactivar la opcion al reiniciar procesos detiene el recuperador y la
+creacion de nuevos trabajos; conserva los ya autorizados para una reactivacion.
+
+Cada proceso del servicio inicia un hilo propio desde `create_app`, usando el
+entrypoint Gunicorn existente **sin `--preload`**. No requiere un servicio,
+cron, endpoint de control, broker o infraestructura adicional. Procesa como
+maximo un trabajo por ciclo de 1s; el primer intento vence 2s despues de la
+confirmacion. Una reserva SQL condicional dura 30s y lleva un token de reserva.
+Solo el propietario puede registrar su fallo; una reserva vencida se puede
+recuperar tras reiniciar. Hasta 8 reservas automaticas, con backoff persistido
+de 2/4/8/16/30s (tope 30s). Tras agotarlas, estado tecnico `agotada` y ultimo
+error quedan visibles en SQL/logs; el pago sigue confirmado, nunca rechazado.
+El POST manual idempotente sigue disponible y puede completar tambien ese caso.
+
+La recuperacion comparte el mismo emisor HTTP, evidencia y CAS de saga que
+POST. No consulta al simulador, cobra, genera clave/intento financiero, ni
+actualiza el snapshot v2 del pago. Polizas conserva su unicidad por
+pago/suscripcion; saga, evento unico y finalizacion del trabajo se confirman
+en una transaccion. GET suscripcion/dashboard observa `emitida` v3 despues
+del acuse, mientras GET pago sigue siendo solo lectura y devuelve v2.
+
+El pool del hilo es independiente: conexion PostgreSQL 3s, lock 2s,
+statement 5s y keepalive; SQLite espera de lock 2s. No cambia los presupuestos
+del API ni el timeout HTTP de Polizas. Al cerrar, detiene el hilo y libera
+su pool; hay cierre registrado con `atexit` y cierre explicito en el harness.
+Una interrupcion forzada deja la reserva durable hasta vencer. Un hilo
+terminado inesperadamente degrada `/ping` a 503, no aparenta un recuperador sano.
+
+Rollback de codigo: desactivar la opcion y reciclar procesos, conservando la
+tabla aditiva. El downgrade de esquema rechaza borrar trabajos pendientes o
+agotados; no elimina autorizaciones durables para aparentar un rollback exitoso.
+Cuando todos estan completados, downgrade conserva pagos, sagas y eventos.
+SQLite en memoria no es valido para este recuperador durable.
+
+**Limite:** recupera SOLO la emision academica/simulada existente. No implementa
+firma verificable, documento o poliza legal, ni la conciliacion de una pasarela
+con resultado financiero ambiguo. No convierte consentimiento en firma.
+La medicion local de una perdida de acuse frente a 60s NO acredita ASR-EMI-01,
+capacidad ni SLA AWS: sigue pendiente la firma confirmada exigida por el PDF
+(pp. 21-22; la ambiguedad financiera de p. 17 sigue separada)
+y la decision de activacion productiva. No se modifican IAM/KMS/SQS/DLQ.
 
 El listado y el detalle incluyen coberturas, condiciones y vigencia para los ocho seguros,
 incluido `parametric-weather` (lluvia intensa o sequía, según el evento declarado).

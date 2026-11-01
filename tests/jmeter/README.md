@@ -71,7 +71,8 @@ al cerrar normalmente. No usarlo como servidor de produccion.
 El smoke ejecuta ocho contrataciones y una novena durante la falla controlada.
 La fase de reinicio prueba persistencia del servicio Polizas, no un reinicio completo
 de los seis procesos. La recuperacion es por reintento HTTP del cliente, no por un
-worker de conciliacion inexistente. La respuesta de pago conserva la instantanea
+recuperador automatico en la configuracion predeterminada de este harness.
+La respuesta de pago conserva la instantanea
 `saga=pago_confirmado`; la consulta de suscripcion y el dashboard verifican `emitida`.
 
 Los tests pytest existentes siguen cubriendo, entre otros, vencimiento del perfil,
@@ -162,6 +163,14 @@ intentos. Las llamadas entre servicios siguen usando HTTP real. Registrar usuari
 sintéticos conserva el contrato existente; login web requiere desafío + JWE.
 Móvil conserva su login. Sin el flag, no cambia el contrato heredado ni los planes JMeter.
 También se admite `LocalStack(directory, encrypted_login_enabled=True)` desde pytest.
+Para la regresion acotada de acuse perdido puede usarse ademas
+`conciliacion_emision_habilitada=True`: configura la opcion real de Cotizacion,
+mantiene el wiring propio y cierra su hilo/pool junto al servidor. No añade un
+endpoint para elegir el resultado ni modifica autenticacion. La perdida de un
+acuse se inyecta solo en pruebas sobre `PolizasHttp.emitir`, despues de ejecutar
+el metodo real que persiste la poliza, lanzando una unica
+`ServicioPolizasNoDisponibleError`; las siguientes llamadas usan el metodo real.
+Esta opcion no acredita firma, conciliacion financiera ni ASR-EMI-01/AWS.
 El helper CLI guarda SQLite bajo `reports/solventa-e2e-<id>` dentro del checkout
 y elimina solo ese directorio al cerrar.
 

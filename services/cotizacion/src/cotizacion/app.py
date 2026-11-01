@@ -39,6 +39,7 @@ from cotizacion.domain.errors import (
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
+from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.perfil_http import ProveedorPerfilHttp
 from cotizacion.infrastructure.perfil_riesgo_simulado import PerfilRiesgoSimulado
@@ -94,11 +95,13 @@ def create_app(config: Config | None = None) -> Flask:
         sesiones,
         emitir_polizas=bool(config.polizas_url),
         proveedor=SimuladorPago(config.pago_simulado_resultado),
+        conciliar_emision=config.conciliacion_emision_habilitada,
     )
     app.extensions["repositorio_pagos"] = pagos
-    app.extensions["polizas"] = (
+    polizas_gateway = (
         PolizasHttp(config.polizas_url, config.internal_api_token) if config.polizas_url else None
     )
+    app.extensions["polizas"] = polizas_gateway
     app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(pagos)
     app.extensions["crear_cotizacion"] = CrearCotizacion(repositorio, calculadora)
     perfiles_riesgo = PerfilRiesgoSimulado()
@@ -245,4 +248,9 @@ def create_app(config: Config | None = None) -> Flask:
         )
         return jsonify(error="servicio_no_disponible", correlationId=g.correlation_id), 503
 
+    if config.conciliacion_emision_habilitada:
+        assert polizas_gateway is not None
+        conciliador = ConciliadorEmision(config.database_url, polizas_gateway)
+        conciliador.iniciar()
+        app.extensions["conciliador_emision"] = conciliador
     return app

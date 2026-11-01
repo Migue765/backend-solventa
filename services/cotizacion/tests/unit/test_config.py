@@ -13,6 +13,7 @@ VARIABLES = (
     "COTIZACION_REGLAS_CACHE_SEGUNDOS",
     "COTIZACION_PERFIL_SCORE_SIMULADO",
     "PAGO_SIMULADO_RESULTADO",
+    "COTIZACION_CONCILIACION_EMISION_HABILITADA",
 )
 
 
@@ -57,3 +58,23 @@ def test_rechaza_configuracion_invalida_del_simulador(monkeypatch, resultado):
         Config.desde_entorno()
     with pytest.raises(ValueError):
         SimuladorPago(resultado)
+
+
+@pytest.mark.parametrize("value", ["", "1", "yes", "academica", "ninguna"])
+def test_conciliacion_rechaza_flag_invalido(monkeypatch, value):
+    monkeypatch.setenv("COTIZACION_CONCILIACION_EMISION_HABILITADA", value)
+    with pytest.raises(ValueError, match="CONCILIACION"):
+        Config.desde_entorno()
+
+
+def test_conciliacion_opt_in_requiere_integracion_polizas(monkeypatch):
+    monkeypatch.setenv("COTIZACION_CONCILIACION_EMISION_HABILITADA", "true")
+    monkeypatch.delenv("POLIZAS_SERVICE_URL", raising=False)
+    with pytest.raises(ValueError, match="POLIZAS_SERVICE_URL"):
+        Config.desde_entorno()
+    monkeypatch.setenv("POLIZAS_SERVICE_URL", "http://127.0.0.1:5004")
+    monkeypatch.delenv("INTERNAL_API_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="INTERNAL_API_TOKEN"):
+        Config.desde_entorno()
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "solo-pruebas-locales")
+    assert Config.desde_entorno().conciliacion_emision_habilitada is True

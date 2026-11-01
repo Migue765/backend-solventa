@@ -60,9 +60,11 @@ class LocalStack:
         web_port: int = 0,
         mobile_port: int = 0,
         encrypted_login_enabled: bool = False,
+        conciliacion_emision_habilitada: bool = False,
     ) -> None:
         self.directory = directory
         self.encrypted_login_enabled = encrypted_login_enabled
+        self.conciliacion_emision_habilitada = conciliacion_emision_habilitada
         self.ports = {"web": web_port, "mobile": mobile_port}
         self.servers: dict[str, BaseWSGIServer] = {}
         self.threads: dict[str, threading.Thread] = {}
@@ -83,6 +85,9 @@ class LocalStack:
         server.shutdown()
         server.server_close()
         self.threads.pop(name).join(timeout=5)
+        conciliador = self.apps[name].extensions.get("conciliador_emision")
+        if conciliador is not None:
+            conciliador.cerrar()
         return port
 
     def restart_policy(self) -> None:
@@ -154,6 +159,7 @@ class LocalStack:
                         perfilamiento_url=profile,
                         polizas_url=policies,
                         internal_api_token=self.internal_token,
+                        conciliacion_emision_habilitada=self.conciliacion_emision_habilitada,
                     )
                 ),
             )

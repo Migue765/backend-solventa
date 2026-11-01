@@ -1,11 +1,12 @@
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from cotizacion.application.ports import ProveedorPagoSimulado
+from cotizacion.application.ports import ProveedorPagoSimulado, ReservaEmision
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
@@ -24,6 +25,7 @@ from cotizacion.domain.pago import (
 from cotizacion.domain.productos import PRODUCTOS
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.models import (
+    ConciliacionEmisionModel,
     CotizacionModel,
     DecisionSuscripcionModel,
     IntentoPagoSimuladoModel,
@@ -34,6 +36,8 @@ from cotizacion.infrastructure.persistence.models import (
     SuscripcionModel,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class RepositorioPagosSqlAlchemy:
     def __init__(
@@ -41,9 +45,13 @@ class RepositorioPagosSqlAlchemy:
         sesiones: sessionmaker[Session],
         emitir_polizas: bool = False,
         proveedor: ProveedorPagoSimulado | None = None,
+        conciliar_emision: bool = False,
     ) -> None:
+        if conciliar_emision and not emitir_polizas:
+            raise ValueError("La conciliacion requiere la emision academica habilitada.")
         self._sesiones = sesiones
         self._emitir_polizas = emitir_polizas
+        self._conciliar_emision = conciliar_emision
         self._proveedor = proveedor if proveedor is not None else SimuladorPago()
 
     def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None:
@@ -94,19 +102,157 @@ class RepositorioPagosSqlAlchemy:
             )
             if actualizada is None:
                 saga = sesion.get(SagaEmisionModel, pago.suscripcion_id)
-                if saga is not None and saga.estado == "emitida":
-                    return
-                raise ServicioPolizasNoDisponibleError()
-            sesion.add(
-                OutboxEventoModel(
-                    evento_id=uuid4(),
-                    tipo="PolizaAcademicaEmitida",
-                    agregado_id=pago.suscripcion_id,
-                    payload={"polizaId": str(poliza_id), "simulada": True},
-                    creado_en=ahora,
-                    intentos=0,
+                if saga is None or saga.estado != "emitida":
+                    raise ServicioPolizasNoDisponibleError()
+            else:
+                sesion.add(
+                    OutboxEventoModel(
+                        evento_id=uuid4(),
+                        tipo="PolizaAcademicaEmitida",
+                        agregado_id=pago.suscripcion_id,
+                        payload={"polizaId": str(poliza_id), "simulada": True},
+                        creado_en=ahora,
+                        intentos=0,
+                    )
                 )
+            if self._conciliar_emision:
+                sesion.execute(
+                    update(ConciliacionEmisionModel)
+                    .where(
+                        ConciliacionEmisionModel.pago_id == pago.pago_id,
+                        ConciliacionEmisionModel.estado != "completada",
+                    )
+                    .values(
+                        estado="completada",
+                        completada_en=ahora,
+                        lease_token=None,
+                        lease_hasta=None,
+                        ultimo_error=None,
+                    )
+                )
+
+    def reservar_emision(
+        self, ahora: datetime, max_intentos: int = 8, lease_segundos: int = 30
+    ) -> ReservaEmision | None:
+        if not self._conciliar_emision:
+            return None
+        trabajo = ConciliacionEmisionModel
+        disponibles = and_(
+            trabajo.proximo_intento_en <= ahora,
+            or_(
+                trabajo.estado == "pendiente",
+                and_(trabajo.estado == "en_proceso", trabajo.lease_hasta <= ahora),
+            ),
+        )
+        with self._sesiones.begin() as sesion:
+            agotado = (
+                select(trabajo.pago_id)
+                .where(disponibles, trabajo.intentos >= max_intentos)
+                .order_by(trabajo.proximo_intento_en, trabajo.pago_id)
+                .limit(1)
+                .scalar_subquery()
             )
+            agotados = sesion.scalars(
+                update(trabajo)
+                .where(trabajo.pago_id == agotado, disponibles, trabajo.intentos >= max_intentos)
+                .values(
+                    estado="agotada",
+                    ultimo_error="limite_reservas",
+                    lease_token=None,
+                    lease_hasta=None,
+                )
+                .returning(trabajo.pago_id)
+                .execution_options(synchronize_session=False)
+            ).all()
+            if agotados:
+                logger.error("conciliacion_emision.agotada cantidad=%s", len(agotados))
+            candidato = (
+                select(trabajo.pago_id)
+                .where(disponibles, trabajo.intentos < max_intentos)
+                .order_by(trabajo.proximo_intento_en, trabajo.pago_id)
+                .limit(1)
+                .scalar_subquery()
+            )
+            token = uuid4()
+            reserva = sesion.execute(
+                update(trabajo)
+                .where(trabajo.pago_id == candidato, disponibles, trabajo.intentos < max_intentos)
+                .values(
+                    estado="en_proceso",
+                    lease_token=token,
+                    lease_hasta=ahora + timedelta(seconds=lease_segundos),
+                    intentos=trabajo.intentos + 1,
+                )
+                .returning(trabajo.pago_id, trabajo.intentos)
+                .execution_options(synchronize_session=False)
+            ).one_or_none()
+            if reserva is None:
+                return None
+            pago = sesion.get(PagoSimuladoModel, reserva.pago_id)
+            if pago is None:
+                raise ServicioPolizasNoDisponibleError()
+            saga = sesion.get(SagaEmisionModel, pago.suscripcion_id)
+            if saga is not None and saga.estado == "emitida":
+                sesion.execute(
+                    update(trabajo)
+                    .where(trabajo.pago_id == pago.pago_id)
+                    .values(
+                        estado="completada",
+                        completada_en=ahora,
+                        lease_token=None,
+                        lease_hasta=None,
+                        ultimo_error=None,
+                    )
+                )
+                return None
+            if (
+                not pago.emision_solicitada
+                or saga is None
+                or saga.estado != "pago_confirmado"
+                or saga.version != pago.saga_version
+            ):
+                sesion.execute(
+                    update(trabajo)
+                    .where(trabajo.pago_id == pago.pago_id)
+                    .values(
+                        estado="agotada",
+                        lease_token=None,
+                        lease_hasta=None,
+                        ultimo_error="estado_no_elegible",
+                    )
+                )
+                logger.error("conciliacion_emision.estado_no_elegible pago_id=%s", pago.pago_id)
+                return None
+            return ReservaEmision(_a_dominio(pago), token, reserva.intentos)
+
+    def aplazar_emision(
+        self, reserva: ReservaEmision, ahora: datetime, codigo: str, max_intentos: int = 8
+    ) -> bool:
+        with self._sesiones.begin() as sesion:
+            resultado = sesion.scalar(
+                update(ConciliacionEmisionModel)
+                .where(
+                    ConciliacionEmisionModel.pago_id == reserva.pago.pago_id,
+                    ConciliacionEmisionModel.estado == "en_proceso",
+                    ConciliacionEmisionModel.lease_token == reserva.token,
+                )
+                .values(
+                    estado="agotada" if reserva.intentos >= max_intentos else "pendiente",
+                    proximo_intento_en=ahora
+                    + timedelta(seconds=min(2 ** min(reserva.intentos, 5), 30)),
+                    ultimo_error=codigo,
+                    lease_token=None,
+                    lease_hasta=None,
+                )
+                .returning(ConciliacionEmisionModel.pago_id)
+            )
+        if resultado is not None and reserva.intentos >= max_intentos:
+            logger.error(
+                "conciliacion_emision.agotada pago_id=%s intentos=%s",
+                reserva.pago.pago_id,
+                reserva.intentos,
+            )
+        return resultado is not None
 
     def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> ResultadoPagoSimulado:
         with self._sesiones() as sesion:
@@ -236,6 +382,16 @@ class RepositorioPagosSqlAlchemy:
                 sesion.add(pago)
                 # La unicidad serializa pagos rivales; el CAS protege la transición de saga.
                 sesion.flush()
+                if self._conciliar_emision:
+                    sesion.add(
+                        ConciliacionEmisionModel(
+                            pago_id=pago.pago_id,
+                            autorizada_en=ahora,
+                            estado="pendiente",
+                            intentos=0,
+                            proximo_intento_en=ahora + timedelta(seconds=2),
+                        )
+                    )
                 resultado = sesion.scalar(
                     update(SagaEmisionModel)
                     .where(

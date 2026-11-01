@@ -1065,8 +1065,15 @@ paths:
         La respuesta confirmada conserva la instantánea saga pago_confirmado;
         consultar GET /v1/solicitudes-cotizacion/{solicitudId}/suscripcion para
         conocer el estado actual de la saga. GET pago no completa la emisión.
+        Con COTIZACION_CONCILIACION_EMISION_HABILITADA=true en el servidor,
+        los pagos nuevos confirmados mientras está activa registran elegibilidad
+        durable para reintentar automáticamente solo la emisión académica.
+        Está deshabilitada por defecto y no activa pagos históricos ni rechazos.
+        La recuperación automática y el POST manual conservan el mismo pago,
+        póliza y snapshot, sin reevaluar el resultado financiero.
         No implementa firma, documento de póliza, resultado financiero pendiente
-        o ambiguo ni conciliación automática.
+        o ambiguo ni conciliación financiera. La recuperación académica no
+        acredita una póliza válida sin firma ni el SLA productivo de emisión.
         La misma clave recupera el resultado original aunque cambie el escenario
         del servidor. Tras un rechazo, una nueva clave inicia otro intento si las
         precondiciones siguen vigentes. Un pago confirmado por solicitud/suscripción:

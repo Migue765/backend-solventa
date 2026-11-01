@@ -1,7 +1,15 @@
-from collections.abc import Iterator
+import json
+import os
+import subprocess
+import sys
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from threading import Thread
+from threading import Barrier, Lock, Thread, current_thread
+from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
@@ -9,10 +17,13 @@ import yaml
 from alembic import command
 from alembic.config import Config
 from bff_web.domain.auth import User
+from cotizacion.app import create_app as quote_app
 from cotizacion.application.pagos import ProcesarPagoSimulado
+from cotizacion.config import Config as QuoteConfig
 from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.models import (
+    ConciliacionEmisionModel,
     IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
@@ -21,6 +32,7 @@ from cotizacion.infrastructure.persistence.models import (
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cryptography.hazmat.primitives.asymmetric import rsa
+from flask import Flask, request
 from openapi_schema_validator import OAS31Validator
 from polizas.app import create_app
 from polizas.infrastructure.models import PolizaModel
@@ -35,6 +47,7 @@ from tests.test_dashboard_flow import (
     Runtime,
     bearer,
     create_paid_request,
+    dashboard_runtime,
     sign_token,
     validate_contract,
 )
@@ -44,31 +57,300 @@ runtime = dashboard_flow.runtime
 token = dashboard_flow.token
 
 
-@pytest.fixture
-def policy_runtime(runtime: Runtime, tmp_path: Path) -> Iterator[Runtime]:
-    url = f"sqlite:///{tmp_path / 'polizas.db'}"
+@contextmanager
+def policy_server(tmp_path: Path, database_url: str | None = None) -> Iterator[tuple[Flask, str]]:
+    url = database_url or f"sqlite:///{tmp_path / 'polizas.db'}"
     config = Config(str(ROOT / "services" / "polizas" / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "head")
     policies = create_app(url, INTERNAL_TOKEN)
-    server = make_server("127.0.0.1", 0, policies)
+    server = make_server("127.0.0.1", 0, policies, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    _, quotes, factory = runtime
-    quotes.application.extensions["polizas"] = PolizasHttp(
-        f"http://127.0.0.1:{server.server_port}", INTERNAL_TOKEN
-    )
-    repository = RepositorioPagosSqlAlchemy(factory, emitir_polizas=True)
-    quotes.application.extensions["repositorio_pagos"] = repository
-    quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(repository)
-    quotes.application.extensions["polizas_test_app"] = policies
     try:
-        yield runtime
+        yield policies, f"http://127.0.0.1:{server.server_port}"
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
         policies.extensions["polizas_engine"].dispose()
+
+
+@pytest.fixture
+def policy_runtime(runtime: Runtime, tmp_path: Path) -> Iterator[Runtime]:
+    with policy_server(tmp_path) as (policies, url):
+        _, quotes, factory = runtime
+        quotes.application.extensions["polizas"] = PolizasHttp(url, INTERNAL_TOKEN)
+        repository = RepositorioPagosSqlAlchemy(factory, emitir_polizas=True)
+        quotes.application.extensions["repositorio_pagos"] = repository
+        quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(repository)
+        quotes.application.extensions["polizas_test_app"] = policies
+        yield runtime
+
+
+@pytest.fixture
+def automatic_policy_runtime(
+    tmp_path: Path,
+    keypair: rsa.RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[Runtime]:
+    with policy_server(tmp_path) as (policies, url):
+        config = QuoteConfig(
+            database_url=f"sqlite:///{tmp_path / 'automatic.db'}",
+            internal_api_token=INTERNAL_TOKEN,
+            polizas_url=url,
+            conciliacion_emision_habilitada=True,
+        )
+        with dashboard_runtime(tmp_path, keypair, monkeypatch, config) as running:
+            running[1].application.extensions["polizas_test_app"] = policies
+            yield running
+
+
+def assert_one_recovered_policy(runtime: Runtime, subscription: dict, payment: dict) -> None:
+    _, quotes, factory = runtime
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
+        assert session.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
+        job: ConciliacionEmisionModel = session.scalars(select(ConciliacionEmisionModel)).one()
+        assert job.pago_id == UUID(payment["id"]) and job.estado == "completada"
+        saga = session.get(SagaEmisionModel, UUID(subscription["id"]))
+        assert saga is not None and (saga.estado, saga.version) == ("emitida", 3)
+        events: list[OutboxEventoModel] = list(
+            session.scalars(
+                select(OutboxEventoModel).where(
+                    OutboxEventoModel.agregado_id == saga.suscripcion_id
+                )
+            )
+        )
+        assert Counter(event.tipo for event in events) == {
+            "SuscripcionAprobada": 1,
+            "PagoSimuladoConfirmado": 1,
+            "PolizaAcademicaEmitida": 1,
+        }
+    policies = quotes.application.extensions["polizas_test_app"]
+    with Session(policies.extensions["polizas_engine"]) as session:
+        policy: PolizaModel = session.scalars(select(PolizaModel)).one()
+        assert policy.suscripcion_id == UUID(subscription["id"])
+        assert policy.pago_id == UUID(payment["id"])
+
+
+def test_automatic_recovery_after_lost_ack_without_another_payment_post(
+    automatic_policy_runtime: Runtime,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    record_testsuite_property: Callable[[str, object], None],
+) -> None:
+    client, quotes, _ = automatic_policy_runtime
+    gateway = quotes.application.extensions["polizas"]
+    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    lost = False
+    worker_calls: list[str] = []
+    payment_posts: list[str] = []
+
+    @quotes.application.before_request
+    def observe_post() -> None:
+        if request.method == "POST" and request.path.endswith("/pago-simulado"):
+            payment_posts.append(request.path)
+
+    def lose_one_ack(evidence: dict[str, object], correlation: str) -> UUID:
+        nonlocal lost
+        policy_id = original(evidence, correlation)
+        if current_thread().name == "conciliacion-emision-academica":
+            worker_calls.append(str(evidence["pagoId"]))
+        elif not lost:
+            lost = True
+            raise ServicioPolizasNoDisponibleError()
+        return policy_id
+
+    monkeypatch.setattr(gateway, "emitir", lose_one_ack)
+    started = monotonic()
+    selection, subscription, failure = create_paid_request(
+        client, token, "automotive", payment_status=503
+    )
+    monkeypatch.setattr(
+        SimuladorPago, "evaluar", lambda *_: pytest.fail("No se debe reevaluar el pago confirmado")
+    )
+    assert lost and failure["code"] == "servicio_no_disponible"
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    payment = client.get(base + "/pago-simulado", headers=bearer(token)).get_json()
+    assert payment["saga"]["version"] == 2 and payment["estado"] == "confirmado"
+    while monotonic() - started < 60:
+        current = client.get(base + "/suscripcion", headers=bearer(token)).get_json()
+        if current["saga"]["estado"] == "emitida":
+            break
+        sleep(0.05)
+    assert current["saga"]["estado"] == "emitida"
+    assert monotonic() - started <= 60
+    record_testsuite_property("academic_recovery_seconds", round(monotonic() - started, 3))
+    assert len(payment_posts) == 1 and worker_calls == [payment["id"]]
+    assert client.get(base + "/pago-simulado", headers=bearer(token)).get_json() == payment
+    assert_one_recovered_policy(automatic_policy_runtime, subscription, payment)
+
+
+@pytest.mark.parametrize("persist_first", [False, True])
+def test_worker_and_manual_recovery_converge_without_duplicates(
+    automatic_policy_runtime: Runtime,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    persist_first: bool,
+) -> None:
+    client, quotes, _ = automatic_policy_runtime
+    gateway = quotes.application.extensions["polizas"]
+    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    gate, lock = Barrier(2), Lock()
+    first = True
+
+    def race(evidence: dict[str, object], correlation: str) -> UUID:
+        nonlocal first
+        with lock:
+            fail = first
+            first = False
+        if fail:
+            if persist_first:
+                original(evidence, correlation)
+            raise ServicioPolizasNoDisponibleError()
+        gate.wait(timeout=15)
+        return original(evidence, correlation)
+
+    monkeypatch.setattr(gateway, "emitir", race)
+    selection, subscription, _ = create_paid_request(
+        client, token, "automotive", payment_status=503
+    )
+    monkeypatch.setattr(
+        SimuladorPago, "evaluar", lambda *_: pytest.fail("No se debe reevaluar el pago confirmado")
+    )
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    snapshot = client.get(base + "/pago-simulado", headers=bearer(token)).get_json()
+    with automatic_policy_runtime[2]() as session:
+        key = str(session.scalars(select(PagoSimuladoModel.idempotency_key)).one())
+    replica = quote_app(replace(quotes.application.extensions["cotizacion_config"]))
+    monkeypatch.setattr(replica.extensions["polizas"], "emitir", race)
+    try:
+        response = client.post(
+            base + "/pago-simulado", headers={**bearer(token), "Idempotency-Key": key}, json={}
+        )
+        assert response.status_code == 200 and response.get_json() == snapshot
+    finally:
+        replica.extensions["conciliador_emision"].cerrar()
+        quotes.application.extensions["conciliador_emision"].cerrar()
+    assert_one_recovered_policy(automatic_policy_runtime, subscription, snapshot)
+
+
+def test_restart_resumes_persisted_eligibility_without_new_payment(
+    automatic_policy_runtime: Runtime,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    record_testsuite_property: Callable[[str, object], None],
+) -> None:
+    client, quotes, _ = automatic_policy_runtime
+    app = quotes.application
+    gateway = app.extensions["polizas"]
+    original = gateway.emitir
+
+    def lose_ack(evidence: dict[str, object], correlation: str) -> UUID:
+        original(evidence, correlation)
+        raise ServicioPolizasNoDisponibleError()
+
+    monkeypatch.setattr(gateway, "emitir", lose_ack)
+    selection, subscription, _ = create_paid_request(
+        client, token, "automotive", payment_status=503
+    )
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    snapshot = client.get(base + "/pago-simulado", headers=bearer(token)).get_json()
+    app.extensions["conciliador_emision"].cerrar()
+    script = """
+import json, os, time
+import tests.jmeter.local_stack
+from cotizacion.app import create_app
+from cotizacion.config import Config
+from cotizacion.infrastructure.persistence.models import ConciliacionEmisionModel
+from sqlalchemy import select
+app = create_app(Config(database_url=os.environ["OWNED_DB_URL"],
+    polizas_url=os.environ["OWNED_POLIZAS_URL"],
+    internal_api_token=os.environ["OWNED_INTERNAL_TOKEN"],
+    conciliacion_emision_habilitada=True))
+worker = app.extensions["conciliador_emision"]
+gateway = app.extensions["polizas"]
+if os.environ["CRASH_AFTER_ACK"] == "1":
+    original = gateway.emitir
+    def crash(evidence, correlation):
+        original(evidence, correlation)
+        os._exit(73)
+    gateway.emitir = crash
+deadline = time.monotonic() + 55
+try:
+    while time.monotonic() < deadline:
+        with app.extensions["repositorio_pagos"]._sesiones() as session:
+            if session.scalars(select(ConciliacionEmisionModel.estado)).one() == "completada":
+                break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("El trabajo no convergio tras reiniciar")
+finally:
+    worker.cerrar()
+    app.extensions["repositorio_pagos"]._sesiones.kw["bind"].dispose()
+print(json.dumps({"pid": os.getpid(), "worker_stopped": not worker.activo}))
+"""
+    config = app.extensions["cotizacion_config"]
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(sys.path),
+        "OWNED_DB_URL": config.database_url,
+        "OWNED_POLIZAS_URL": config.polizas_url,
+        "OWNED_INTERNAL_TOKEN": INTERNAL_TOKEN,
+    }
+    started = monotonic()
+    crashed = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**environment, "CRASH_AFTER_ACK": "1"},
+        capture_output=True,
+        text=True,
+        timeout=65,
+        check=False,
+    )
+    assert crashed.returncode == 73, crashed.stderr
+    with automatic_policy_runtime[2]() as session:
+        job: ConciliacionEmisionModel = session.scalars(select(ConciliacionEmisionModel)).one()
+        assert job.estado == "en_proceso" and job.lease_token is not None
+    restarted = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**environment, "CRASH_AFTER_ACK": "0"},
+        capture_output=True,
+        text=True,
+        timeout=65,
+        check=False,
+    )
+    assert restarted.returncode == 0, restarted.stderr
+    result = json.loads(restarted.stdout)
+    assert result["pid"] != os.getpid() and result["worker_stopped"]
+    record_testsuite_property("process_restart_recovery_seconds", round(monotonic() - started, 3))
+    current = client.get(base + "/suscripcion", headers=bearer(token)).get_json()
+    assert current["saga"]["estado"] == "emitida"
+    assert client.get(base + "/pago-simulado", headers=bearer(token)).get_json() == snapshot
+    assert_one_recovered_policy(automatic_policy_runtime, subscription, snapshot)
+
+
+def test_automatic_recovery_excludes_rejected_payments(
+    automatic_policy_runtime: Runtime,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, quotes, factory = automatic_policy_runtime
+    monkeypatch.setattr(
+        quotes.application.extensions["repositorio_pagos"], "_proveedor", SimuladorPago("rechazado")
+    )
+    _, subscription, payment = create_paid_request(client, token, "automotive")
+    assert payment["estado"] == "rechazado"
+    assert not quotes.application.extensions["conciliador_emision"].conciliar_uno()
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(ConciliacionEmisionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+        saga = session.get(SagaEmisionModel, UUID(str(subscription["id"])))
+        assert saga is not None and (saga.estado, saga.version) == ("pago_pendiente", 1)
+    with Session(
+        quotes.application.extensions["polizas_test_app"].extensions["polizas_engine"]
+    ) as session:
+        assert session.scalar(select(func.count()).select_from(PolizaModel)) == 0
 
 
 @pytest.mark.parametrize(

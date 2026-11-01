@@ -25,6 +25,7 @@ def test_downgrade_elimina_las_tablas(alembic_config, database_url):
     assert "sagas_emision" not in tablas
     assert "pagos_simulados" not in tablas
     assert "intentos_pago_simulado" not in tablas
+    assert "conciliaciones_emision" not in tablas
 
 
 def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
@@ -94,7 +95,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["intentos_pago_simulado"]
+    assert script.get_heads() == ["conciliacion_emision"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
@@ -114,7 +115,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
         assert (
             conexion.scalar(text("select version_num from alembic_version"))
-            == "intentos_pago_simulado"
+            == "conciliacion_emision"
         )
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
