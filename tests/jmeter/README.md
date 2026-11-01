@@ -28,6 +28,11 @@ python -m tests.jmeter.install
 python -m tests.jmeter.run --jmeter-home reports/tools/apache-jmeter-5.6.3
 ```
 
+Los comandos `python -m tests.jmeter...` priorizan los directorios `services/*/src`
+de este checkout antes de importar las aplicaciones. Las dependencias siguen
+requiriendo instalacion, pero una instalacion editable de otro checkout o un
+`PYTHONPATH` ajeno no debe cambiar la version de los servicios bajo prueba.
+
 El instalador descarga Apache JMeter 5.6.3 del sitio oficial y verifica SHA-512 fijado
 en codigo antes de extraerlo. No reemplaza instalaciones existentes. Si ya esta
 instalado, pasar su directorio directamente con `--jmeter-home`.
