@@ -88,6 +88,9 @@ class LocalStack:
         conciliador = self.apps[name].extensions.get("conciliador_emision")
         if conciliador is not None:
             conciliador.cerrar()
+        cerrar_perfilamiento = self.apps[name].extensions.get("cerrar_recursos_perfilamiento")
+        if cerrar_perfilamiento is not None:
+            cerrar_perfilamiento()
         return port
 
     def restart_policy(self) -> None:

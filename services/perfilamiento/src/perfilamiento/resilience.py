@@ -49,11 +49,18 @@ class EjecutorAcotado:
             finally:
                 self._cupos.release()
 
-        futuro = self._executor.submit(ejecutar)
+        try:
+            futuro = self._executor.submit(ejecutar)
+        except RuntimeError as error:
+            self._cupos.release()
+            raise ErrorPerfilamiento("fuente_no_disponible", 503) from error
         try:
             return futuro.result(timeout=timeout)
         except TimeoutError as error:
             raise ErrorPerfilamiento("dependencia_timeout", 503) from error
+
+    def cerrar(self) -> None:
+        self._executor.shutdown(wait=True)
 
 
 class Presupuesto:

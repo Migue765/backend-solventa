@@ -186,10 +186,32 @@ obtener el resultado persistido. `init-db` crea aditivamente las dos tablas de e
 La consulta de información usa `socioId + operationId` como clave idempotente,
 minimiza por intersección entre `datosSolicitados` y los datos consentidos y registra
 por fuente la operación, actor, cliente, producto, finalidad, fecha y resultado.
-Consulta el consentimiento autoritativo en cada intento, por lo que una revocación
-bloquea inmediatamente nuevas consultas.
+Revalida el consentimiento autoritativo antes de cada fuente, reintento, fallback y
+entrega, incluida su versión durable; una revocación bloquea también el uso de caché
+y la recuperación idempotente.
 
-Cada fuente tiene un circuit breaker que abre tras dos fallos y vuelve a probar a los
-30 segundos. La política es fail-closed: una fuente lenta, fallida o con circuito
-abierto cancela la consulta completa; no se persiste ni devuelve una respuesta
-parcial y no se reutilizan datos históricos como fallback.
+HU44 comparte `ConsultarFuentes`, `PoliticaConsultas`, `Presupuesto` y `EjecutorAcotado`
+con HU47: objetivo 120 ms, techo 700 ms por dependencia, 400 ms de trabajo dentro de
+450 ms locales, reserva final de 50 ms y reserva de fuente de 120 ms. No son un SLA
+ni percentiles. Hay hasta dos intentos transitorios, sin reintentar timeout o
+denegación; el breaker abre tras tres consultas fallidas durante 30 s. Cada ejecutor
+admite ocho operaciones sin cola y conserva el cupo del trabajo tardío hasta terminar.
+
+Solo admite fallback a `cache_fuentes` íntegra, vigente, con fecha original de menos
+de quince minutos y ligada al mismo cliente/consentimiento/versión. La respuesta
+conserva su contrato: `evidenciaFuentes.version` termina en `:cache` y mantiene
+`consultadaEn` original; la auditoría registra resultado `cache`, motivo, intentos,
+política `degradacion-1`, tiempos y correlación. No renueva ni encadena esa señal.
+HU44 **no** usa los valores `default-1` ni la política histórica de treinta minutos
+específica de HU48. Sin caché permitida, falla explícitamente y no entrega datos
+parciales; revocación, integridad fallida o presupuesto agotado no conceden permisos.
+
+Consulta, fuentes frescas y auditorías se persisten en una única transacción con
+las tablas existentes, sin migración. El trabajo que termina después de un timeout
+no publica ni persiste su resultado. La lectura GET conserva la instantánea y
+revalida autorización bajo el mismo presupuesto de dependencias.
+
+La aplicación registra `cerrar_recursos_perfilamiento` para cerrar ambos ejecutores
+y el motor SQL al finalizar; el harness local lo invoca explícitamente al detener
+la instancia. El cierre espera operaciones ya iniciadas: Python no cancela threads,
+por lo que los adaptadores reales siguen necesitando timeout nativo de transporte.

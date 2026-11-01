@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID, uuid4
+from weakref import finalize
 
 import click
 from flask import Flask, Response, g, jsonify, request
@@ -125,6 +126,13 @@ def create_app(
     app.extensions["consultar_perfil"] = servicio
     app.extensions["consultar_informacion"] = servicio_informacion
     app.extensions["excepciones_open_finance"] = servicio_excepciones
+
+    def cerrar_recursos() -> None:
+        servicio_informacion.cerrar()
+        servicio.cerrar()
+        repositorio.engine.dispose()
+
+    app.extensions["cerrar_recursos_perfilamiento"] = finalize(app, cerrar_recursos)
 
     @app.cli.command("init-db")
     def init_db() -> None:

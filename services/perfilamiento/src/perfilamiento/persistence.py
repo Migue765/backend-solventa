@@ -497,7 +497,11 @@ class RepositorioPerfiles:
             )
 
     def guardar_consulta_informacion(
-        self, consulta: ConsultaInformacionCliente, request_fingerprint: str
+        self,
+        consulta: ConsultaInformacionCliente,
+        request_fingerprint: str,
+        fuentes: tuple[Fuente, ...] = (),
+        auditorias: tuple[dict[str, object], ...] = (),
     ) -> None:
         contenido = consulta.model_dump(mode="json", by_alias=True)
         try:
@@ -511,6 +515,16 @@ class RepositorioPerfiles:
                         hash_contenido=_hash(contenido),
                     )
                 )
+                for fuente in fuentes:
+                    self._guardar_fuente(
+                        sesion,
+                        consulta.cliente_id,
+                        consulta.consentimiento_id,
+                        consulta.consentimiento_version,
+                        fuente,
+                    )
+                for auditoria in auditorias:
+                    sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
         except IntegrityError as error:
             raise ErrorPerfilamiento("conflicto_idempotencia", 409) from error
 
