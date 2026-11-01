@@ -108,6 +108,8 @@ class Plan:
             "vars.put('email', props.get('runId') + '-' + ctx.getThreadNum() + '-' + "
             "vars.getIteration() + '@example.com'); "
             "vars.put('otherEmail', 'other-' + vars.get('email')); "
+            "vars.put('document', UUID.randomUUID().toString().replace('-', '').take(16)"
+            ".toUpperCase(java.util.Locale.ROOT)); "
             "vars.put('key', UUID.randomUUID().toString()); "
             "vars.put('consentValidUntil', "
             "java.time.Instant.now().plusSeconds(2505600).toString())",
@@ -202,6 +204,28 @@ class Plan:
             check="assert data.usuario.id; assert data.usuario.rol == 'cliente'",
             token=None,
             service="mobile" if mobile else "web",
+        )
+
+    def provision_customer(self) -> None:
+        self.request(
+            "fixture.customer",
+            "POST",
+            "/v1/usuarios",
+            201,
+            {
+                **self.credentials(),
+                "nombre": "Cliente JMeter sintetico",
+                "tipoDocumento": "passport",
+                "numeroDocumento": "${document}",
+                "telefono": "+573000000000",
+                "fechaNacimiento": "1990-01-01",
+            },
+            check="assert data.usuario.id; assert data.usuario.rol == 'cliente'; "
+            "assert data.usuario.numeroDocumento == vars.get('document'); "
+            "assert data.usuario.telefono == '+573000000000'; "
+            "assert data.usuario.fechaNacimiento == '1990-01-01'",
+            token=None,
+            service="identity",
         )
 
     def login(self, other: bool = False, mobile: bool = False) -> None:
@@ -361,7 +385,7 @@ class Plan:
 
 def main_plan(path: Path, threads: int = 1, loops: int = 1, smoke: bool = True) -> None:
     plan = Plan(threads, loops)
-    plan.register()
+    plan.provision_customer()
     plan.login()
     if smoke:
         plan.register(other=True)
@@ -549,7 +573,7 @@ def persistence_plan(path: Path) -> None:
 
 def outage_plan(path: Path) -> None:
     plan = Plan()
-    plan.register()
+    plan.provision_customer()
     plan.login()
     plan.consent(True, 0)
     plan.quote("automotive", outage=True)

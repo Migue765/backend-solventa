@@ -49,6 +49,14 @@ El BFF recibe tambien el puerto efimero del Perfilamiento de su propia
 instancia para consultas de informacion del cliente; no usa el default
 `localhost:5003` de una aplicacion ajena.
 
+Los clientes que cotizan se preparan por la API existente de Identidad en el puerto
+de esta misma instancia, con documento sintetico unico, telefono y fecha de nacimiento.
+Este setup no acredita el registro frontend ni implementa captura de datos maestros.
+El registro minimo por los BFF web/movil se prueba por separado; no proporciona los
+datos completos que exige cotizar. La negativa sin consentimiento conserva su
+`403 consentimiento_ausente`, sin confundirla con el `422 datos_cliente_incompletos`
+que corresponde a una cuenta sin telefono.
+
 `DATABASE_URL`, `DB_SCHEMA` y `POLIZAS_DATABASE_URL` deben estar sin definir: el
 bootstrap se niega a arrancar si pudieran redirigir una migracion fuera del entorno.
 No consume credenciales AWS ni acepta un destino remoto. Los datos y claves se eliminan

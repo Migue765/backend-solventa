@@ -3,13 +3,16 @@ import json
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import yaml
 from identidad.domain.consent import ConsentScope  # type: ignore[import-untyped]
 
-from tests.jmeter.plans import CONSENT, PRODUCTS, main_plan, persistence_plan
+from tests.jmeter.local_stack import LocalStack
+from tests.jmeter.plans import CONSENT, PRODUCTS, REQUESTS, main_plan, outage_plan, persistence_plan
 from tests.jmeter.results import evaluate, percentile
+from tests.test_encrypted_local_stack import call
 
 
 def test_jmeter_workflow_is_manual_with_performance_disabled_by_default() -> None:
@@ -99,6 +102,42 @@ def test_generated_consents_have_current_scope_and_runtime_expiry(tmp_path: Path
         in script
         for script in scripts
     )
+
+
+@pytest.mark.parametrize("phase", ["main", "outage"])
+def test_generated_customer_reaches_consent_boundary_over_http(tmp_path: Path, phase: str) -> None:
+    path = tmp_path / f"{phase}.jmx"
+    (main_plan if phase == "main" else outage_plan)(path)
+    sampler = ET.parse(path).find(".//HTTPSamplerProxy")
+    assert sampler is not None
+    raw = sampler.findtext(".//stringProp[@name='Argument.value']")
+    assert raw is not None
+    body = json.loads(
+        raw.replace("${email}", f"jmeter-{uuid4().hex}@example.com").replace(
+            "${document}", "JM00000000000001"
+        )
+    )
+    port = sampler.findtext("stringProp[@name='HTTPSampler.port']")
+    service = {"${__P(webPort)}": "web", "${__P(identityPort)}": "identity"}[str(port)]
+    with LocalStack(tmp_path / "stack") as stack:
+        status, registered = call(stack.urls[service] + "/v1/usuarios", body)
+        assert status == 201
+        status, session = call(
+            stack.urls["web"] + "/v1/sesiones",
+            {"correo": body["correo"], "contrasena": body["contrasena"]},
+        )
+        assert status == 200
+        status, problem = call(
+            stack.urls["web"] + REQUESTS,
+            {"productoId": "automotive", "datosProducto": {"vehiclePlate": "ABC123"}},
+            {
+                "Authorization": "Bearer " + session["accessToken"],
+                "Idempotency-Key": str(uuid4()),
+            },
+        )
+        assert (status, problem.get("code")) == (403, "consentimiento_ausente")
+        for field in ("tipoDocumento", "numeroDocumento", "telefono", "fechaNacimiento"):
+            assert registered["usuario"][field] == body[field]
 
 
 def test_missing_or_empty_results_fail(tmp_path: Path) -> None:
