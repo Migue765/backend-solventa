@@ -1018,7 +1018,9 @@ paths:
       tags: [Pagos]
       summary: Recupera el pago simulado persistido del cliente autenticado
       description: |
-        No consulta ninguna pasarela. Devuelve 404 pago_no_encontrado solo si la
+        No consulta ninguna pasarela ni inicia o completa una emisión. Devuelve
+        la instantánea del pago con saga pago_confirmado; GET suscripción informa
+        el estado actual de la saga. Devuelve 404 pago_no_encontrado solo si la
         solicitud pertenece al cliente y todavía no tiene pago; una solicitud
         inexistente o ajena devuelve 404 solicitud_no_encontrada.
       operationId: consultarPagoSimulado
@@ -1026,7 +1028,7 @@ paths:
         - $ref: "#/components/parameters/SolicitudId"
       responses:
         "200":
-          description: Pago simulado confirmado, sin cobro ni emisión de póliza
+          description: Pago simulado persistido; esta consulta no emite pólizas
           content:
             application/json:
               schema:
@@ -1045,7 +1047,19 @@ paths:
         tarjeta ni referencia bancaria. Deriva importe y periodicidad de la
         selección persistida coincidente con la suscripción aprobada y vigente.
         Registra pago, saga pago_confirmado y evento PagoSimuladoConfirmado en
-        una transacción. Nunca cobra, conecta proveedor ni emite póliza.
+        una transacción. No conecta una pasarela ni realiza cobros reales.
+        Con POLIZAS_SERVICE_URL configurada, los pagos nuevos solicitan emisión
+        académica después de persistir su confirmación. Los pagos anteriores a
+        habilitar la integración no emiten retroactivamente. La saga pasa a
+        emitida solo después de recibir el ID de póliza.
+        Si falla la emisión o se pierde su acuse, responde 503 aunque el pago
+        ya esté persistido. Repetir POST en la misma solicitud recupera el pago
+        y reintenta la emisión idempotente, sin duplicar pago ni póliza.
+        La respuesta de pago conserva la instantánea saga pago_confirmado;
+        consultar GET /v1/solicitudes-cotizacion/{solicitudId}/suscripcion para
+        conocer el estado actual de la saga. GET pago no completa la emisión.
+        No implementa firma, documento de póliza, resultados de pago rechazado
+        o pendiente ni conciliación automática.
         Un pago por solicitud/suscripción: el reintento devuelve el mismo registro
         incluso con otra clave, tras vencimiento o posterior avance de saga.
         Una clave de creación usada en otra solicitud devuelve 409.
