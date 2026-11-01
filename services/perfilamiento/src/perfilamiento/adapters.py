@@ -3,12 +3,51 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 from perfilamiento.domain import Consentimiento, ErrorPerfilamiento, Fuente
+from perfilamiento.resilience import PoliticaConsultas
+
+
+class _AutorizacionSocio(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    actor_id: UUID = Field(alias="actorId")
+    socio_id: str = Field(alias="socioId")
+    rol: Literal["asesor", "socio"]
+    autorizado: StrictBool
+
+
+class AutorizacionesSocioHttp:
+    def __init__(self, base_url: str, token: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+
+    def validar(
+        self, actor_id: UUID, socio_id: str, rol: Literal["asesor", "socio"], correlation_id: str
+    ) -> None:
+        request = Request(
+            f"{self._base_url}/v1/autorizaciones/socios/{quote(socio_id, safe='')}"
+            f"/usuarios/{actor_id}?{urlencode({'rol': rol})}",
+            headers={
+                "Authorization": "Bearer " + self._token,
+                "X-Correlation-ID": correlation_id,
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=PoliticaConsultas().timeout_segundos) as response:
+                resultado = _AutorizacionSocio.model_validate(json.load(response))
+        except (URLError, OSError, ValueError, ValidationError) as error:
+            raise ErrorPerfilamiento("identidad_no_disponible", 503) from error
+        if resultado.actor_id != actor_id or resultado.socio_id != socio_id or resultado.rol != rol:
+            raise ErrorPerfilamiento("identidad_no_disponible", 503)
+        if not resultado.autorizado:
+            raise ErrorPerfilamiento("actor_no_autorizado", 403)
 
 
 class ConsentimientosHttp:

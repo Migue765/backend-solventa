@@ -1,8 +1,11 @@
 from typing import Any
+from uuid import uuid4
 
 import jwt
+import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from identidad.infrastructure.persistence.models import SocioModel
 
 PASSWORD = "Solventa123!"
 INTERNAL_TOKEN = "internal-test-token"
@@ -189,3 +192,58 @@ def test_partner_user_has_distinct_role_and_organization_after_refresh(make_app:
         },
     )
     assert public.status_code == 400
+
+
+@pytest.mark.parametrize("role", ["asesor", "socio"])
+def test_internal_authorization_uses_current_role_and_active_membership(
+    make_app: Any, role: str
+) -> None:
+    app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
+    created = app.test_cli_runner().invoke(
+        args=[
+            "create-advisor" if role == "asesor" else "create-partner-user",
+            "--name",
+            "Actor de prueba",
+            "--email",
+            f"{role}@hu44.example",
+            "--password",
+            PASSWORD,
+            "--partner-id",
+            "BANCO-HU44",
+            "--partner-name",
+            "Socio de prueba",
+        ]
+    )
+    assert created.exit_code == 0, created.output
+    actor_id = created.output.strip()
+    path = f"/v1/autorizaciones/socios/BANCO-HU44/usuarios/{actor_id}?rol={role}"
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}"}
+    assert client.get(path).status_code == 401
+    authorized = client.get(path, headers=headers)
+    assert authorized.status_code == 200
+    assert authorized.headers["Cache-Control"] == "no-store"
+    assert authorized.get_json() == {
+        "actorId": actor_id,
+        "socioId": "BANCO-HU44",
+        "rol": role,
+        "autorizado": True,
+    }
+    assert (
+        client.get(path.replace("BANCO-HU44", "BANCO-AJENO"), headers=headers).get_json()[
+            "autorizado"
+        ]
+        is False
+    )
+    assert (
+        client.get(path.replace(actor_id, str(uuid4())), headers=headers).get_json()["autorizado"]
+        is False
+    )
+    assert (
+        client.get(path.replace(f"rol={role}", "rol=cliente"), headers=headers).status_code == 400
+    )
+    repository = app.extensions["user_repository"]
+    with repository._sessions.begin() as session:
+        partner = session.get(SocioModel, "BANCO-HU44")
+        partner.activo = False
+    assert client.get(path, headers=headers).get_json()["autorizado"] is False

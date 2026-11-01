@@ -38,8 +38,8 @@ organizacion con `socioId` y los IDs de productos disponibles del catalogo) y
 `Idempotency-Key` igual a `operationId`, toma el actor del JWT y valida la pertenencia
 al socio, el cliente registrado y el producto disponible antes de delegar a
 Perfilamiento. Solo solicita y devuelve datos cubiertos por el consentimiento
-autoritativo vigente. Un fallo o circuito abierto de cualquier fuente requerida
-responde `503` sin datos parciales ni fallback. La respuesta incluye la versión del
+autoritativo vigente. Un fallo o circuito abierto sin cache integra, vigente y autorizada
+responde `503` sin datos parciales ni defaults. La respuesta exitosa incluye la versión del
 consentimiento y evidencia por fuente, y usa `Cache-Control: no-store`.
 `GET /v1/socios/consultas-informacion-cliente/{operationId}?socioId=...` recupera
 la consulta persistida sin repetir fuentes y vuelve a comprobar que el consentimiento
@@ -47,6 +47,18 @@ exacto siga vigente antes de entregar los datos.
 
 Configurar `PERFILAMIENTO_SERVICE_URL` con la URL interna de Perfilamiento. El BFF
 limita esta dependencia a 800 ms.
+
+El bloqueo acreditado de `open_finance` en HU44 devuelve problem+json
+`503 consulta_bloqueada` con `operacion`: `operationId`, `socioId`, `clienteId`,
+`productoId`, `excepcionId`, `estadoDecision` y `aplicacion`. No tratar otros 503,
+HU48/hipotecarios, fallos de open_data o consentimiento como excepciones revisables.
+`GET /v1/socios/consultas-informacion-cliente/{operationId}/estado?socioId=...` recupera
+esa misma proyeccion con permisos y consentimiento actuales; no consulta fuentes ni
+devuelve datos financieros. Una operacion no vinculada devuelve `404 consulta_no_encontrada`.
+La respuesta acredita recepcion HTTP del solicitante; el `acuseId` por si solo acredita
+aplicacion durable, no recepcion. Si se completo, el GET existente recupera la consulta
+persistida sin duplicarla. Repetir el POST rechazado devuelve `409 operacion_rechazada`
+con la proyeccion, siempre que el consentimiento siga vigente.
 
 `POST /v1/socios/solicitudes-cotizacion` integra `mortgage-life` con el motor y la
 persistencia principales, no una simulacion paralela:
@@ -176,6 +188,50 @@ El preflight CORS lo responde API Gateway, no Flask. El contrato versionado perm
 `GET`/`OPTIONS` y los headers `Authorization`, `API-Version` y `X-Correlation-ID`;
 expone `API-Version`, `X-Correlation-ID` y `Retry-After`. La prueba local comprueba
 esa configuracion declarada, no los origenes ni el preflight del entorno desplegado.
+
+### SOL-331: decision, aplicacion y recuperacion HU44
+
+`estado` de la excepcion sigue representando solo la decision humana. Mientras esta
+pendiente, `decision`, `actorId`, `resueltaEn` y `motivo` se serializan **null**, no se
+omiten. `proceso` y `aplicacion` son null en casos historicos sin operacion demostrable;
+no se habilita reanudacion mediante un enlace inventado. El contrato completo y su
+nullabilidad estan en `contracts/openapi/bff-web-v1.yaml`.
+
+Un caso vinculado agrega `proceso={tipo:"consulta_informacion_cliente",
+actorSolicitanteId,productoId,finalidad,datosSolicitados}` y
+`aplicacion={estado,intentos,codigo,actualizadaEn,acuseId}`. Estados:
+`esperando_decision`, `pendiente`, `completada`, `bloqueada`, `detenida`.
+`intentos` es 0 o 1; `codigo`/`acuseId` son null antes de aplicar. Completar da
+`consulta_disponible`; rechazar da `operacion_rechazada`; bloquear conserva la causa
+(por ejemplo `fuente_no_disponible`, `consentimiento_no_vigente`,
+`actor_no_autorizado`, `producto_no_autorizado` o `catalogo_no_disponible`).
+
+Resolver persiste primero la decision y luego despacha su aplicacion. Por eso un 503
+no permite inferir que la decision fallo: recuperar el detalle. El GET de bandeja admite
+`estadoAplicacion=pendiente|bloqueada|completada|detenida`; asi un caso decidido no desaparece
+del flujo normal al recargar. Sin filtro siguen apareciendo solo decisiones pendientes.
+El cliente no debe volver a decidir para recuperar la aplicacion.
+
+`POST /v1/asesor/excepciones-open-finance/{id}/aplicar?socioId=...` requiere JSON `{}`,
+JWT asesor y pertenencia al socio. Retorna 200 con **todo el caso**, no un exito financiero:
+leer decision y aplicacion por separado. Revalida permisos actuales; una aprobacion
+revalida tambien solicitante, catalogo y consentimiento original. Sin respuesta valida
+queda bloqueada con acuse, terminal y **sin boton de reaplicar**. Rechazar detiene la
+operacion sin leer fuentes. El mismo acuse se devuelve en duplicados sin repetir efectos.
+Solo `pendiente` sin acuse se puede reentregar tras interrupcion; no hay worker.
+
+Errores controlados: 400 `solicitud_invalida`/`version_no_soportada`; 401 por sesion/rol
+invalido; 403 `socio_no_autorizado`/`actor_no_autorizado`; 404 `excepcion_no_encontrada`;
+409 `decision_pendiente`/`excepcion_sin_operacion`; 503 `servicio_no_disponible`.
+Resolver conserva ademas los rechazos de consentimiento y `excepcion_ya_resuelta`.
+Solo en casos vinculados, repetir la misma decision/actor/motivo normalizado es idempotente.
+El GET de estado HU44 usa `403 consentimiento_invalido` para consentimiento ausente/cambiado.
+Todos los errores controlados conservan problem+json, correlacion y no-store.
+
+Publicar las dependencias compatibles y ejecutar `init-db` de Perfilamiento antes de
+habilitar la UI. No admitir replicas antiguas que ignoren decisiones/aplicaciones; conservar
+el ledger no hace seguro un rollback a codigo anterior. Estas instrucciones no autorizan
+operaciones de despliegue ni acreditan la validacion de la UI/AWS.
 
 Validacion local: `python -m pytest tests/test_partner_flow.py` desde la raiz.
 `RUN_PARTNER_BENCHMARK=1` habilita 100 operaciones de vida hipotecaria por HTTP local

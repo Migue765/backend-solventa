@@ -95,9 +95,20 @@ paths:
         "404":
           description: cliente_no_encontrado
         "409":
-          description: idempotencia_conflicto
+          description: idempotencia_conflicto u operacion_rechazada; esta ultima incluye operacion
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
         "503":
-          description: Dependencia o fuente no disponible; no contiene datos parciales
+          description: >-
+            Dependencia no disponible, sin datos parciales. Un bloqueo acreditado
+            de open_finance/HU44 sin cache autorizada incluye code=consulta_bloqueada
+            y operacion. No todos los 503 producen una excepcion.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
   /v1/socios/consultas-informacion-cliente/{operationId}:
     get:
       tags: [Socios]
@@ -127,6 +138,46 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "403":
           description: Socio o consentimiento no autorizado
+        "404":
+          description: consulta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/consultas-informacion-cliente/{operationId}/estado:
+    get:
+      tags: [Socios]
+      operationId: consultarEstadoOperacionInformacion
+      summary: Recupera el resultado del proceso HU44 sin repetir fuentes
+      description: >-
+        Revalida el rol/pertenencia actuales del socio y el consentimiento original.
+        Devuelve solo estado de decision/aplicacion, nunca datos financieros.
+        Un acuseId acredita aplicacion durable, no recepcion por el solicitante.
+        Solo admite operaciones con bloqueo verificado; no enlaza datos historicos.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: operationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Estado de la misma operacion; Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoOperacionInformacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado, actor_no_autorizado o consentimiento_invalido
         "404":
           description: consulta_no_encontrada
         "503":
@@ -369,10 +420,11 @@ paths:
   /v1/asesor/excepciones-open-finance:
     get:
       tags: [Asesores]
-      summary: Lista excepciones Open Finance pendientes del socio
+      summary: Lista decisiones pendientes o filtra por estado de aplicacion
       description: >-
         Requiere JWT con rol=asesor y scope=asesor. socioId debe estar incluido
-        en el claim socios. La bandeja solo devuelve excepciones pendientes.
+        en el claim socios. Sin filtro devuelve decisiones pendientes. Con
+        estadoAplicacion incluye casos ya decididos para recuperarlos tras recarga.
         La aprobación no modifica ni sustituye el consentimiento del cliente.
       operationId: listarExcepcionesOpenFinance
       security:
@@ -386,6 +438,11 @@ paths:
             type: string
             minLength: 1
             maxLength: 50
+        - name: estadoAplicacion
+          in: query
+          schema:
+            type: string
+            enum: [pendiente, bloqueada, completada, detenida]
       responses:
         "200":
           description: Excepciones pendientes del socio autorizado
@@ -453,9 +510,12 @@ paths:
         claim socios. El actorId se deriva de sub; no se acepta en el cuerpo.
         motivo es obligatorio. Aprobar revalida el consentimiento vigente y la
         versión exacta antes de persistir, y no amplía fuentes, datos ni finalidad.
-        La respuesta 200 solo se devuelve tras confirmar atómicamente la decisión
-        y su evento de trazabilidad. El proceso solicitante debe volver a validar
-        el consentimiento antes de continuar.
+        Primero confirma atomicamente la decision y su evento; para un caso HU44
+        vinculado despacha despues su aplicacion. Una falla de transporte puede
+        devolver 503 con la decision ya persistida: recuperarla por GET, no inventar
+        su resultado. Una aprobacion solicita un solo reintento logico acotado;
+        un rechazo detiene esa operacion. La misma decision/actor/motivo en un caso
+        vinculado es idempotente. Casos historicos sin proceso conservan su contrato.
       operationId: resolverExcepcionOpenFinance
       security:
         - bearerAuth: []
@@ -500,6 +560,60 @@ paths:
           description: excepcion_no_encontrada
         "409":
           description: excepcion_ya_resuelta o conflicto_idempotencia
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/asesor/excepciones-open-finance/{excepcionId}/aplicar:
+    post:
+      tags: [Asesores]
+      operationId: aplicarDecisionExcepcionOpenFinance
+      summary: Reentrega explicitamente una decision cuya aplicacion quedo pendiente
+      description: >-
+        No vuelve a decidir. Revalida permisos actuales; una aprobacion revalida
+        tambien solicitante, consentimiento y catalogo. Completa o bloquea una
+        unica aplicacion logica; el rechazo detiene la operacion sin consultar
+        fuentes. Una aplicacion con acuseId es terminal y se devuelve sin repetir
+        efectos, incluida bloqueada. No hay worker ni recuperacion autonoma.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: excepcionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Caso completo con decision y aplicacion durable; no implica exito de la consulta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExcepcionOpenFinanceResuelta"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: socio_no_autorizado o actor_no_autorizado
+        "404":
+          description: excepcion_no_encontrada
+        "409":
+          description: decision_pendiente o excepcion_sin_operacion
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/perfilamientos-hipotecarios:
@@ -1818,6 +1932,71 @@ components:
           description: Solo contiene excepciones con estado pendiente.
           items:
             $ref: "#/components/schemas/ExcepcionOpenFinance"
+    AplicacionOperacionInformacion:
+      type: object
+      additionalProperties: false
+      required: [estado, intentos, codigo, actualizadaEn, acuseId]
+      properties:
+        estado:
+          type: string
+          enum: [esperando_decision, pendiente, completada, bloqueada, detenida]
+        intentos:
+          type: integer
+          minimum: 0
+          maximum: 1
+          description: Aplicaciones logicas confirmadas; no cuenta las lecturas repetidas tras rollback.
+        codigo:
+          type: [string, "null"]
+          description: consulta_disponible, operacion_rechazada o causa explicita del bloqueo.
+        actualizadaEn:
+          type: string
+          format: date-time
+        acuseId:
+          type: [string, "null"]
+          format: uuid
+          description: Evento de aplicacion durable, no acuse de recepcion por el solicitante.
+    ProcesoOperacionInformacion:
+      type: object
+      additionalProperties: false
+      required: [tipo, actorSolicitanteId, productoId, finalidad, datosSolicitados]
+      properties:
+        tipo:
+          const: consulta_informacion_cliente
+        actorSolicitanteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        finalidad:
+          const: cotizacion
+        datosSolicitados:
+          type: array
+          items:
+            type: string
+          description: Interseccion de la peticion original con los datos consentidos.
+    EstadoOperacionInformacion:
+      type: object
+      additionalProperties: false
+      required: [operationId, socioId, clienteId, productoId, excepcionId, estadoDecision, aplicacion]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        socioId:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        excepcionId:
+          type: string
+          format: uuid
+        estadoDecision:
+          type: string
+          enum: [pendiente, aprobada, rechazada]
+        aplicacion:
+          $ref: "#/components/schemas/AplicacionOperacionInformacion"
     ExcepcionOpenFinance:
       type: object
       additionalProperties: false
@@ -1837,6 +2016,12 @@ components:
         - creadoEn
         - correlationId
         - trazabilidad
+        - decision
+        - actorId
+        - resueltaEn
+        - motivo
+        - proceso
+        - aplicacion
       properties:
         excepcionId:
           type: string
@@ -1893,7 +2078,15 @@ components:
           enum: [aprobar, rechazar, null]
         motivo:
           type: [string, "null"]
-          description: Motivo de la decisión humana; ausente mientras está pendiente.
+          description: Motivo de la decision humana; null mientras esta pendiente.
+        proceso:
+          oneOf:
+            - $ref: "#/components/schemas/ProcesoOperacionInformacion"
+            - type: "null"
+        aplicacion:
+          oneOf:
+            - $ref: "#/components/schemas/AplicacionOperacionInformacion"
+            - type: "null"
         idempotente:
           type: boolean
     ConsentimientoExcepcionOpenFinance:
@@ -3590,5 +3783,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ErrorCampo"
+        operacion:
+          $ref: "#/components/schemas/EstadoOperacionInformacion"
 security:
   - bearerAuth: []

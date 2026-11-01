@@ -1,10 +1,21 @@
 import hashlib
 import hmac
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, String, UniqueConstraint, create_engine, func, select, update
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    create_engine,
+    func,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +27,7 @@ from perfilamiento.domain import (
     ErrorPerfilamiento,
     EventoConsentimiento,
     Fuente,
+    OperacionInformacion,
     Perfil,
 )
 
@@ -115,6 +127,18 @@ class EventoExcepcionOpenFinanceModel(Base):
     excepcion_id: Mapped[UUID] = mapped_column(index=True)
     operation_id: Mapped[UUID]
     contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
+class OperacionInformacionModel(Base):
+    __tablename__ = "operaciones_informacion"
+
+    socio_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    operation_id: Mapped[UUID] = mapped_column(primary_key=True)
+    excepcion_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("excepciones_open_finance.excepcion_id"), unique=True
+    )
+    contenido: Mapped[dict[str, object] | None] = mapped_column(JSON(none_as_null=True))
+    hash_contenido: Mapped[str | None] = mapped_column(String(64))
 
 
 def _hash(contenido: dict[str, object]) -> str:
@@ -284,8 +308,14 @@ class RepositorioPerfiles:
         auditoria: dict[str, object],
         consentimiento: Consentimiento | None = None,
         fuentes: tuple[Fuente, ...] = (),
+        *,
+        transaccion: Session | None = None,
     ) -> None:
-        with self._sesiones.begin() as sesion:
+        with (
+            nullcontext(transaccion)
+            if transaccion is not None
+            else self._sesiones.begin() as sesion
+        ):
             sesion.add(ConsultaModel(consulta_id=uuid4(), contenido=auditoria))
             if consentimiento is not None:
                 for fuente in fuentes:
@@ -345,13 +375,20 @@ class RepositorioPerfiles:
             return Fuente.model_validate(fila.contenido)
 
     def registrar_excepcion_open_finance(
-        self, contenido: dict[str, object], evento: dict[str, object]
+        self,
+        contenido: dict[str, object],
+        evento: dict[str, object],
+        operacion: OperacionInformacion | None = None,
     ) -> dict[str, object]:
         excepcion_id = UUID(str(contenido["excepcionId"]))
         operation_id = UUID(str(contenido["operationId"]))
         socio_id = str(contenido["socioId"])
         try:
             with self._sesiones.begin() as sesion:
+                if operacion is not None:
+                    self._bloquear_informacion(sesion, socio_id, operation_id)
+                    if sesion.get(ConsultaInformacionModel, (socio_id, operation_id)) is not None:
+                        raise ErrorPerfilamiento("conflicto_idempotencia", 409)
                 existente = sesion.scalar(
                     select(ExcepcionOpenFinanceModel).where(
                         ExcepcionOpenFinanceModel.socio_id == socio_id,
@@ -359,6 +396,16 @@ class RepositorioPerfiles:
                     )
                 )
                 if existente is not None:
+                    if operacion is not None:
+                        vinculada = sesion.get(OperacionInformacionModel, (socio_id, operation_id))
+                        if (
+                            vinculada is None
+                            or vinculada.contenido is None
+                            or self._operacion_informacion(vinculada).request_fingerprint
+                            != operacion.request_fingerprint
+                        ):
+                            raise ErrorPerfilamiento("conflicto_idempotencia", 409)
+                        return self._contenido_excepcion(existente)
                     if not self._misma_solicitud_excepcion(existente.contenido, contenido):
                         raise ErrorPerfilamiento("conflicto_idempotencia", 409)
                     return existente.contenido
@@ -371,6 +418,21 @@ class RepositorioPerfiles:
                         hash_contenido=_hash(contenido),
                     )
                 )
+                if operacion is not None:
+                    sesion.flush()
+                    documento = operacion.model_dump(mode="json", by_alias=True)
+                    sesion.execute(
+                        update(OperacionInformacionModel)
+                        .where(
+                            OperacionInformacionModel.socio_id == socio_id,
+                            OperacionInformacionModel.operation_id == operation_id,
+                        )
+                        .values(
+                            excepcion_id=excepcion_id,
+                            contenido=documento,
+                            hash_contenido=_hash(documento),
+                        )
+                    )
                 sesion.add(
                     EventoExcepcionOpenFinanceModel(
                         evento_id=UUID(str(evento["eventoId"])),
@@ -381,13 +443,22 @@ class RepositorioPerfiles:
                 )
         except IntegrityError as error:
             persistido = self.obtener_excepcion_open_finance_por_operacion(socio_id, operation_id)
+            if operacion is not None:
+                operacion_existente = self.buscar_operacion_informacion(socio_id, operation_id)
+                if (
+                    operacion_existente is None
+                    or operacion_existente.request_fingerprint != operacion.request_fingerprint
+                ):
+                    raise ErrorPerfilamiento("conflicto_idempotencia", 409) from error
+                assert persistido is not None
+                return persistido
             if persistido is not None and self._misma_solicitud_excepcion(persistido, contenido):
                 return persistido
             raise ErrorPerfilamiento("conflicto_idempotencia", 409) from error
         return contenido
 
     def listar_excepciones_open_finance(
-        self, socio_id: str, estado: str | None = None
+        self, socio_id: str, estado: str | None = None, estado_aplicacion: str | None = None
     ) -> list[dict[str, object]]:
         consulta = select(ExcepcionOpenFinanceModel).where(
             ExcepcionOpenFinanceModel.socio_id == socio_id
@@ -395,6 +466,14 @@ class RepositorioPerfiles:
         if estado is not None:
             consulta = consulta.where(
                 ExcepcionOpenFinanceModel.contenido["estado"].as_string() == estado
+            )
+        if estado_aplicacion is not None:
+            consulta = consulta.join(
+                OperacionInformacionModel,
+                OperacionInformacionModel.excepcion_id == ExcepcionOpenFinanceModel.excepcion_id,
+            ).where(
+                OperacionInformacionModel.contenido["aplicacion"]["estado"].as_string()
+                == estado_aplicacion
             )
         consulta = consulta.order_by(ExcepcionOpenFinanceModel.contenido["creadoEn"].as_string())
         with self._sesiones() as sesion:
@@ -448,6 +527,20 @@ class RepositorioPerfiles:
             )
             if actualizado is None:
                 raise ErrorPerfilamiento("excepcion_ya_resuelta", 409)
+            vinculada = sesion.get(
+                OperacionInformacionModel, (socio_id, UUID(str(contenido["operationId"])))
+            )
+            if vinculada is not None and vinculada.contenido is not None:
+                operacion = self._operacion_informacion(vinculada)
+                aplicacion = operacion.aplicacion.model_copy(
+                    update={
+                        "estado": "pendiente",
+                        "actualizada_en": datetime.fromisoformat(str(contenido["resueltaEn"])),
+                    }
+                )
+                self.guardar_operacion_informacion(
+                    sesion, operacion.model_copy(update={"aplicacion": aplicacion})
+                )
             sesion.add(
                 EventoExcepcionOpenFinanceModel(
                     evento_id=UUID(str(evento["eventoId"])),
@@ -457,6 +550,121 @@ class RepositorioPerfiles:
                 )
             )
         return contenido
+
+    def buscar_operacion_informacion(
+        self, socio_id: str, operation_id: UUID
+    ) -> OperacionInformacion | None:
+        with self._sesiones() as sesion:
+            fila = sesion.get(OperacionInformacionModel, (socio_id, operation_id))
+            return (
+                self._operacion_informacion(fila)
+                if fila is not None and fila.contenido is not None
+                else None
+            )
+
+    def _bloquear_informacion(self, sesion: Session, socio_id: str, operation_id: UUID) -> None:
+        insertar = sqlite_insert if self.engine.dialect.name == "sqlite" else pg_insert
+        sesion.execute(
+            insertar(OperacionInformacionModel)
+            .values(socio_id=socio_id, operation_id=operation_id)
+            .on_conflict_do_nothing()
+        )
+        sesion.execute(
+            update(OperacionInformacionModel)
+            .where(
+                OperacionInformacionModel.socio_id == socio_id,
+                OperacionInformacionModel.operation_id == operation_id,
+            )
+            .values(operation_id=OperacionInformacionModel.operation_id)
+        )
+
+    @contextmanager
+    def bloquear_operacion_informacion(
+        self, excepcion_id: UUID, socio_id: str
+    ) -> Iterator[tuple[Session, OperacionInformacion, dict[str, object]]]:
+        with self._sesiones.begin() as sesion:
+            identidad = sesion.execute(
+                update(OperacionInformacionModel)
+                .where(
+                    OperacionInformacionModel.excepcion_id == excepcion_id,
+                    OperacionInformacionModel.socio_id == socio_id,
+                )
+                .values(hash_contenido=OperacionInformacionModel.hash_contenido)
+                .returning(OperacionInformacionModel.operation_id)
+            ).scalar_one_or_none()
+            if identidad is None:
+                raise ErrorPerfilamiento("excepcion_sin_operacion", 409)
+            fila = sesion.get(OperacionInformacionModel, (socio_id, identidad))
+            caso = sesion.get(ExcepcionOpenFinanceModel, excepcion_id)
+            assert fila is not None and caso is not None
+            operacion = self._operacion_informacion(fila)
+            contenido = self._contenido_excepcion(caso)
+            comando = operacion.comando
+            if (
+                caso.socio_id != socio_id
+                or caso.operation_id != comando.operation_id
+                or contenido["clienteId"] != str(comando.cliente_id)
+                or contenido["alcance"] != "open_finance"
+                or contenido["finalidad"] != comando.finalidad
+                or contenido["consentimiento"]
+                != {
+                    "id": str(operacion.consentimiento.consentimiento_id),
+                    "version": operacion.consentimiento.version,
+                    "estado": operacion.consentimiento.estado,
+                    "fuentes": list(operacion.consentimiento.fuentes),
+                    "datos": list(operacion.consentimiento.datos),
+                    "finalidad": operacion.consentimiento.finalidad,
+                    "vigenteHasta": operacion.consentimiento.vigente_hasta.isoformat().replace(
+                        "+00:00", "Z"
+                    ),
+                }
+            ):
+                raise ErrorPerfilamiento("operacion_no_integra", 503)
+            yield sesion, operacion, contenido
+
+    def guardar_operacion_informacion(
+        self,
+        sesion: Session,
+        operacion: OperacionInformacion,
+        evento: dict[str, object] | None = None,
+    ) -> None:
+        contenido = operacion.model_dump(mode="json", by_alias=True)
+        sesion.execute(
+            update(OperacionInformacionModel)
+            .where(
+                OperacionInformacionModel.socio_id == operacion.comando.socio_id,
+                OperacionInformacionModel.operation_id == operacion.comando.operation_id,
+                OperacionInformacionModel.excepcion_id == operacion.excepcion_id,
+            )
+            .values(contenido=contenido, hash_contenido=_hash(contenido))
+        )
+        if evento is not None:
+            sesion.add(
+                EventoExcepcionOpenFinanceModel(
+                    evento_id=UUID(str(evento["eventoId"])),
+                    excepcion_id=operacion.excepcion_id,
+                    operation_id=operacion.comando.operation_id,
+                    contenido=evento,
+                )
+            )
+
+    @staticmethod
+    def _operacion_informacion(fila: OperacionInformacionModel) -> OperacionInformacion:
+        if (
+            fila.contenido is None
+            or fila.hash_contenido is None
+            or not hmac.compare_digest(_hash(fila.contenido), fila.hash_contenido)
+        ):
+            raise ErrorPerfilamiento("operacion_no_integra", 503)
+        operacion = OperacionInformacion.model_validate(fila.contenido)
+        if (
+            operacion.excepcion_id != fila.excepcion_id
+            or operacion.comando.operation_id != fila.operation_id
+            or operacion.comando.socio_id != fila.socio_id
+            or operacion.consentimiento.cliente_id != operacion.comando.cliente_id
+        ):
+            raise ErrorPerfilamiento("operacion_no_integra", 503)
+        return operacion
 
     @staticmethod
     def _contenido_excepcion(fila: ExcepcionOpenFinanceModel) -> dict[str, object]:
@@ -502,10 +710,22 @@ class RepositorioPerfiles:
         request_fingerprint: str,
         fuentes: tuple[Fuente, ...] = (),
         auditorias: tuple[dict[str, object], ...] = (),
+        *,
+        transaccion: Session | None = None,
     ) -> None:
         contenido = consulta.model_dump(mode="json", by_alias=True)
         try:
-            with self._sesiones.begin() as sesion:
+            contexto = (
+                nullcontext(transaccion) if transaccion is not None else self._sesiones.begin()
+            )
+            with contexto as sesion:
+                if transaccion is None:
+                    self._bloquear_informacion(sesion, consulta.socio_id, consulta.operation_id)
+                    vinculada = sesion.get(
+                        OperacionInformacionModel, (consulta.socio_id, consulta.operation_id)
+                    )
+                    if vinculada is not None and vinculada.contenido is not None:
+                        raise ErrorPerfilamiento("consulta_bloqueada", 503)
                 sesion.add(
                     ConsultaInformacionModel(
                         socio_id=consulta.socio_id,

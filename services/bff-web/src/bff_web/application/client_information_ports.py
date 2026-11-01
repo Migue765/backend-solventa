@@ -1,7 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
-from bff_web.domain.client_information import ClientInformationResult
+from bff_web.domain.client_information import ClientInformationResult, ClientInformationState
 
 
 class ClientInformationGateway(Protocol):
@@ -12,3 +12,7 @@ class ClientInformationGateway(Protocol):
     def recover(
         self, socio_id: str, operation_id: UUID, correlation_id: str
     ) -> ClientInformationResult: ...
+
+    def state(
+        self, socio_id: str, operation_id: UUID, actor_id: UUID, correlation_id: str
+    ) -> ClientInformationState: ...

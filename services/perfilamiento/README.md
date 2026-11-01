@@ -21,13 +21,15 @@ API interna con Bearer; `/health` no requiere autenticacion:
 | POST | `/v1/perfiles` | Cliente, credito, `operationId` y referencia de la cotizacion |
 | POST | `/v1/consultas-informacion-cliente` | Contexto autorizado de HU44 e identificador idempotente |
 | GET | `/v1/consultas-informacion-cliente/{operationId}` | `socioId` en query; recupera HU44 y revalida consentimiento |
+| GET | `/v1/consultas-informacion-cliente/{operationId}/estado` | `socioId` y `X-Actor-ID`; recupera decision/aplicacion sin datos financieros |
 | GET | `/v1/perfiles/{perfilId}` | `clienteId` en query |
 | POST | `/v1/eventos/consentimientos` | Evento interno del Outbox de Identidad |
 | POST | `/v1/excepciones-open-finance` | Registra un bloqueo real para revisión humana |
-| GET | `/v1/excepciones-open-finance?socioId=...` | Lista solo excepciones pendientes |
+| GET | `/v1/excepciones-open-finance?socioId=...` | Decisiones pendientes; `estadoAplicacion` permite recuperar casos ya decididos |
 | GET | `/v1/excepciones-open-finance/{excepcionId}?socioId=...` | Consulta detalle y trazabilidad |
 | GET | `/v1/excepciones-open-finance/operaciones/{operationId}?socioId=...` | Devuelve el resultado al proceso solicitante |
 | POST | `/v1/excepciones-open-finance/{excepcionId}/resolver?socioId=...` | Persiste aprobación o rechazo |
+| POST | `/v1/excepciones-open-finance/{excepcionId}/aplicar?socioId=...` | Aplica una decision pendiente al proceso HU44 vinculado |
 
 El servicio consulta el consentimiento autoritativo antes de cada fuente, reintento, fallback
 y antes de entregar
@@ -160,14 +162,18 @@ un adaptador real.
 
 ## Excepciones Open Finance
 
-El productor interno crea una excepción solo cuando un bloqueo de fuente o regla impide
-continuar automáticamente. `bloqueaProcesamiento` debe ser `true`; no se enrutan fallbacks
-automáticos exitosos, errores de consentimiento, ni rechazos operativos como conflictos de
-idempotencia. La creación recibe `operationId`, `socioId`, `clienteId`, el ID/versión del
-consentimiento, `codigo` (`fuente_no_disponible`, `fuente_vencida` o `regla_no_aplicable`)
-y `motivoBloqueo`. Perfilamiento consulta y valida el consentimiento autoritativo antes de
-crear el caso. `socioId + operationId` es idempotente; un reuso con otro motivo o contexto
-responde `409 conflicto_idempotencia`.
+El productor integrado es **HU44**: una consulta real de informacion del socio que no puede
+obtener `open_finance` ni reutilizar cache integra, vigente y autorizada crea atomicamente
+el caso, su evento y la operacion vinculada. Conserva actor solicitante, socio, cliente,
+producto, finalidad, consentimiento exacto y los nombres de datos autorizados; no tokens.
+No produce casos por cualquier 503, fallo de `open_data`, consentimiento denegado,
+fallback valido ni degradacion HU48. No define una politica para `regla_no_aplicable`.
+
+El POST interno historico de excepciones conserva su contrato (`bloqueaProcesamiento=true`,
+codigo y contexto), pero ese booleano **no demuestra una operacion ejecutada**. Sus casos,
+incluidos los historicos, tienen `proceso:null` y `aplicacion:null`; no se enlazan mediante
+backfill ni permiten reanudacion automatica. `socioId + operationId` sigue siendo idempotente;
+un cuerpo incompatible o intento de enlazar un caso historico responde 409.
 
 El BFF expone la bandeja/detalle/decisión del asesor; las rutas internas de esta tabla usan
 `INTERNAL_API_TOKEN`, no están expuestas directamente al navegador. Una resolución exige
@@ -176,10 +182,45 @@ La aprobación revalida el consentimiento vigente y la misma versión. Nunca cam
 fuentes, datos ni finalidad: el proceso solicitante debe volver a pasar su validación de
 consentimiento antes de continuar. El rechazo no necesita consentimiento vigente.
 
-La decisión, actor, fecha, motivo, alcance, estados previo/posterior y correlación se guardan
-atómicamente con un evento durable. La API solo confirma la resolución tras el commit; en caso
-de error no cambia el estado. El proceso solicitante consulta por `socioId + operationId` para
-obtener el resultado persistido. `init-db` crea aditivamente las dos tablas de excepciones.
+La decision, actor, fecha, motivo, alcance y correlacion se confirman atomicamente con su
+evento y, en casos vinculados, `aplicacion.estado=pendiente`. **Decision y aplicacion son
+transacciones distintas**. El BFF despacha la segunda despues de la primera; un fallo de
+transporte puede dejar la decision confirmada y su aplicacion pendiente.
+
+| Estado de aplicacion | Significado |
+|---|---|
+| `esperando_decision` | Caso nuevo; cero intentos y acuse null. |
+| `pendiente` | Decision durable, aun sin resultado aplicado ni acuse. |
+| `completada` | Aprobacion aplicada; una consulta durable y `codigo=consulta_disponible`. |
+| `bloqueada` | Reintento sin resultado valido/autorizado; causa explicita, nunca exito. |
+| `detenida` | Rechazo aplicado; `codigo=operacion_rechazada`, sin consultar fuentes. |
+
+Una aprobacion solicita un unico reintento **logico** de esa misma operacion bajo HU44,
+sin cambiar presupuestos, retries por fuente ni consentimiento. Se revalidan catalogo,
+rol/pertenencia actuales de asesor y solicitante y la instantanea original del consentimiento.
+El rechazo detiene solo esa operacion, sin ampliar autorizaciones. La seleccion de esta
+politica conservadora no representa una aprobacion humana de una nueva regla de negocio.
+
+Una guarda SQL por socio/operacion serializa bloqueo inicial, resultado y aplicacion.
+Resultado, cache, auditorias y evento de aplicacion/`acuseId` se confirman juntos: un fallo
+de commit no deja una consulta exitosa sin acuse. Reentregar `/aplicar` recupera lo pendiente;
+si ya hay acuse, devuelve el mismo resultado sin ejecutar fuentes, incluso si quedo bloqueado.
+Un rollback puede repetir lecturas de fuentes al reentregar, pero no efectos confirmados.
+No hay un worker ni recuperacion autonoma; el mecanismo es reentrega HTTP explicita.
+
+La bandeja admite `estadoAplicacion=pendiente|bloqueada|completada|detenida` para localizar
+casos ya decididos tras recarga/reinicio. Sin filtro mantiene las decisiones pendientes.
+El solicitante HU44 recupera `/consultas-informacion-cliente/{operationId}/estado` con su
+contexto actual; si se completo, obtiene los datos por el GET existente, sin otra consulta
+exitosa. `acuseId` demuestra aplicacion durable por el proceso, **no recepcion del solicitante**;
+esta ultima requiere evidencia de la respuesta HTTP recibida.
+
+`init-db` agrega `operaciones_informacion` sin reescribir tablas/JSON historicos. Las nuevas
+consultas normales solo crean una guarda con enlace/contenido null; no son excepciones.
+Desplegar primero Identidad compatible, inicializar el esquema y coordinar Perfilamiento,
+BFF y UI compatibles antes de habilitar el flujo. No mezclar versiones que ignoren el ledger.
+Con operaciones vinculadas, conservar la tabla no hace seguro volver al codigo anterior:
+el rollback requiere una version compatible o contencion definida y validada por separado.
 
 ## Consulta autorizada HU44
 

@@ -11,20 +11,24 @@ from flask import Flask, Response, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from perfilamiento.adapters import ConsentimientosHttp, FuenteMock
+from perfilamiento.adapters import AutorizacionesSocioHttp, ConsentimientosHttp, FuenteMock
 from perfilamiento.application import ConsultarPerfil
 from perfilamiento.client_information import (
     ConsultarInformacionCliente,
     ConsultarInformacionComando,
 )
-from perfilamiento.domain import ErrorPerfilamiento, EventoConsentimiento
+from perfilamiento.domain import (
+    ErrorPerfilamiento,
+    EstadoAplicacionInformacion,
+    EventoConsentimiento,
+)
 from perfilamiento.exceptions import (
     AbrirExcepcionOpenFinance,
     GestionarExcepcionesOpenFinance,
     ResolverExcepcionOpenFinance,
 )
 from perfilamiento.persistence import RepositorioPerfiles
-from perfilamiento.ports import Consentimientos, FuentePerfilamiento
+from perfilamiento.ports import AutorizacionesSocio, Consentimientos, FuentePerfilamiento
 
 logger = logging.getLogger(__name__)
 ESCENARIO: TypeAdapter[Literal["disponible", "no_disponible", "vencido"]] = TypeAdapter(
@@ -90,10 +94,17 @@ class ConsultaInformacionRequest(BaseModel):
     )
 
 
+class AplicarDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    impedimento: Literal["producto_no_autorizado", "catalogo_no_disponible"] | None = None
+
+
 def create_app(
     config: Config | None = None,
     consentimientos: Consentimientos | None = None,
     fuentes: tuple[FuentePerfilamiento, ...] | None = None,
+    autorizaciones: AutorizacionesSocio | None = None,
 ) -> Flask:
     config = config or Config.desde_entorno()
     app = Flask(__name__)
@@ -117,10 +128,13 @@ def create_app(
             FuenteMock("open_finance", config.mock_escenario),
             FuenteMock("open_data", config.mock_escenario),
         ),
+        autorizaciones=autorizaciones
+        or AutorizacionesSocioHttp(config.identidad_url, config.internal_api_token),
     )
     servicio_excepciones = GestionarExcepcionesOpenFinance(
         repositorio,
         consentimientos or ConsentimientosHttp(config.identidad_url, config.internal_api_token),
+        autorizar_asesor=servicio_informacion.autorizar_asesor,
     )
     app.extensions["perfiles"] = repositorio
     app.extensions["consultar_perfil"] = servicio
@@ -206,6 +220,18 @@ def create_app(
         consulta = servicio_informacion.recuperar(socio_id, operation_id, g.correlation_id)
         return jsonify(consulta.model_dump(mode="json", by_alias=True))
 
+    @app.get("/v1/consultas-informacion-cliente/<uuid:operation_id>/estado")
+    def estado_informacion(operation_id: UUID) -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        try:
+            actor_id = UUID(request.headers.get("X-Actor-ID", ""))
+        except ValueError:
+            return jsonify(error="solicitud_invalida"), 400
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        estado = servicio_informacion.estado(socio_id, operation_id, actor_id, g.correlation_id)
+        return jsonify(estado.model_dump(mode="json", by_alias=True))
+
     @app.post("/v1/eventos/consentimientos")
     def aplicar_consentimiento() -> tuple[Response, int] | Response:
         try:
@@ -230,7 +256,16 @@ def create_app(
         socio_id = request.args.get("socioId", "")
         if not socio_id or len(socio_id) > 50:
             return jsonify(error="solicitud_invalida"), 400
-        excepciones = servicio_excepciones.listar_pendientes(socio_id)
+        filtro = request.args.get("estadoAplicacion")
+        try:
+            estado_aplicacion = (
+                TypeAdapter(EstadoAplicacionInformacion).validate_python(filtro)
+                if filtro is not None
+                else None
+            )
+        except ValidationError:
+            return jsonify(error="solicitud_invalida"), 400
+        excepciones = servicio_excepciones.listar_pendientes(socio_id, estado_aplicacion)
         return jsonify(
             excepciones=[
                 excepcion.model_dump(mode="json", by_alias=True) for excepcion in excepciones
@@ -273,6 +308,22 @@ def create_app(
         )
         return jsonify(excepcion.model_dump(mode="json", by_alias=True))
 
+    @app.post("/v1/excepciones-open-finance/<uuid:excepcion_id>/aplicar")
+    def aplicar_excepcion_open_finance(excepcion_id: UUID) -> Response | tuple[Response, int]:
+        socio_id = request.args.get("socioId", "")
+        try:
+            actor_id = UUID(request.headers.get("X-Actor-ID", ""))
+            payload = AplicarDecisionRequest.model_validate(request.get_json())
+        except (ValueError, ValidationError, BadRequest, UnsupportedMediaType):
+            return jsonify(error="solicitud_invalida"), 400
+        if not socio_id or len(socio_id) > 50:
+            return jsonify(error="solicitud_invalida"), 400
+        servicio_informacion.aplicar_decision(
+            excepcion_id, socio_id, actor_id, g.correlation_id, payload.impedimento
+        )
+        excepcion = servicio_excepciones.obtener(excepcion_id, socio_id)
+        return jsonify(excepcion.model_dump(mode="json", by_alias=True))
+
     @app.get("/v1/perfiles/<uuid:perfil_id>")
     def obtener(perfil_id: UUID) -> tuple[Response, int] | Response:
         try:
@@ -290,6 +341,8 @@ def create_app(
         body: dict[str, object] = {"error": error.codigo, "correlationId": g.correlation_id}
         if error.fuentes is not None:
             body["fuentes"] = error.fuentes
+        if error.operacion is not None:
+            body["operacion"] = error.operacion.model_dump(mode="json", by_alias=True)
         return jsonify(body), error.status
 
     @app.errorhandler(500)
