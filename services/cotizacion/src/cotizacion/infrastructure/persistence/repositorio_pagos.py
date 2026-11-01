@@ -41,7 +41,9 @@ class RepositorioPagosSqlAlchemy:
                 return None
             solicitud = self._solicitud(sesion, modelo.solicitud_id, modelo.cliente_id)
             tipo = next(
-                p.producto_id for p in PRODUCTOS if p.producto_interno_id == solicitud.producto_id
+                producto.producto_id
+                for producto in PRODUCTOS
+                if producto.producto_interno_id == solicitud.producto_id
             )
             datos = solicitud.datos_producto or {}
             fechas: dict[str, object] | None = None

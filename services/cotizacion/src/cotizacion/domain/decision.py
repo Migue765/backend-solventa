@@ -55,11 +55,11 @@ def construir_instantanea(
             "moneda": cotizacion.moneda,
             "coberturas": [
                 {
-                    "coberturaId": str(c.cobertura_id),
-                    "sumaAsegurada": str(c.suma_asegurada.monto),
-                    "deducible": str(c.deducible.monto),
+                    "coberturaId": str(cobertura.cobertura_id),
+                    "sumaAsegurada": str(cobertura.suma_asegurada.monto),
+                    "deducible": str(cobertura.deducible.monto),
                 }
-                for c in cotizacion.coberturas
+                for cobertura in cotizacion.coberturas
             ],
         },
         "perfil": perfil_decision,
@@ -72,8 +72,8 @@ def construir_instantanea(
         "resultado": {
             "primaEstimada": _monto(cotizacion.prima_estimada),
             "coberturas": [
-                {"coberturaId": str(c.cobertura_id), "prima": _monto(c.prima)}
-                for c in cotizacion.coberturas
+                {"coberturaId": str(cobertura.cobertura_id), "prima": _monto(cobertura.prima)}
+                for cobertura in cotizacion.coberturas
             ],
         },
     }

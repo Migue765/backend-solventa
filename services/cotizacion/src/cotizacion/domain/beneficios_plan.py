@@ -62,7 +62,7 @@ def beneficios_plan(
                 "No cubre llegar tarde al aeropuerto ni pérdidas por culpa del pasajero.",
             )
     incluidas = coberturas[: nivel + minimo_coberturas]
-    nombres = ", ".join(c.nombre for c in incluidas)
+    nombres = ", ".join(cobertura.nombre for cobertura in incluidas)
     orientaciones = (
         "Orientación sobre las condiciones del plan",
         f"Orientación sobre {coberturas[0].nombre.lower()}",
@@ -81,7 +81,7 @@ def beneficios_plan(
         "version": VERSION_BENEFICIOS,
         "descripcion": (f"{nombres}. Incluye {nivel + 1} temas de orientación sobre el plan."),
         "coberturaPrincipal": f"{nombres}. Base asegurada: {base_formateada}",
-        "coberturas": [f"{c.nombre}: {c.descripcion}" for c in incluidas],
+        "coberturas": [f"{cobertura.nombre}: {cobertura.descripcion}" for cobertura in incluidas],
         "condiciones": [
             "El deducible es una condición y no descuenta la base de cálculo.",
             *condiciones,
@@ -89,7 +89,7 @@ def beneficios_plan(
         "beneficiosAdicionales": list(orientaciones[: nivel + 1]),
         "responsabilidadCivil": (
             "Incluida, sujeta a las condiciones del producto."
-            if any(c.nombre == "Responsabilidad civil" for c in incluidas)
+            if any(cobertura.nombre == "Responsabilidad civil" for cobertura in incluidas)
             else "No aplica"
         ),
     }
