@@ -65,7 +65,7 @@ class GestionarOfertas:
             instantanea.regla_version == VERSION_ACADEMICA
             or detalle.get("modelo") == VERSION_CLIMATICA
         ):
-            return _ofertas_calculadas(
+            return ofertas_desde_decision(
                 solicitud,
                 self._reloj(),
                 seleccion.oferta_id if seleccion else None,
@@ -152,10 +152,10 @@ class GestionarOfertas:
         return seleccion
 
 
-def _ofertas_calculadas(
+def ofertas_desde_decision(
     solicitud: SolicitudCotizacion,
     ahora: datetime,
-    oferta_aceptada_id: UUID | None,
+    oferta_aceptada_id: UUID | None = None,
 ) -> ResultadoOfertas:
     cotizacion = solicitud.cotizacion
     instantanea = cotizacion.instantanea

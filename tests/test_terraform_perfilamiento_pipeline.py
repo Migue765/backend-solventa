@@ -12,11 +12,15 @@ def test_perfilamiento_pipeline_uses_dedicated_release_resources() -> None:
     )[0]
 
     assert re.search(r'^\s*repository_name\s*=\s*"solventa/perfilamiento"$', ecr, re.M)
+    assert re.search(r"^\s*force_delete\s*=\s*false$", ecr, re.M)
     assert re.search(r'^\s*service_name\s*=\s*"perfilamiento"$', pipeline, re.M)
     assert re.search(r'^\s*service_dir\s*=\s*"services/perfilamiento"$', pipeline, re.M)
     assert re.search(r'^\s*service_namespace\s*=\s*"perfilamiento"$', pipeline, re.M)
     assert re.search(r'^\s*release_tag_patterns\s*=\s*\["perfilamiento-v\*"\]$', pipeline, re.M)
     assert re.search(r"^\s*run_migrations\s*=\s*true$", pipeline, re.M)
+    assert re.search(r"^\s*require_manual_approval\s*=\s*true$", pipeline, re.M)
+    assert re.search(r"^\s*restrict_service_access\s*=\s*true$", pipeline, re.M)
+    assert re.search(r"^\s*artifact_force_destroy\s*=\s*false$", pipeline, re.M)
     assert re.search(
         r"^\s*automatic_triggers_enabled\s*=\s*var\.cicd_automatic_triggers_enabled$",
         pipeline,

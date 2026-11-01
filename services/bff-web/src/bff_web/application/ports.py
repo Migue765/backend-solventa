@@ -27,6 +27,10 @@ class IdentityGateway(Protocol):
 
     def get_client(self, client_id: UUID, correlation_id: str) -> User | None: ...
 
+    def get_client_by_document(
+        self, document_type: str, identification: str, correlation_id: str
+    ) -> User | None: ...
+
 
 class TokenVerifier(Protocol):
     def verify(self, token: str) -> AccessClaims: ...

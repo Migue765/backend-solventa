@@ -112,7 +112,12 @@ def main() -> None:
             plan = args.output / "main.jmx"
             main_plan(plan, args.threads, args.iterations, args.mode == "smoke")
             jtl = execute(args.jmeter_home, plan, stack, run_id)
-            summary = evaluate(jtl, args.threads * args.iterations, args.mode == "performance")
+            summary = evaluate(
+                jtl,
+                args.threads * args.iterations,
+                args.mode == "performance",
+                capacity_concurrency=args.threads if args.mode == "performance" else 0,
+            )
             summary["run"] = {
                 "mode": args.mode,
                 "threads": args.threads,

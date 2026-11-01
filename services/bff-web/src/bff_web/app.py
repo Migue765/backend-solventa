@@ -9,6 +9,7 @@ from bff_web.api import (
     consents,
     health,
     mortgage_profiling,
+    open_finance_exceptions,
     partner_quotes,
     quotes,
     sessions,
@@ -16,6 +17,7 @@ from bff_web.api import (
 )
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
+from bff_web.application.open_finance_exception_ports import OpenFinanceExceptionGateway
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
@@ -29,6 +31,9 @@ from bff_web.infrastructure.http_client_information_gateway import (
 from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
 from bff_web.infrastructure.http_mortgage_profiling_gateway import (
     HttpMortgageProfilingGateway,
+)
+from bff_web.infrastructure.http_open_finance_exception_gateway import (
+    HttpOpenFinanceExceptionGateway,
 )
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
 from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
@@ -45,6 +50,7 @@ def create_app(
     profiling_gateway: ProfilingGateway | None = None,
     mortgage_profiling_gateway: MortgageProfilingGateway | None = None,
     client_information_gateway: ClientInformationGateway | None = None,
+    open_finance_exception_gateway: OpenFinanceExceptionGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -90,6 +96,13 @@ def create_app(
             active_config.internal_api_token,
         )
     )
+    app.extensions["open_finance_exception_gateway"] = (
+        open_finance_exception_gateway
+        or HttpOpenFinanceExceptionGateway(
+            active_config.profiling_service_url,
+            active_config.internal_api_token,
+        )
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
@@ -98,11 +111,14 @@ def create_app(
     app.register_blueprint(consents.bp)
     app.register_blueprint(quotes.bp)
     app.register_blueprint(mortgage_profiling.bp)
+    app.register_blueprint(open_finance_exceptions.bp)
     app.register_blueprint(partner_quotes.bp)
     app.register_blueprint(client_information.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
+        for key in ("audit_actor_id", "audit_partner_id", "audit_rejection_reason"):
+            g.pop(key, None)
         g.correlation_id = _correlation_id(request.headers.get("X-Correlation-ID"))
 
     @app.after_request

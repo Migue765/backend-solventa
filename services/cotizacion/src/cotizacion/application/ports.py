@@ -71,6 +71,8 @@ class GeneradorPerfil(Protocol):
         referencia_id: UUID,
         consentimiento_id: UUID | None = None,
         consentimiento_version: int | None = None,
+        operation_id: UUID | None = None,
+        credito_id: str | None = None,
     ) -> PerfilRiesgo: ...
 
 

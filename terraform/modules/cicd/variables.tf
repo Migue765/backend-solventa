@@ -62,6 +62,18 @@ variable "require_manual_approval" {
   default     = false
 }
 
+variable "restrict_service_access" {
+  description = "Acota trust CodeBuild, conexion GitHub, ENI y salida TCP 443/80. false conserva los permisos y la red de las instancias existentes."
+  type        = bool
+  default     = false
+}
+
+variable "artifact_force_destroy" {
+  description = "Permite eliminar el bucket con artefactos. false protege el bucket de la nueva instancia."
+  type        = bool
+  default     = true
+}
+
 variable "vpc_id" {
   description = "VPC del cluster (CodeBuild de despliegue corre dentro para alcanzar el API server privado)."
   type        = string

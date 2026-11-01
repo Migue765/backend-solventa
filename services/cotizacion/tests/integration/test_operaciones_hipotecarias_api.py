@@ -15,6 +15,7 @@ class ProfilingServiceStub:
     def __init__(self) -> None:
         self.profiles: dict[str, dict[str, Any]] = {}
         self.created = 0
+        self.degradations: list[dict[str, str]] = []
 
     def __call__(self, request: Request, timeout: float) -> BytesIO:
         assert timeout == 0.7
@@ -26,8 +27,10 @@ class ProfilingServiceStub:
                 "perfilId": profile_id,
                 "clienteId": body["clienteId"],
                 "referenciaId": body["referenciaId"],
+                "operationId": body["operationId"],
+                "creditoId": body["creditoId"],
                 "version": 1,
-                "modeloVersion": "perfil-mock-1",
+                "modeloVersion": "perfil-riesgo-1",
                 "score": "0.35",
                 "nivel": "A",
                 "consentimientoId": body["consentimientoId"],
@@ -42,10 +45,29 @@ class ProfilingServiceStub:
                         "vigenteHasta": (now + timedelta(minutes=15)).isoformat(),
                         "simulada": True,
                         "indicadorRiesgo": "0.35",
+                        "variablesDisponibles": ["indicador_riesgo"],
                     }
                     for name in ("open_finance", "open_data")
                 ],
-                "fallbackUsed": False,
+                "variables": [
+                    {
+                        "nombre": "indicador_riesgo",
+                        "fuente": name,
+                        "valorNormalizado": "0.35",
+                        "autorizadaPor": body["consentimientoId"],
+                    }
+                    for name in ("open_finance", "open_data")
+                ],
+                "variablesExcluidas": [],
+                "regla": {
+                    "reglaId": "riesgo-maximo-fuentes",
+                    "version": "1.0",
+                    "modeloVersion": "perfil-riesgo-1",
+                    "expresion": "max(indicador_riesgo_por_fuente)",
+                },
+                "degradaciones": self.degradations,
+                "hashDecision": "a" * 64,
+                "fallbackUsed": bool(self.degradations),
             }
             self.profiles[profile_id] = profile
             self.created += 1
@@ -109,6 +131,9 @@ def test_operation_is_completed_and_idempotent(
     assert first.get_json()["perfilamientoReferencia"]
     assert first.get_json()["solicitudId"].startswith("AQT-")
     assert profiling.created == 1
+    profile = next(iter(profiling.profiles.values()))
+    assert profile["operationId"] == operation_id
+    assert profile["creditoId"] == "HIP-2026-001"
 
 
 def test_same_operation_with_different_body_conflicts(

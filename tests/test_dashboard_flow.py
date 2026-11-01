@@ -32,8 +32,27 @@ ROOT = Path(__file__).resolve().parents[1]
 PATH = "/v1/clientes/me/dashboard"
 INTERNAL_TOKEN = "dashboard-test-service-credential"
 ISSUER = "https://identity.dashboard.test"
-USER = User(UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"), "Cliente", "ana@solventa.co", "cliente")
+USER = User(
+    UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"),
+    "Cliente",
+    "ana@solventa.co",
+    "cliente",
+    phone="+573001234567",
+    birth_date=date(1990, 1, 1),
+)
 Runtime = tuple[FlaskClient, FlaskClient, sessionmaker[Session]]
+
+
+class IdentityGatewayStub:
+    def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
+        return User(
+            client_id,
+            USER.name,
+            USER.email,
+            USER.role,
+            phone=USER.phone,
+            birth_date=USER.birth_date,
+        )
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -108,6 +127,7 @@ def runtime(
             quote_service_url=f"http://127.0.0.1:{server.server_port}",
             internal_api_token=INTERNAL_TOKEN,
         ),
+        identity_gateway=IdentityGatewayStub(),
         token_verifier=JwtVerifier(
             JwksKeyStore(lambda: {"keys": [jwk]}), ISSUER, "solventa-api", "web"
         ),

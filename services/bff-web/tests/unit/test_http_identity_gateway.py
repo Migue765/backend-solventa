@@ -82,6 +82,33 @@ def test_register_returns_the_created_user(identity_server: IdentityServer) -> N
     }
 
 
+def test_get_client_by_document_encodes_query_and_validates_identity_response(
+    identity_server: IdentityServer,
+) -> None:
+    path = "/v1/clientes?tipoDocumento=passport&numeroDocumento=AB12345"
+    identity_server.respond(
+        "GET",
+        path,
+        200,
+        {
+            "clienteId": str(USER.user_id),
+            "nombre": USER.name,
+            "correo": USER.email,
+            "tipoDocumento": "passport",
+            "numeroDocumento": "AB12345",
+        },
+    )
+
+    client = HttpIdentityGateway(
+        identity_server.url, internal_api_token="internal"
+    ).get_client_by_document("passport", "AB12345", CID)
+
+    assert client is not None
+    assert client.user_id == USER.user_id
+    assert (client.document_type, client.identification) == ("passport", "AB12345")
+    assert identity_server.requests[0]["path"] == path
+
+
 @pytest.mark.parametrize(
     ("status", "code"),
     [

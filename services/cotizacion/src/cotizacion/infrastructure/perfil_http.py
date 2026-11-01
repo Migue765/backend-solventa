@@ -16,12 +16,52 @@ from cotizacion.domain.tarifa import PerfilRiesgo
 
 class FuenteResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    nombre: Literal["open_finance", "open_data"]
+    nombre: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     version: str
     consultadaEn: AwareDatetime
     vigenteHasta: AwareDatetime
     simulada: bool
     indicadorRiesgo: Decimal = Field(ge=0, le=1)
+    variablesDisponibles: tuple[str, ...]
+
+
+class VariableResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nombre: Literal["indicador_riesgo"]
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    valorNormalizado: Decimal = Field(ge=0, le=1)
+    autorizadaPor: UUID
+
+
+class VariableExcluidaResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nombre: str
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    motivo: Literal["sin_consentimiento"]
+
+
+class ReglaRiesgoResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reglaId: Literal["riesgo-maximo-fuentes"]
+    version: Literal["1.0", "legacy"]
+    modeloVersion: Literal["perfil-riesgo-1", "perfil-mock-1"]
+    expresion: Literal["max(indicador_riesgo_por_fuente)"]
+
+
+class DegradacionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fuente: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    motivo: Literal["fuente_no_disponible", "fuente_vencida"]
+    politica: Literal["cache", "default"]
+    versionPolitica: Literal["degradacion-1"]
+
+
+class EstadoFuenteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fuente: str
+    estado: Literal["disponible", "cache", "default", "fallida"]
+    intentos: int = Field(ge=0, le=2)
+    motivo: str | None = None
 
 
 class PerfilResponse(BaseModel):
@@ -29,6 +69,8 @@ class PerfilResponse(BaseModel):
     perfilId: UUID
     clienteId: UUID
     referenciaId: UUID
+    operationId: UUID
+    creditoId: str
     version: int = Field(ge=1)
     modeloVersion: str
     score: Decimal = Field(ge=0, le=1)
@@ -38,7 +80,13 @@ class PerfilResponse(BaseModel):
     calculadoEn: AwareDatetime
     vigenteHasta: AwareDatetime
     fuentes: tuple[FuenteResponse, ...]
+    variables: tuple[VariableResponse, ...]
+    variablesExcluidas: tuple[VariableExcluidaResponse, ...]
+    regla: ReglaRiesgoResponse
+    degradaciones: tuple[DegradacionResponse, ...]
+    hashDecision: str = Field(pattern=r"^[0-9a-f]{64}$")
     fallbackUsed: bool
+    estadoFuentes: tuple[EstadoFuenteResponse, ...] = ()
 
 
 class ProveedorPerfilHttp:
@@ -52,6 +100,8 @@ class ProveedorPerfilHttp:
         referencia_id: UUID,
         consentimiento_id: UUID | None = None,
         consentimiento_version: int | None = None,
+        operation_id: UUID | None = None,
+        credito_id: str | None = None,
     ) -> PerfilRiesgo:
         body: dict[str, str | int] = {
             "clienteId": str(cliente_id),
@@ -60,12 +110,20 @@ class ProveedorPerfilHttp:
         if consentimiento_id is not None and consentimiento_version is not None:
             body["consentimientoId"] = str(consentimiento_id)
             body["consentimientoVersion"] = consentimiento_version
+        if operation_id is not None:
+            body["operationId"] = str(operation_id)
+        if credito_id is not None:
+            body["creditoId"] = credito_id
         perfil = self._consultar(
             "/v1/perfiles",
             cliente_id,
             body,
         )
         if perfil.evidencia is None or perfil.evidencia["referenciaId"] != str(referencia_id):
+            raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if operation_id is not None and perfil.evidencia["operationId"] != str(operation_id):
+            raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if credito_id is not None and perfil.evidencia["creditoId"] != credito_id:
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
         if consentimiento_id is not None and (
             perfil.evidencia["consentimientoId"] != str(consentimiento_id)
@@ -126,14 +184,39 @@ class ProveedorPerfilHttp:
         ahora = datetime.now(UTC)
         if (
             payload.clienteId != cliente_id
-            or not payload.calculadoEn <= ahora < payload.vigenteHasta
-            or len(payload.fuentes) != 2
-            or {fuente.nombre for fuente in payload.fuentes} != {"open_finance", "open_data"}
-            or any(
-                not fuente.consultadaEn <= ahora < fuente.vigenteHasta for fuente in payload.fuentes
+            or payload.calculadoEn > ahora
+            or len(payload.fuentes) != len({fuente.nombre for fuente in payload.fuentes})
+            or not {"open_finance", "open_data"}.issubset(
+                fuente.nombre for fuente in payload.fuentes
+            )
+            or any(fuente.consultadaEn > ahora for fuente in payload.fuentes)
+            or payload.fallbackUsed
+            != (
+                any(estado.estado in {"cache", "default"} for estado in payload.estadoFuentes)
+                if payload.estadoFuentes
+                else bool(payload.degradaciones)
+            )
+            or (
+                payload.estadoFuentes
+                and (
+                    len(payload.estadoFuentes) != len(payload.fuentes)
+                    or {estado.fuente for estado in payload.estadoFuentes}
+                    != {fuente.nombre for fuente in payload.fuentes}
+                    or any(estado.estado == "fallida" for estado in payload.estadoFuentes)
+                    or {
+                        estado.fuente
+                        for estado in payload.estadoFuentes
+                        if estado.estado in {"cache", "default"}
+                    }
+                    != {degradacion.fuente for degradacion in payload.degradaciones}
+                )
             )
         ):
             raise ErrorConsultaPerfil("perfilamiento_no_disponible", 503)
+        if payload.vigenteHasta <= ahora:
+            raise ErrorConsultaPerfil("perfil_vencido", 422)
+        if any(fuente.vigenteHasta <= ahora for fuente in payload.fuentes):
+            raise ErrorConsultaPerfil("fuente_vencida", 422)
         return PerfilRiesgo(
             perfil_id=str(payload.perfilId),
             score=payload.score,

@@ -89,6 +89,21 @@ def test_nearest_rank_percentiles_and_counts(tmp_path: Path) -> None:
     assert result["quote_journeys_completed"] == 8
 
 
+def test_mortgage_capacity_uses_bounded_concurrency(tmp_path: Path) -> None:
+    path = write_jtl(
+        tmp_path / "capacity.jtl",
+        [("journey.quote.mortgage-life", "true", 400)] * 20,
+    )
+
+    passing = evaluate(path, 0, True, capacity_concurrency=3)
+    failing = evaluate(path, 0, True, capacity_concurrency=2)
+
+    assert passing["mortgage_capacity_operations_per_hour"] == 27_000
+    assert passing["passed"]
+    assert failing["mortgage_capacity_operations_per_hour"] == 18_000
+    assert not failing["passed"]
+
+
 @pytest.mark.parametrize(
     ("label", "p95", "p99"),
     [

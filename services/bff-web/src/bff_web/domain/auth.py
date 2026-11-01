@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 CHANNEL = "web"
@@ -13,7 +13,8 @@ class User:
     role: str
     document_type: str = "cc"
     identification: str = "1234567890"
-    phone: str = "+573001234567"
+    phone: str | None = None
+    birth_date: date | None = None
     partner_ids: tuple[str, ...] = ()
 
 

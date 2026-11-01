@@ -4,18 +4,21 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 from urllib.error import URLError
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from bff_web.app import create_app as create_bff
 from bff_web.config import Config as BffConfig
 from cotizacion.app import create_app as create_quotes
 from cotizacion.config import Config as QuoteConfig
+from cotizacion.infrastructure.perfil_http import PerfilResponse, ProveedorPerfilHttp
 from cotizacion.infrastructure.persistence.models import CotizacionModel, PagoSimuladoModel
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -30,7 +33,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from perfilamiento.adapters import FuenteMock
 from perfilamiento.app import Config as ProfilingConfig
 from perfilamiento.app import create_app as create_profiling
-from perfilamiento.persistence import RepositorioPerfiles
+from perfilamiento.persistence import PerfilModel, RepositorioPerfiles
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from werkzeug.serving import make_server
@@ -149,12 +152,16 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
             )
         )
         client = bff.test_client()
-        registered = client.post(
+        registered = identity.test_client().post(
             "/v1/usuarios",
             json={
                 "nombre": "Cliente integrado",
                 "correo": "integracion@solventa.co",
                 "contrasena": "Solventa123!",
+                "tipoDocumento": "cc",
+                "numeroDocumento": "1012345678",
+                "telefono": "+573001234567",
+                "fechaNacimiento": "1990-01-01",
             },
         )
         assert registered.status_code == 201
@@ -331,7 +338,7 @@ def test_decisions_without_required_permission_block_the_full_flow(
         assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 0
 
 
-def test_partial_source_failure_never_creates_a_quote(
+def test_partial_source_failure_creates_traceable_degraded_profile(
     flow: Flow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     flow.authorize()
@@ -352,10 +359,96 @@ def test_partial_source_failure_never_creates_a_quote(
             "Idempotency-Key": str(uuid4()),
         },
     )
-    assert response.status_code == 503
-    assert response.get_json()["code"] == "perfilamiento_no_disponible"
+    assert response.status_code == 201
+    profile = flow.client.get(
+        f"{REQUESTS}/{response.get_json()['id']}/perfilamiento",
+        headers=flow.headers,
+    )
+    assert profile.status_code == 200
+    assert profile.get_json()["fallbackUsed"] is True
+    assert profile.get_json()["degradaciones"] == [
+        {
+            "fuente": "open_data",
+            "motivo": "fuente_no_disponible",
+            "politica": "default",
+            "versionPolitica": "degradacion-1",
+        }
+    ]
     with Session(create_engine(flow.quote_database)) as session:
-        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
+
+
+def test_authorized_cached_source_reaches_quote_and_is_explicit(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flow.authorize()
+    first = flow.create_quote()
+    original = flow.client.get(f"{REQUESTS}/{first}/perfilamiento", headers=flow.headers).get_json()
+    monkeypatch.setattr(
+        flow.profiling.extensions["consultar_perfil"],
+        "_fuentes",
+        (FuenteMock("open_finance"), FuenteMock("open_data", "no_disponible")),
+    )
+    second = flow.create_quote()
+    response = flow.client.get(f"{REQUESTS}/{second}/perfilamiento", headers=flow.headers)
+    assert response.status_code == 200
+    profile = response.get_json()
+    assert profile["fallbackUsed"] is True
+    esperada = {
+        **original["fuentes"][1],
+        "version": f"{original['fuentes'][1]['version']}:cache",
+    }
+    assert {**profile["fuentes"][1], "vigenteHasta": None} == {**esperada, "vigenteHasta": None}
+    assert profile["estadoFuentes"][1]["estado"] == "cache"
+    assert profile["estadoFuentes"][1]["motivo"] == "fuente_no_disponible"
+    contract = yaml.safe_load(
+        (ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text(encoding="utf-8")
+    )
+    validator = Draft202012Validator(
+        contract["components"]["schemas"]["Perfilamiento"], format_checker=FormatChecker()
+    )
+    validator.validate(profile)
+    validator.validate(original)
+    without_metadata = {key: value for key, value in original.items() if key != "estadoFuentes"}
+    validator.validate(without_metadata)
+    assert not validator.is_valid({**without_metadata, "fallbackUsed": True})
+    assert not validator.is_valid({**profile, "fallbackUsed": False})
+    extended = {
+        **profile,
+        "fuentes": [*profile["fuentes"], {**profile["fuentes"][0], "nombre": "fuente_adicional"}],
+        "estadoFuentes": [
+            *profile["estadoFuentes"],
+            {**profile["estadoFuentes"][0], "fuente": "fuente_adicional"},
+        ],
+    }
+    validator.validate(extended)
+    with Session(create_engine(flow.quote_database)) as session:
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 2
+
+    repo = cast(RepositorioPerfiles, flow.profiling.extensions["perfiles"])
+    with Session(repo.engine) as session:
+        persisted = session.get(PerfilModel, UUID(profile["perfilId"]))
+        assert persisted is not None
+        decoded = PerfilResponse.model_validate(persisted.contenido)
+    extra = decoded.fuentes[0].model_copy(update={"nombre": "fuente_adicional"})
+    extra_estado = decoded.estadoFuentes[0].model_copy(update={"fuente": "fuente_adicional"})
+    decoded = PerfilResponse.model_validate(
+        {
+            **decoded.model_dump(),
+            "fuentes": (*decoded.fuentes, extra),
+            "estadoFuentes": (*decoded.estadoFuentes, extra_estado),
+        }
+    )
+    assert decoded.fuentes[2].nombre == "fuente_adicional"
+    monkeypatch.setattr(
+        "cotizacion.infrastructure.perfil_http.urlopen",
+        lambda request, timeout: BytesIO(decoded.model_dump_json().encode()),
+    )
+    risk = ProveedorPerfilHttp("http://perfilamiento.invalid", INTERNAL_TOKEN).obtener(
+        str(decoded.perfilId), decoded.clienteId
+    )
+    assert risk.evidencia is not None
+    assert len(risk.evidencia["fuentes"]) == 3
 
 
 def test_expired_profile_blocks_existing_offers(
@@ -417,9 +510,17 @@ def test_real_jwt_payment_recovery_ownership_and_saga(flow: Flow) -> None:
     assert updated["estado"] == "aprobada"
     # Otra sesión JWT real no puede cambiar ownership mediante query ni body.
     password = "Integration123!"
-    registered = flow.client.post(
+    registered = flow.identity.test_client().post(
         "/v1/usuarios",
-        json={"nombre": "Otro cliente", "correo": "otro-pago@solventa.co", "contrasena": password},
+        json={
+            "nombre": "Otro cliente",
+            "correo": "otro-pago@solventa.co",
+            "contrasena": password,
+            "tipoDocumento": "cc",
+            "numeroDocumento": "1098765432",
+            "telefono": "+573009876543",
+            "fechaNacimiento": "1992-02-02",
+        },
     )
     assert registered.status_code == 201
     login = flow.client.post(

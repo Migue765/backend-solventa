@@ -55,6 +55,25 @@ llamada externa si el proveedor ejecuta pero pierde su respuesta antes de persis
 Un reintento completado no consume cuota, uno fallido nuevamente admitido si.
 No se guardan cuerpos originales en reservas ni se retornan PII en recuperacion.
 
+### Oferta explicable de vida hipotecaria (HU49)
+
+Para `mortgage-life`, la operacion persiste además una oferta inmutable en
+`ofertas_hipotecarias`, asociada por `socio_id` y `operation_id`. La oferta guarda
+precio, cobertura, condiciones, explicación y referencias de trazabilidad; también
+conserva la evidencia completa de la decisión con entradas, variables, fuentes,
+perfil, regla y versiones. Los hashes de oferta, decisión y contenido permiten
+comprobar integridad y reconstruir el cálculo sin consultar el catálogo o las reglas
+actuales.
+
+El precio usa el saldo hipotecario, el score del perfil autorizado y la regla
+versionada vigente. La respuesta explica esos factores en lenguaje comercial y
+expone únicamente referencias de trazabilidad; la evidencia completa permanece en
+Cotización. Recuperaciones y reintentos leen la oferta persistida y no vuelven a
+tarificar. Perfil ausente, producto no disponible o regla no vigente abortan antes
+de crear operación u oferta parcial.
+
+Aplicar `alembic upgrade head` para instalar la revisión `ofertas_hipotecarias`.
+
 Overrides administrativos para un socio, sin cambiar limites globales:
 
 ```sh
@@ -63,7 +82,7 @@ flask --app cotizacion.app:create_app configure-partner-limit --partner-id BANCO
 
 El comando conserva la ventana y consumo existentes. Para verificar 429 de forma
 acotada usar un socio sintetico nuevo, dos operaciones diferentes y una tercera;
-otra organizacion debe continuar. Para un benchmark aislado de100 muestras usar
+otra organizacion debe continuar. Para un benchmark aislado de 100 muestras usar
 un socio sintetico propio y `--per-minute 200`, sin elevar umbrales de latencia.
 No requiere nuevos secretos, Redis ni servicio paralelo.
 
@@ -75,6 +94,34 @@ titularidad, referencia, integridad y vigencia. Ofertas, seleccion y nueva
 suscripcion revalidan el consentimiento y el perfil; no hay fallback si fallan.
 Las solicitudes antiguas sin evidencia necesitan una nueva cotizacion.
 Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
+
+### Oferta de la operación del socio (SOL-330)
+
+Aplicar `alembic upgrade head`: la revisión `ofertas_socios` (`0013_ofertas_socios.py`,
+sobre `admision_socios`) agrega la tabla append-only `ofertas_socios`, única por
+socio/operación. No modifica operaciones, cotizaciones ni instantáneas existentes.
+
+`POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=` (ruta interna con
+`INTERNAL_API_TOKEN`, publicada solo por el BFF) combina el rating ya persistido con el
+riesgo individualizado vigente. **El score no se aplica dos veces**: las primas de los tres
+planes son las de la instantánea y los `factores` de cada plan las desglosan (base, tasa,
+ajuste por riesgo con su nivel A/B/C, factor del plan, duración y redondeo, o los factores
+del modelo climático). Antes de persistir se exige:
+
+- cotización vigente e instantánea íntegra (hashes de decisión y contenido);
+- perfil remoto válido para la misma referencia, con perfil y fuentes vigentes;
+- primas reproducibles con sus propias entradas.
+
+Si una entrada está ausente, vencida o es inconsistente responde `422`
+(`cotizacion_vencida`, `perfil_vencido`, `fuente_vencida`, `decision_inconsistente`,
+`decision_sin_tarificacion`) o `503` si Perfilamiento no responde, sin guardar nada.
+La oferta se guarda con `operationId`, fuentes, variables, regla, versiones,
+`hashDecision` y `hashContenido`, junto al evento `OfertaSocioRegistrada` en el outbox
+de la misma transacción. Un reintento o una carrera entre réplicas devuelve la oferta ya
+confirmada sin recalcular ni consultar el perfil. `GET` sobre la misma ruta solo lee:
+`404 oferta_no_encontrada` si aún no existe y `operacion_no_encontrada` si la operación
+no pertenece al socio. El cálculo hace una única lectura del perfil (timeout 0,7 s).
+Requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`.
 
 | Método | Ruta               | Descripción                    |
 |--------|--------------------|--------------------------------|
@@ -89,6 +136,7 @@ Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
 | GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
+| GET/POST | `/v1/socios/solicitudes-cotizacion/{operationId}/oferta` | Recupera o calcula y persiste la oferta del socio |
 
 ### Persistencia de suscripción
 
@@ -195,6 +243,9 @@ El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe
 `Authorization: Bearer`. El servicio interno recibe además `clienteId`, `tipoCliente`,
 `tipoDocumento`, `identificacion`, `correo` y `telefono`; sus consultas usan `clienteId`.
 No se admiten campos adicionales ni datos de otro producto:
+
+En el canal socio, `mortgage-life` recibe además `referenciaCredito`; Cotizacion la conserva
+como `creditoId` real al solicitar HU48 y no la sustituye por `operationId`.
 
 | productoId | datosProducto (todos sus valores son strings) |
 |------------|----------------------------------------------|

@@ -2,15 +2,16 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import User
-from bff_web.domain.errors import InvalidAccessTokenError
+from bff_web.domain.errors import IdentityUnavailableError, InvalidAccessTokenError
 from bff_web.domain.product_data import validate_product_data
 from bff_web.domain.quote_errors import (
     InsuranceProductNotFoundError,
@@ -52,6 +53,8 @@ class QuoteRequestPayload(BaseModel):
         return self
 
     def to_draft(self, user: User) -> QuoteRequestDraft:
+        if user.phone is None:
+            raise ValueError("El cliente no tiene telefono registrado.")
         return QuoteRequestDraft(
             product_id=self.product_id,
             customer_type="persona_natural",
@@ -166,7 +169,20 @@ def create_request() -> tuple[Response, int] | Response:
                 "Selecciona un país de destino disponible.",
             )
     try:
-        record = _gateway().create_request(user.user_id, payload.to_draft(user), idempotency_key)
+        client = cast(IdentityGateway, current_app.extensions["identity_gateway"]).get_client(
+            user.user_id, str(g.correlation_id)
+        )
+    except IdentityUnavailableError:
+        return _unavailable()
+    if client is None or client.phone is None:
+        return problem_response(
+            422,
+            "datos_cliente_incompletos",
+            "Datos del cliente incompletos",
+            "El cliente no tiene telefono registrado.",
+        )
+    try:
+        record = _gateway().create_request(user.user_id, payload.to_draft(client), idempotency_key)
     except InsuranceProductUnavailableError:
         return problem_response(
             422,

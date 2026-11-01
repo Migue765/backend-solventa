@@ -19,6 +19,7 @@ def evaluate(
     expected: int,
     performance: bool = False,
     required_labels: tuple[str, ...] = (),
+    capacity_concurrency: int = 0,
 ) -> dict[str, object]:
     with path.open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
@@ -69,6 +70,18 @@ def evaluate(
     creations = [row for row in rows if row["label"].startswith("quote.create.")]
     accepted = sum(row.get("responseCode") == "201" for row in creations)
     rejected = sum(row.get("responseCode", "").startswith("4") for row in creations)
+    mortgage_samples = groups["journey.quote.mortgage-life"]
+    mortgage_capacity_per_hour = (
+        round(capacity_concurrency * 3_600_000 / (sum(mortgage_samples) / len(mortgage_samples)))
+        if capacity_concurrency and mortgage_samples
+        else None
+    )
+    if (
+        performance
+        and capacity_concurrency
+        and (mortgage_capacity_per_hour is None or mortgage_capacity_per_hour < 20_000)
+    ):
+        errors.append("journey.quote.mortgage-life: capacity below 20000 operations/hour")
     return {
         "passed": not errors,
         "samples": len(rows),
@@ -82,4 +95,6 @@ def evaluate(
         "quote_requests_technical_or_unknown": len(creations) - accepted - rejected,
         "scope": "Local SQLite; real services; academic providers/payment/policy; not ASR proof",
         "latency_gate": performance,
+        "mortgage_capacity_operations_per_hour": mortgage_capacity_per_hour,
+        "capacity_concurrency": capacity_concurrency,
     }

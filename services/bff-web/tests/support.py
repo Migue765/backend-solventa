@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -40,7 +40,22 @@ ISSUER = "https://identidad.solventa.test"
 AUDIENCE = "solventa-api"
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 USER = User(
-    UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"), "Ana Cliente", "ana@solventa.co", "cliente"
+    UUID("2923bf51-1899-4a3e-9547-b8ccb9c2c84f"),
+    "Ana Cliente",
+    "ana@solventa.co",
+    "cliente",
+    document_type="cc",
+    identification="1234567890",
+)
+CLIENT_PROFILE = User(
+    USER.user_id,
+    USER.name,
+    USER.email,
+    USER.role,
+    document_type=USER.document_type,
+    identification=USER.identification,
+    phone="+573001234567",
+    birth_date=date(1985, 2, 10),
 )
 PASSWORD = "Solventa123!"
 ACCESS_TTL = 3600
@@ -189,7 +204,7 @@ class FakeJwks:
 class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
-    clients: tuple[User, ...] = (USER,)
+    clients: tuple[User, ...] = (CLIENT_PROFILE,)
 
     def login_challenge(self, correlation_id: str) -> dict[str, object]:
         self._record("login_challenge", correlation_id)
@@ -231,6 +246,19 @@ class FakeIdentity:
     def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
         self._record("get_client", client_id, correlation_id)
         return next((client for client in self.clients if client.user_id == client_id), None)
+
+    def get_client_by_document(
+        self, document_type: str, identification: str, correlation_id: str
+    ) -> User | None:
+        self._record("get_client_by_document", document_type, identification, correlation_id)
+        return next(
+            (
+                client
+                for client in self.clients
+                if client.document_type == document_type and client.identification == identification
+            ),
+            None,
+        )
 
 
 def rejected(status: int, code: str, retry_after: int | None = None) -> IdentityRejectedError:
@@ -428,5 +456,81 @@ def token_response(access_token: str = "access-jwt") -> dict[str, Any]:
             "nombre": USER.name,
             "correo": USER.email,
             "rol": USER.role,
+            "tipoDocumento": USER.document_type,
+            "numeroDocumento": USER.identification,
         },
+    }
+
+
+def partner_offer_payload(operation_id: UUID, socio_id: str = "BANCO-001") -> dict[str, Any]:
+    """Respuesta de Cotizacion para la oferta persistida de una operacion de socio."""
+    now = datetime.now(UTC).isoformat()
+    factor = {"codigo": "ajuste_riesgo", "descripcion": "Ajuste por riesgo", "valor": "1.07"}
+    return {
+        "ofertaId": str(uuid4()),
+        "operationId": str(operation_id),
+        "socioId": socio_id,
+        "clienteId": str(uuid4()),
+        "productoId": "automotive",
+        "solicitudId": "AQT-2026-123",
+        "cotizacionId": str(uuid4()),
+        "estado": "vigente",
+        "calculadaEn": now,
+        "vigenteHasta": now,
+        "decision": {
+            "hashDecision": "a" * 64,
+            "modelo": "academico-v1",
+            "reglaId": str(uuid4()),
+            "reglaVersion": "academico-v1",
+        },
+        "riesgo": {
+            "perfilId": str(uuid4()),
+            "version": 1,
+            "modeloVersion": "perfil-mock-1",
+            "score": "0.35",
+            "nivel": "A",
+            "consentimientoId": str(uuid4()),
+            "consentimientoVersion": 1,
+            "calculadoEn": now,
+            "vigenteHasta": now,
+            "fallbackUsed": False,
+        },
+        "fuentes": [
+            {
+                "nombre": "open_finance",
+                "version": "mock-1",
+                "consultadaEn": now,
+                "vigenteHasta": now,
+                "simulada": True,
+                "indicadorRiesgo": "0.35",
+            }
+        ],
+        "variables": {
+            "baseAsegurada": "25000000",
+            "duracion": 1,
+            "periodicidad": "mensual",
+            "tasa": "0.0015",
+            "factorPerfil": "0.20",
+            "score": "0.35",
+            "moneda": "COP",
+        },
+        "ofertas": [
+            {
+                "ofertaId": str(uuid4()),
+                "version": 1,
+                "nombre": "Seguro Automotriz Total Esencial",
+                "descripcion": "Plan esencial",
+                "prima": {"monto": "40125.00", "moneda": "COP"},
+                "periodicidad": "mensual",
+                "recomendada": True,
+                "coberturaPrincipal": "Daños al vehículo",
+                "deducible": "$500000.00 COP por evento",
+                "vigencia": "Mensual",
+                "coberturas": ["Daños al vehículo"],
+                "condiciones": ["Condiciones del plan"],
+                "beneficiosAdicionales": [],
+                "factores": [factor],
+            }
+        ],
+        "hashContenido": "b" * 64,
     }
