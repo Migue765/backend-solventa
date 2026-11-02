@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -10,12 +11,18 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 class ErrorPerfilamiento(Exception):
     def __init__(
-        self, codigo: str, status: int, fuentes: list[dict[str, object]] | None = None
+        self,
+        codigo: str,
+        status: int,
+        fuentes: list[dict[str, object]] | None = None,
+        *,
+        operacion: "EstadoConsultaInformacion | None" = None,
     ) -> None:
         super().__init__(codigo)
         self.codigo = codigo
         self.status = status
         self.fuentes = fuentes
+        self.operacion = operacion
 
 
 class Documento(BaseModel):
@@ -267,3 +274,60 @@ class ConsultaInformacionCliente(Documento):
     datos: dict[str, str]
     evidencia_fuentes: tuple[EvidenciaFuente, ...] = Field(alias="evidenciaFuentes")
     consultada_en: AwareDatetime = Field(alias="consultadaEn")
+
+
+@dataclass(frozen=True)
+class ConsultarInformacionComando:
+    operation_id: UUID
+    socio_id: str
+    actor_id: UUID
+    cliente_id: UUID
+    producto_id: str
+    finalidad: str
+    datos_solicitados: tuple[str, ...]
+
+
+EstadoAplicacionInformacion = Literal[
+    "esperando_decision", "pendiente", "completada", "bloqueada", "detenida"
+]
+
+
+class AplicacionInformacion(Documento):
+    estado: EstadoAplicacionInformacion
+    intentos: int = Field(ge=0, le=1)
+    codigo: str | None = None
+    actualizada_en: AwareDatetime = Field(alias="actualizadaEn")
+    acuse_id: UUID | None = Field(default=None, alias="acuseId")
+
+
+class ProcesoInformacion(Documento):
+    tipo: Literal["consulta_informacion_cliente"] = "consulta_informacion_cliente"
+    actor_solicitante_id: UUID = Field(alias="actorSolicitanteId")
+    producto_id: str = Field(alias="productoId")
+    finalidad: Literal["cotizacion"] = "cotizacion"
+    datos_solicitados: tuple[str, ...] = Field(alias="datosSolicitados")
+
+
+class OperacionInformacion(Documento):
+    excepcion_id: UUID = Field(alias="excepcionId")
+    comando: ConsultarInformacionComando
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    consentimiento: Consentimiento
+    aplicacion: AplicacionInformacion
+
+    def proceso(self) -> ProcesoInformacion:
+        return ProcesoInformacion(
+            actor_solicitante_id=self.comando.actor_id,
+            producto_id=self.comando.producto_id,
+            datos_solicitados=self.comando.datos_solicitados,
+        )
+
+
+class EstadoConsultaInformacion(Documento):
+    operation_id: UUID = Field(alias="operationId")
+    socio_id: str = Field(alias="socioId")
+    cliente_id: UUID = Field(alias="clienteId")
+    producto_id: str = Field(alias="productoId")
+    excepcion_id: UUID = Field(alias="excepcionId")
+    estado_decision: Literal["pendiente", "aprobada", "rechazada"] = Field(alias="estadoDecision")
+    aplicacion: AplicacionInformacion

@@ -142,9 +142,12 @@ Son los mismos que ejecuta el flujo `quality.yml` de GitHub Actions. Córrelos d
 ```bash
 python -m ruff format --check .
 python -m ruff check .
+python -m mypy scripts tests
 python -m mypy --config-file services/<servicio>/mypy.ini services/<servicio>/src services/<servicio>/tests
 python -m pytest services/<servicio>/tests
 ```
+
+Ejecuta el comando de tipos por servicio solo si existe su `mypy.ini`; el flujo de CI omite los servicios sin ese archivo.
 
 `ruff format` sin `--check` aplica el formato. Para no generar diferencias ajenas a tu cambio, pásale solo los archivos que modificaste.
 

@@ -1,9 +1,11 @@
 import hashlib
 import json
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from time import monotonic, perf_counter, sleep
 from typing import Literal
 from uuid import UUID, uuid4
@@ -290,7 +292,11 @@ def test_fuente_fallida_abre_circuito_sin_respuesta_parcial(
     )
     servicio = ConsultarInformacionCliente(repo, consentimiento, (fuente,), lambda: AHORA)
 
-    for expected in ("fuente_no_disponible", "fuente_no_disponible", "circuito_abierto"):
+    politica = PoliticaConsultas()
+    for expected in (
+        *("fuente_no_disponible",) * politica.fallos_para_abrir,
+        "circuito_abierto",
+    ):
         with pytest.raises(ErrorPerfilamiento, match=expected):
             servicio.ejecutar(
                 ConsultarInformacionComando(
@@ -305,7 +311,101 @@ def test_fuente_fallida_abre_circuito_sin_respuesta_parcial(
                 "corr-falla",
             )
 
-    assert fuente.llamadas == 2
+    servicio.cerrar()
+    assert fuente.llamadas == politica.intentos * politica.fallos_para_abrir
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
+
+
+@pytest.mark.parametrize("dependencia", ["fuente", "identidad"])
+def test_hu44_acota_fuente_lenta_sin_publicar_resultado_tardio(
+    repo: RepositorioPerfiles,
+    dependencia: str,
+) -> None:
+    cliente = uuid4()
+    liberar = Event()
+    iniciada = Event()
+
+    class PermisosLentos(ConsentimientosPrueba):
+        def obtener(self, cliente_id: UUID, correlation_id: str) -> Consentimiento:
+            if dependencia == "identidad":
+                iniciada.set()
+                assert liberar.wait(timeout=3)
+            return super().obtener(cliente_id, correlation_id)
+
+    class Lenta:
+        nombre = "open_data"
+        llamadas = 0
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            self.llamadas += 1
+            iniciada.set()
+            assert liberar.wait(timeout=3)
+            return FuenteMock("open_data").consultar(cliente_id, ahora)
+
+    fuente = Lenta()
+    servicio = ConsultarInformacionCliente(
+        repo, PermisosLentos(cliente), (FuenteMock("open_finance"), fuente), lambda: AHORA
+    )
+    comando = ConsultarInformacionComando(
+        uuid4(),
+        "BANK-HU44",
+        uuid4(),
+        cliente,
+        "mortgage-life",
+        "cotizacion",
+        ("indicador_riesgo",),
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1) as solicitante:
+            resultado = solicitante.submit(servicio.ejecutar, comando, "hu44-lenta")
+            try:
+                assert iniciada.wait(timeout=1)
+                with pytest.raises(ErrorPerfilamiento, match="dependencia_timeout"):
+                    resultado.result(timeout=PoliticaConsultas().timeout_segundos)
+                assert not liberar.is_set()
+            finally:
+                liberar.set()
+    finally:
+        servicio.cerrar()
+    assert fuente.llamadas == (1 if dependencia == "fuente" else 0)
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
+
+
+def test_hu44_revocacion_en_ultima_fuente_impide_persistir_y_entregar(
+    repo: RepositorioPerfiles,
+) -> None:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+
+    class Revocadora:
+        nombre = "open_data"
+
+        def consultar(self, cliente_id: UUID, ahora: datetime) -> Fuente:
+            assert permisos.actual is not None
+            permisos.actual = permisos.actual.model_copy(update={"estado": "revocado"})
+            return FuenteMock("open_data").consultar(cliente_id, ahora)
+
+    servicio = ConsultarInformacionCliente(
+        repo, permisos, (FuenteMock("open_finance"), Revocadora()), lambda: AHORA
+    )
+    try:
+        with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+            servicio.ejecutar(
+                ConsultarInformacionComando(
+                    uuid4(),
+                    "BANK-HU44",
+                    uuid4(),
+                    cliente,
+                    "mortgage-life",
+                    "cotizacion",
+                    ("indicador_riesgo",),
+                ),
+                "hu44-revocada-en-vuelo",
+            )
+    finally:
+        servicio.cerrar()
     with Session(repo.engine) as session:
         assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
 
@@ -471,6 +571,326 @@ class FuenteControlada:
         if self.falla:
             raise OSError("numero de cuenta y secreto que nunca deben salir del adaptador")
         return FuenteMock("open_data").consultar(cliente_id, ahora)
+
+
+ContextoHu44 = tuple[
+    ConsultarInformacionCliente,
+    ConsentimientosPrueba,
+    FuenteControlada,
+    ConsultarInformacionComando,
+]
+
+
+@pytest.fixture
+def hu44(repo: RepositorioPerfiles) -> Iterator[ContextoHu44]:
+    cliente = uuid4()
+    permisos = ConsentimientosPrueba(cliente)
+    fuente = FuenteControlada()
+    servicio = ConsultarInformacionCliente(
+        repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA
+    )
+    try:
+        yield (
+            servicio,
+            permisos,
+            fuente,
+            ConsultarInformacionComando(
+                uuid4(),
+                "BANK-HU44",
+                uuid4(),
+                cliente,
+                "mortgage-life",
+                "cotizacion",
+                ("indicador_riesgo", "saldo", "movimientos"),
+            ),
+        )
+    finally:
+        servicio.cerrar()
+
+
+@pytest.mark.parametrize(
+    "fallo,codigo,intentos",
+    [
+        ("transitorio", "fuente_no_disponible", 2),
+        ("invalido", "fuente_no_disponible", 2),
+        ("timeout", "dependencia_timeout", 1),
+        ("denegado", "consentimiento_no_vigente", 1),
+    ],
+)
+def test_hu44_fallos_controlados_sin_defaults_ni_datos_privados(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+    monkeypatch: pytest.MonkeyPatch,
+    fallo: str,
+    codigo: str,
+    intentos: int,
+) -> None:
+    servicio, _, fuente, comando = hu44
+
+    def consultar(cliente_id: UUID, ahora: datetime) -> Fuente:
+        fuente.llamadas += 1
+        if fallo == "denegado":
+            raise ErrorPerfilamiento("consentimiento_no_vigente", 403)
+        if fallo == "timeout":
+            raise TimeoutError("detalle privado")
+        if fallo == "invalido":
+            raise ValueError("detalle privado")
+        raise OSError("detalle privado")
+
+    monkeypatch.setattr(fuente, "consultar", consultar)
+    with pytest.raises(ErrorPerfilamiento, match=codigo) as capturado:
+        servicio.ejecutar(comando, "hu44-fallo")
+    assert capturado.value.status == (403 if fallo == "denegado" else 503)
+    assert fuente.llamadas == intentos
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(FuenteCacheModel)) == 0
+        filas = session.scalars(select(ConsultaModel)).all()
+        assert len(filas) == 2
+        assert {fila.contenido["fuente"] for fila in filas} == {"open_finance", "open_data"}
+        assert all(fila.contenido["resultadoConsulta"] == codigo for fila in filas)
+        auditoria = next(
+            fila.contenido for fila in filas if fila.contenido["fuente"] == "open_data"
+        )
+        assert auditoria["resultado"] == codigo
+        assert auditoria["correlationId"] == "hu44-fallo"
+        assert auditoria["presupuestoMs"] == 450
+        assert "detalle privado" not in json.dumps(auditoria)
+
+
+@pytest.mark.parametrize("consumir_todo", [False, True])
+def test_hu44_agotamiento_presupuesto_no_inicia_fuentes(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+    monkeypatch: pytest.MonkeyPatch,
+    consumir_todo: bool,
+) -> None:
+    servicio, permisos, fuente, comando = hu44
+    tiempo = [0.0]
+    politica = PoliticaConsultas()
+    obtener = permisos.obtener
+    llamadas = 0
+    monkeypatch.setattr("perfilamiento.resilience.monotonic", lambda: tiempo[0])
+
+    def obtener_consumido(cliente_id: UUID, correlation_id: str) -> Consentimiento:
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 1:
+            tiempo[0] += politica.journey_segundos - politica.reserva_segundos
+            if not consumir_todo:
+                tiempo[0] -= politica.objetivo_segundos / 2
+        return obtener(cliente_id, correlation_id)
+
+    monkeypatch.setattr(permisos, "obtener", obtener_consumido)
+    monkeypatch.setattr(
+        FuenteMock, "consultar", lambda *args: pytest.fail("No debe iniciar ninguna fuente")
+    )
+    codigo = "dependencia_timeout" if consumir_todo else "presupuesto_agotado"
+    with pytest.raises(ErrorPerfilamiento, match=codigo):
+        servicio.ejecutar(comando, "hu44-presupuesto")
+    assert fuente.llamadas == 0
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
+        auditoria = session.scalars(select(ConsultaModel)).one().contenido
+        assert auditoria["resultado"] == codigo
+        dependencias = auditoria["dependencias"]
+        assert isinstance(dependencias, list)
+        assert dependencias[0]["objetivoExcedido"] is True
+
+
+def test_hu44_cache_durable_explicita_sin_renovar_ni_encadenar(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+) -> None:
+    servicio, permisos, fuente, comando = hu44
+    original = servicio.ejecutar(comando, "hu44-original")
+    fuente.falla = True
+    nuevo = replace(comando, operation_id=uuid4())
+    degradado = servicio.ejecutar(nuevo, "hu44-cache")
+    evidencia = degradado.evidencia_fuentes[1]
+    assert degradado.datos == original.datos == {"indicadorRiesgo": "0.50"}
+    assert evidencia.version == original.evidencia_fuentes[1].version + ":cache"
+    assert evidencia.consultada_en == original.evidencia_fuentes[1].consultada_en
+    assert servicio.ejecutar(nuevo, "hu44-replay") == degradado
+    assert servicio.recuperar(nuevo.socio_id, nuevo.operation_id, "hu44-get") == degradado
+    assert fuente.llamadas == 3
+    servicio.cerrar()
+    reiniciado = ConsultarInformacionCliente(
+        repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA
+    )
+    try:
+        recuperado = reiniciado.ejecutar(replace(comando, operation_id=uuid4()), "hu44-reinicio")
+        assert recuperado.evidencia_fuentes[1] == evidencia
+    finally:
+        reiniciado.cerrar()
+    with Session(repo.engine) as session:
+        cache = session.scalars(
+            select(FuenteCacheModel).where(FuenteCacheModel.nombre == "open_data")
+        ).one()
+        assert cache.contenido["version"] == original.evidencia_fuentes[1].version
+        auditorias = session.scalars(
+            select(ConsultaModel).where(
+                ConsultaModel.contenido["operationId"].as_string() == str(nuevo.operation_id)
+            )
+        ).all()
+        assert {a.contenido["resultado"] for a in auditorias} == {"consultada", "cache"}
+        detalle = next(a.contenido for a in auditorias if a.contenido["resultado"] == "cache")
+        estados = detalle["estadoFuentes"]
+        assert isinstance(estados, list)
+        assert estados[1] == {
+            "fuente": "open_data",
+            "estado": "cache",
+            "intentos": 2,
+            "motivo": "fuente_no_disponible",
+        }
+        assert detalle["degradaciones"] == [
+            {
+                "fuente": "open_data",
+                "motivo": "fuente_no_disponible",
+                "politica": "cache",
+                "versionPolitica": "degradacion-1",
+            }
+        ]
+
+
+@pytest.mark.parametrize(
+    "caso,codigo",
+    [
+        ("vencida", "fuente_no_disponible"),
+        ("futura", "fuente_no_disponible"),
+        ("alterada", "fuente_no_integra"),
+        ("version", "fuente_no_disponible"),
+        ("otro_consentimiento", "fuente_no_disponible"),
+        ("revocado", "consentimiento_no_vigente"),
+    ],
+)
+def test_hu44_cache_no_suple_integridad_vigencia_ni_autorizacion(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+    monkeypatch: pytest.MonkeyPatch,
+    caso: str,
+    codigo: str,
+) -> None:
+    servicio, permisos, fuente, comando = hu44
+    servicio.ejecutar(comando, "hu44-cache-original")
+    fuente.falla = True
+    assert permisos.actual is not None
+    if caso == "vencida":
+        monkeypatch.setattr(servicio, "_reloj", lambda: AHORA + timedelta(minutes=16))
+    elif caso == "futura":
+        monkeypatch.setattr(servicio, "_reloj", lambda: AHORA - timedelta(seconds=1))
+    elif caso == "alterada":
+        with Session(repo.engine) as session, session.begin():
+            cache = session.scalars(
+                select(FuenteCacheModel).where(FuenteCacheModel.nombre == "open_data")
+            ).one()
+            cache.contenido = {**cache.contenido, "indicadorRiesgo": "0.01"}
+    else:
+        cambios: dict[str, dict[str, object]] = {
+            "version": {"version": 2},
+            "otro_consentimiento": {"consentimiento_id": uuid4()},
+            "revocado": {"estado": "revocado", "version": 2},
+        }
+        permisos.actual = permisos.actual.model_copy(update=cambios[caso])
+    with pytest.raises(ErrorPerfilamiento, match=codigo):
+        servicio.ejecutar(replace(comando, operation_id=uuid4()), "hu44-cache-prohibida")
+    if caso == "revocado":
+        assert fuente.llamadas == 1
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 1
+
+
+def test_hu44_revocacion_durable_impide_reintento_con_identidad_obsoleta(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    servicio, permisos, fuente, comando = hu44
+    servicio.ejecutar(comando, "hu44-cache-antes-revocar")
+    assert permisos.actual is not None
+    original = permisos.actual
+
+    def revocar(cliente_id: UUID, ahora: datetime) -> Fuente:
+        fuente.llamadas += 1
+        repo.aplicar_consentimiento(
+            EventoConsentimiento(
+                evento_id=uuid4(),
+                cliente_id=cliente_id,
+                consentimiento_id=original.consentimiento_id,
+                version=2,
+                tipo="ConsentimientoRevocado",
+                estado="revocado",
+                efectiva_en=ahora,
+                correlation_id="hu44-evento",
+            )
+        )
+        raise OSError("fallo transitorio privado")
+
+    monkeypatch.setattr(fuente, "consultar", revocar)
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.ejecutar(replace(comando, operation_id=uuid4()), "hu44-identidad-obsoleta")
+    assert fuente.llamadas == 2
+    assert permisos.actual == original
+    with pytest.raises(ErrorPerfilamiento, match="consentimiento_no_vigente"):
+        servicio.recuperar(comando.socio_id, comando.operation_id, "hu44-get-revocado")
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 1
+
+
+def test_hu44_minimizacion_no_consulta_datos_fuera_del_permiso(hu44: ContextoHu44) -> None:
+    servicio, _, fuente, comando = hu44
+    resultado = servicio.ejecutar(
+        replace(comando, datos_solicitados=("saldo", "movimientos")), "hu44-minimo"
+    )
+    assert resultado.datos == {} and resultado.evidencia_fuentes == ()
+    assert fuente.llamadas == 0
+
+
+def test_hu44_fuente_que_vence_antes_de_entrega_no_se_persiste(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    servicio, permisos, _, comando = hu44
+    ahora = [AHORA]
+    llamadas = 0
+    obtener = permisos.obtener
+
+    def autorizar(cliente_id: UUID, correlation_id: str) -> Consentimiento:
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 4:
+            ahora[0] += timedelta(hours=1)
+        return obtener(cliente_id, correlation_id)
+
+    monkeypatch.setattr(permisos, "obtener", autorizar)
+    monkeypatch.setattr(servicio, "_reloj", lambda: ahora[0])
+    with pytest.raises(ErrorPerfilamiento, match="perfil_vencido"):
+        servicio.ejecutar(comando, "hu44-vencida-en-entrega")
+    with Session(repo.engine) as session:
+        assert session.scalar(select(func.count()).select_from(ConsultaInformacionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(FuenteCacheModel)) == 0
+
+
+def test_hu44_consulta_cache_y_auditoria_hacen_rollback_juntos(
+    hu44: ContextoHu44,
+    repo: RepositorioPerfiles,
+) -> None:
+    servicio, _, _, comando = hu44
+
+    def impedir_commit(conn: object, cursor: object, statement: str, *args: object) -> None:
+        if statement.startswith("INSERT") and ConsultaInformacionModel.__tablename__ in statement:
+            raise RuntimeError("fallo SQL de prueba")
+
+    event.listen(repo.engine, "before_cursor_execute", impedir_commit)
+    try:
+        with pytest.raises(RuntimeError, match="fallo SQL de prueba"):
+            servicio.ejecutar(comando, "hu44-rollback")
+    finally:
+        event.remove(repo.engine, "before_cursor_execute", impedir_commit)
+    with Session(repo.engine) as session:
+        for modelo in (ConsultaInformacionModel, FuenteCacheModel, ConsultaModel):
+            assert session.scalar(select(func.count()).select_from(modelo)) == 0
 
 
 def test_fallback_cache_durable_breaker_y_parcialidad(repo: RepositorioPerfiles) -> None:

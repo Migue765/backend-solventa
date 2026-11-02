@@ -105,6 +105,21 @@ class OfferSelection:
 
 
 @dataclass(frozen=True)
+class ProvisionalOfferSelection:
+    selection: OfferSelection
+    revision: int
+    valid_until: datetime
+
+
+@dataclass(frozen=True)
+class ProvisionalSelectionState:
+    request_id: str
+    selection: ProvisionalOfferSelection | None
+    acceptance: OfferSelection | None
+    offer_status: str | None
+
+
+@dataclass(frozen=True)
 class SubscriptionDecision:
     result: str
     rule_version: str
@@ -144,3 +159,19 @@ class SimulatedPayment:
     billing_period: str
     confirmed_at: datetime
     saga: IssuanceSaga
+
+
+@dataclass(frozen=True)
+class RejectedSimulatedPayment:
+    payment_id: UUID
+    request_id: str
+    subscription_id: UUID
+    offer_id: UUID
+    offer_version: int
+    amount: Money
+    billing_period: str
+    rejected_at: datetime
+    saga: IssuanceSaga
+
+
+SimulatedPaymentResult = SimulatedPayment | RejectedSimulatedPayment

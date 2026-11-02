@@ -1,11 +1,12 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
-from cotizacion.domain.ofertas import SeleccionOferta
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.ofertas import SeleccionOferta, SeleccionProvisional
+from cotizacion.domain.pago import PagoSimulado, ResultadoPagoSimulado, ResultadoSimuladorPago
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -29,9 +30,23 @@ class SolicitudCotizacionRepository(Protocol):
 
 
 class SeleccionOfertaRepository(Protocol):
-    def guardar_seleccion(self, seleccion: SeleccionOferta) -> None: ...
+    def guardar_seleccion(
+        self, seleccion: SeleccionOferta, cliente_id: UUID, revision: int | None = None
+    ) -> SeleccionOferta: ...
 
     def obtener_seleccion(self, solicitud_id: str) -> SeleccionOferta | None: ...
+
+    def buscar_seleccion_provisional(
+        self, cliente_id: UUID, clave: UUID
+    ) -> SeleccionProvisional | None: ...
+
+    def guardar_seleccion_provisional(
+        self, seleccion: SeleccionProvisional, cliente_id: UUID, revision_esperada: int
+    ) -> SeleccionProvisional: ...
+
+    def consultar_estado_seleccion(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> tuple[SeleccionProvisional | None, SeleccionOferta | None]: ...
 
 
 class SuscripcionRepository(Protocol):
@@ -47,9 +62,32 @@ class SuscripcionRepository(Protocol):
 class PagoSimuladoRepository(Protocol):
     def confirmar_pago_simulado(
         self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID, ahora: datetime
-    ) -> PagoSimulado: ...
+    ) -> ResultadoPagoSimulado: ...
 
-    def obtener_pago_simulado(self, solicitud_id: str, cliente_id: UUID) -> PagoSimulado: ...
+    def obtener_pago_simulado(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> ResultadoPagoSimulado: ...
+
+
+class ProveedorPagoSimulado(Protocol):
+    def evaluar(self) -> ResultadoSimuladorPago: ...
+
+
+@dataclass(frozen=True)
+class ReservaEmision:
+    pago: PagoSimulado
+    token: UUID
+    intentos: int
+
+
+class RepositorioEmision(Protocol):
+    def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None: ...
+
+    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None: ...
+
+
+class EmisorPolizas(Protocol):
+    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> UUID: ...
 
 
 class PerfilRiesgoGateway(Protocol):

@@ -69,6 +69,27 @@ def get_client(client_id: UUID) -> Response:
     return response
 
 
+@bp.get("/autorizaciones/socios/<string:partner_id>/usuarios/<uuid:actor_id>")
+def partner_authorization(partner_id: str, actor_id: UUID) -> Response:
+    if not _authorized():
+        return _unauthorized()
+    role = request.args.get("rol")
+    if role not in {"asesor", "socio"} or len(partner_id) > 50:
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Indica rol y socio validos."
+        )
+    repository = cast(SqlUserRepository, current_app.extensions["user_repository"])
+    actor = repository.find_by_id(actor_id)
+    response = jsonify(
+        actorId=str(actor_id),
+        socioId=partner_id,
+        rol=role,
+        autorizado=actor is not None and actor.role == role and partner_id in actor.partner_ids,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _client_to_json(client: User) -> dict[str, object]:
     result: dict[str, object] = {
         "clienteId": str(client.user_id),

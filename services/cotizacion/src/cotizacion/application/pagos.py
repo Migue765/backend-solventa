@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from cotizacion.application.ports import PagoSimuladoRepository
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.pago import ResultadoPagoSimulado
 
 
 class ProcesarPagoSimulado:
@@ -15,10 +15,12 @@ class ProcesarPagoSimulado:
         self._repositorio = repositorio
         self._reloj = reloj
 
-    def confirmar(self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID) -> PagoSimulado:
+    def confirmar(
+        self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID
+    ) -> ResultadoPagoSimulado:
         return self._repositorio.confirmar_pago_simulado(
             solicitud_id, cliente_id, idempotency_key, self._reloj()
         )
 
-    def consultar(self, solicitud_id: str, cliente_id: UUID) -> PagoSimulado:
+    def consultar(self, solicitud_id: str, cliente_id: UUID) -> ResultadoPagoSimulado:
         return self._repositorio.obtener_pago_simulado(solicitud_id, cliente_id)

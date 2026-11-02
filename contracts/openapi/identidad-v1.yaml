@@ -24,6 +24,56 @@ paths:
     $ref: "./biometria-v1.yaml#/paths/~1credenciales"
   /v1/biometria/credenciales/{credencialId}:
     $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
+  /v1/autorizaciones/socios/{socioId}/usuarios/{actorId}:
+    get:
+      tags: [Asesores]
+      operationId: consultarAutorizacionActualSocio
+      summary: Comprueba rol y pertenencia activa actuales para reanudar HU44
+      description: Lectura interna sin conceder permisos ni devolver otras pertenencias.
+      security:
+        - TokenInterno: []
+      parameters:
+        - name: socioId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: actorId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: rol
+          in: query
+          required: true
+          schema:
+            enum: [asesor, socio]
+      responses:
+        "200":
+          description: Cache-Control no-store; autorizado=false si usuario/rol/pertenencia no son actuales.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [actorId, socioId, rol, autorizado]
+                properties:
+                  actorId:
+                    type: string
+                    format: uuid
+                  socioId:
+                    type: string
+                  rol:
+                    enum: [asesor, socio]
+                  autorizado:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          description: Token interno invalido
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/clientes:
     get:
       tags: [Asesores]

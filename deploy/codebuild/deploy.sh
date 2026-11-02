@@ -55,6 +55,29 @@ else
 fi
 
 echo "== Rollout =="
+if [ "$SERVICE_NAME" = "bff-web" ]; then
+  # Extraer solo imagen y dependencia; el resto del entorno pertenece al runtime.
+  if ! bff_patch="$(kubectl set image --local -f "${K8S_DIR}/deployment.yaml" "bff-web=${IMAGE}" \
+    --allow-missing-template-keys=false -o go-template='
+{{- range $container := .spec.template.spec.containers -}}
+{{- if eq $container.name "bff-web" -}}
+{{- range $container.env -}}
+{{- if eq .name "PERFILAMIENTO_SERVICE_URL" -}}
+{{- if index . "value" -}}
+{"spec":{"template":{"spec":{"containers":[{"name":"bff-web","image":{{printf "%q" $container.image}},"env":[{"name":"PERFILAMIENTO_SERVICE_URL","value":{{printf "%q" .value}},"valueFrom":null}]}]}}}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}')"; then
+    echo "No fue posible preparar la actualizacion de bff-web desde su manifiesto." >&2
+    exit 1
+  fi
+  if [ -z "$bff_patch" ]; then
+    echo "Falta PERFILAMIENTO_SERVICE_URL con valor en el manifiesto de bff-web." >&2
+    exit 1
+  fi
+fi
 if [ -f "${K8S_DIR}/hpa.yaml" ]; then
   kubectl apply -f "${K8S_DIR}/hpa.yaml"
 fi
@@ -63,13 +86,27 @@ if [ "$SERVICE_NAME" = "polizas" ]; then
   envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
 else
   kubectl -n "$NAMESPACE" scale deployment/"$SERVICE_NAME" --replicas=1
-  kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
+  if [ "$SERVICE_NAME" = "bff-web" ]; then
+    if ! kubectl -n "$NAMESPACE" patch deployment/"$SERVICE_NAME" --type=strategic -p "$bff_patch"; then
+      echo "No se confirmo la actualizacion de bff-web; revisar su estado antes de reintentar." >&2
+      exit 1
+    fi
+  else
+    kubectl -n "$NAMESPACE" set image deployment/"$SERVICE_NAME" "${SERVICE_NAME}=${IMAGE}"
+  fi
 fi
 if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s; then
   echo "El rollout fallo; revirtiendo a ${previous:-la revision anterior}." >&2
   if [ -n "$previous" ]; then
-    kubectl -n "$NAMESPACE" rollout undo deployment/"$SERVICE_NAME"
-    kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s || true
+    if ! kubectl -n "$NAMESPACE" rollout undo deployment/"$SERVICE_NAME"; then
+      echo "No fue posible iniciar el rollback de ${SERVICE_NAME}." >&2
+      exit 1
+    fi
+    if ! kubectl -n "$NAMESPACE" rollout status deployment/"$SERVICE_NAME" --timeout=300s; then
+      echo "El rollback de ${SERVICE_NAME} no quedo confirmado." >&2
+    else
+      echo "Rollback de ${SERVICE_NAME} confirmado." >&2
+    fi
   fi
   exit 1
 fi

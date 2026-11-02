@@ -30,6 +30,29 @@ Las regresiones locales de manifiestos y despliegue se ejecutan con
 se sustituyen por dobles de prueba, sin modificar el cluster. No sustituyen la
 validacion autenticada del flujo principal con persistencia.
 
+### Actualizacion acotada de BFF Web
+
+`deploy/codebuild/deploy.sh` obtiene `PERFILAMIENTO_SERVICE_URL` del contenedor
+`bff-web` en `deploy/k8s/bff-web/deployment.yaml`. Renderiza localmente con `kubectl`
+un patch estrategico que cambia **solo la imagen y esa variable**, en una unica
+mutacion del pod template. No aplica el Deployment completo: conserva el resto del
+entorno y sus referencias a Secrets, incluido `ENCRYPTED_LOGIN_ENABLED` activado
+en runtime aunque el manifiesto declare `false`. Una URL ausente/vacia o un error
+de renderizado detiene la actualizacion antes de modificar el Deployment.
+
+Si no se confirma el patch, el script falla y pide revisar el estado antes de
+reintentar; no revierte a ciegas una revision desconocida. Si falla el rollout,
+el rollback existente revierte conjuntamente imagen y dependencia, no una
+revision intermedia con solo uno de esos cambios. Tanto el fallo de rollback
+como su confirmacion se informan explicitamente; un rollout fallido nunca
+termina como despliegue exitoso. El comportamiento de imagen, migraciones y
+capacidad de los otros cinco servicios se conserva.
+
+El harness usa AWS/Kubernetes simulados; solo el renderizado y el merge de patches
+usan `kubectl --local`, sin acceder al cluster. Requiere `bash` y `kubectl` locales
+para esas comprobaciones. Las pruebas conservan cifrado, variables ajenas,
+referencias a Secrets y contenedores adicionales. No ejecutan un despliegue real.
+
 Los manifiestos `serviceaccount`, `deployment` y `targetgroupbinding` usan variables `${...}` que se sustituyen con
 `envsubst` a partir de los outputs de Terraform.
 

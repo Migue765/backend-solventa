@@ -131,3 +131,34 @@ def test_dashboard_preserves_decimal_precision_and_uses_only_internal_identity()
     sent = request.call_args.args[0]
     assert sent.full_url == f"http://cotizacion/v1/dashboard?clienteId={user_id}"
     assert sent.headers["Authorization"] == "Bearer test-internal"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {},
+        {"confirmadaEn": "2026-10-18T10:00:00Z"},
+        {"rechazadaEn": None},
+        {"rechazadaEn": "2026-10-18T10:00:00"},
+        {"motivo": "confirmado"},
+        {"simulada": 1},
+        {"importe": {"monto": "0.00", "moneda": "COP"}},
+    ],
+)
+def test_dashboard_validates_rejected_payment_variant(changes: dict[str, object]) -> None:
+    response = payload()
+    payment = response["pagos"][0]
+    rejected_at = payment.pop("confirmadaEn")
+    payment.update(estado="rechazado", rechazadaEn=rejected_at, motivo="rechazo_simulado")
+    payment.update(changes)
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(response).encode()),
+    ):
+        gateway = HttpQuoteGateway("http://cotizacion", internal_api_token="test")
+        if changes:
+            with pytest.raises(QuoteServiceUnavailableError):
+                gateway.get_dashboard(uuid4())
+        else:
+            dashboard = gateway.get_dashboard(uuid4())
+            assert dashboard.model_dump(mode="json", by_alias=True)["pagos"] == response["pagos"]

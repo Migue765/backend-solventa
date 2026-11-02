@@ -10,13 +10,17 @@ from cotizacion.api.schemas import (
     ConfirmarPagoSimuladoRequest,
     RegistrarSolicitudRequest,
     SeleccionarOfertaRequest,
+    SeleccionarProvisionalRequest,
+    estado_seleccion_a_json,
     pago_simulado_a_json,
     producto_a_json,
     resultado_ofertas_a_json,
     seleccion_oferta_a_json,
+    seleccion_provisional_a_json,
     solicitud_a_json,
     suscripcion_a_json,
 )
+from cotizacion.application.emision import completar_emision_academica
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.perfilamiento import validar_perfil
@@ -26,6 +30,7 @@ from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
 from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
+from cotizacion.domain.pago import PagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
@@ -163,8 +168,44 @@ def seleccionar_oferta(solicitud_id: str) -> tuple[Response, int] | Response:
         payload.oferta_id,
         payload.version,
         idempotency_key,
+        payload.revision_seleccion,
     )
     return jsonify(seleccion_oferta_a_json(seleccion))
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/seleccion-provisional")
+def consultar_seleccion_provisional(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    respuesta = jsonify(
+        estado_seleccion_a_json(_ofertas().consultar_provisional(solicitud_id, cliente_id))
+    )
+    respuesta.headers["Cache-Control"] = "no-store"
+    return respuesta
+
+
+@bp.put("/solicitudes-cotizacion/<solicitud_id>/seleccion-provisional")
+def seleccionar_provisional(solicitud_id: str) -> tuple[Response, int] | Response:
+    cliente_id = _cliente_id()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        payload = SeleccionarProvisionalRequest.model_validate(request.get_json(silent=False))
+        clave = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+    except (ValidationError, TypeError, BadRequest, UnsupportedMediaType):
+        return jsonify(error="solicitud_invalida"), 400
+    resultado = _ofertas().seleccionar_provisional(
+        solicitud_id,
+        cliente_id,
+        payload.oferta_id,
+        payload.version,
+        payload.revision_esperada,
+        clave,
+    )
+    respuesta = jsonify(seleccion_provisional_a_json(resultado))
+    respuesta.headers["Cache-Control"] = "no-store"
+    return respuesta
 
 
 @bp.post("/solicitudes-cotizacion/<solicitud_id>/suscripcion")
@@ -202,12 +243,9 @@ def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
         return jsonify(error="solicitud_invalida"), 400
     pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
     polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
-    if polizas is not None:
+    if polizas is not None and isinstance(pago, PagoSimulado):
         repositorio = cast(RepositorioPagosSqlAlchemy, current_app.extensions["repositorio_pagos"])
-        evidencia = repositorio.evidencia_emision(pago)
-        if evidencia is not None:
-            poliza_id = polizas.emitir(evidencia, g.correlation_id)
-            repositorio.marcar_emitida(pago, poliza_id)
+        completar_emision_academica(pago, repositorio, polizas, g.correlation_id)
     return jsonify(pago_simulado_a_json(pago))
 
 

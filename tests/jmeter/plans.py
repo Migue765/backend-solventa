@@ -21,6 +21,20 @@ PRODUCTS = (
 )
 
 
+def _consent_payload(authorized: bool, version: int) -> dict[str, object]:
+    body: dict[str, object] = {"autorizado": authorized, "version": version}
+    if authorized:
+        body["solicitud"] = {
+            "finalidad": "cotizacion",
+            "alcances": ["open_finance", "open_data"],
+            "fuentes": ["open_finance", "open_data"],
+            "datos": ["indicador_riesgo"],
+            "versionTerminos": "1.0",
+            "vigenteHasta": "${consentValidUntil}",
+        }
+    return body
+
+
 def product_data() -> dict[str, dict[str, str]]:
     start = date.today() + timedelta(days=30)
     end = start + timedelta(days=7)
@@ -94,7 +108,11 @@ class Plan:
             "vars.put('email', props.get('runId') + '-' + ctx.getThreadNum() + '-' + "
             "vars.getIteration() + '@example.com'); "
             "vars.put('otherEmail', 'other-' + vars.get('email')); "
-            "vars.put('key', UUID.randomUUID().toString())",
+            "vars.put('document', UUID.randomUUID().toString().replace('-', '').take(16)"
+            ".toUpperCase(java.util.Locale.ROOT)); "
+            "vars.put('key', UUID.randomUUID().toString()); "
+            "vars.put('consentValidUntil', "
+            "java.time.Instant.now().plusSeconds(2505600).toString())",
         )
 
     def script(self, label: str, script: str) -> None:
@@ -188,6 +206,28 @@ class Plan:
             service="mobile" if mobile else "web",
         )
 
+    def provision_customer(self) -> None:
+        self.request(
+            "fixture.customer",
+            "POST",
+            "/v1/usuarios",
+            201,
+            {
+                **self.credentials(),
+                "nombre": "Cliente JMeter sintetico",
+                "tipoDocumento": "passport",
+                "numeroDocumento": "${document}",
+                "telefono": "+573000000000",
+                "fechaNacimiento": "1990-01-01",
+            },
+            check="assert data.usuario.id; assert data.usuario.rol == 'cliente'; "
+            "assert data.usuario.numeroDocumento == vars.get('document'); "
+            "assert data.usuario.telefono == '+573000000000'; "
+            "assert data.usuario.fechaNacimiento == '1990-01-01'",
+            token=None,
+            service="identity",
+        )
+
     def login(self, other: bool = False, mobile: bool = False) -> None:
         variable = "otherToken" if other else "mobileToken" if mobile else "token"
         self.request(
@@ -207,7 +247,7 @@ class Plan:
             "consent." + str(version + 1),
             "PUT",
             CONSENT,
-            body={"autorizado": authorized, "version": version},
+            body=_consent_payload(authorized, version),
             check=f"assert data.version == {version + 1}",
         )
 
@@ -345,7 +385,7 @@ class Plan:
 
 def main_plan(path: Path, threads: int = 1, loops: int = 1, smoke: bool = True) -> None:
     plan = Plan(threads, loops)
-    plan.register()
+    plan.provision_customer()
     plan.login()
     if smoke:
         plan.register(other=True)
@@ -393,7 +433,7 @@ def main_plan(path: Path, threads: int = 1, loops: int = 1, smoke: bool = True) 
             "PUT",
             CONSENT,
             409,
-            {"autorizado": True, "version": 0},
+            _consent_payload(True, 0),
         )
         plan.request("catalog.missing", "GET", "/v1/productos-seguro/missing", 404)
         plan.request(
@@ -533,7 +573,7 @@ def persistence_plan(path: Path) -> None:
 
 def outage_plan(path: Path) -> None:
     plan = Plan()
-    plan.register()
+    plan.provision_customer()
     plan.login()
     plan.consent(True, 0)
     plan.quote("automotive", outage=True)

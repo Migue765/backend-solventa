@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
@@ -95,26 +96,41 @@ def token(keypair: rsa.RSAPrivateKey) -> str:
 def runtime(
     tmp_path: Path, keypair: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Runtime]:
-    database_url = f"sqlite:///{tmp_path / 'dashboard.db'}"
+    with dashboard_runtime(tmp_path, keypair, monkeypatch) as running:
+        yield running
+
+
+@contextmanager
+def dashboard_runtime(
+    tmp_path: Path,
+    keypair: rsa.RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+    config: QuoteConfig | None = None,
+) -> Iterator[Runtime]:
+    config = config or QuoteConfig(
+        database_url=f"sqlite:///{tmp_path / 'dashboard.db'}", internal_api_token=INTERNAL_TOKEN
+    )
+    database_url = config.database_url
     migration_config = AlembicConfig(str(ROOT / "services" / "cotizacion" / "alembic.ini"))
     migration_config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(migration_config, "head")
     engine = create_engine(database_url)
 
-    @event.listens_for(engine, "connect")
-    def enable_foreign_keys(connection: object, _: object) -> None:
-        from sqlite3 import Connection
+    if engine.dialect.name == "sqlite":
 
-        assert isinstance(connection, Connection)
-        connection.execute("PRAGMA foreign_keys=ON")
+        @event.listens_for(engine, "connect")
+        def enable_foreign_keys(connection: object, _: object) -> None:
+            from sqlite3 import Connection
+
+            assert isinstance(connection, Connection)
+            connection.execute("PRAGMA foreign_keys=ON")
 
     factory = sessionmaker(engine, expire_on_commit=False)
-    with factory() as session:
-        assert session.scalar(text("PRAGMA foreign_keys")) == 1
+    if engine.dialect.name == "sqlite":
+        with factory() as session:
+            assert session.scalar(text("PRAGMA foreign_keys")) == 1
     monkeypatch.setattr("cotizacion.app.crear_sesiones", lambda *args: factory)
-    quote_app = create_quote_app(
-        QuoteConfig(database_url=database_url, internal_api_token=INTERNAL_TOKEN)
-    )
+    quote_app = create_quote_app(config)
     server = make_server("127.0.0.1", 0, quote_app)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -138,6 +154,9 @@ def runtime(
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        reconciler = quote_app.extensions.get("conciliador_emision")
+        if reconciler is not None:
+            reconciler.cerrar()
         engine.dispose()
 
 

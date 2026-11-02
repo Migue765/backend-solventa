@@ -37,6 +37,7 @@ def execute(home: Path, plan: Path, stack: LocalStack, run_id: str) -> Path:
         "-j",
         str(plan.with_suffix(".log")),
         "-JrunId=" + run_id,
+        "-JidentityPort=" + str(stack.servers["identity"].server_port),
         "-JwebPort=" + str(stack.servers["web"].server_port),
         "-JmobilePort=" + str(stack.servers["mobile"].server_port),
         "-Jjmeter.save.saveservice.output_format=csv",

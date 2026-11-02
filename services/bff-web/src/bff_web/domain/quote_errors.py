@@ -22,6 +22,12 @@ class OfferUnavailableError(Exception):
     """La oferta no existe, cambió o ya no está vigente."""
 
 
+class OfferSelectionConflictError(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class SimulatedPaymentNotFoundError(Exception):
     """La solicitud del cliente todavía no tiene un pago simulado."""
 

@@ -1,3 +1,5 @@
+from contextlib import ExitStack
+
 import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
@@ -24,6 +26,9 @@ def test_downgrade_elimina_las_tablas(alembic_config, database_url):
     assert "decisiones_suscripcion" not in tablas
     assert "sagas_emision" not in tablas
     assert "pagos_simulados" not in tablas
+    assert "intentos_pago_simulado" not in tablas
+    assert "conciliaciones_emision" not in tablas
+    assert "selecciones_provisionales" not in tablas
 
 
 def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
@@ -93,7 +98,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["ofertas_socios_hipotecarias"]
+    assert script.get_heads() == ["selecciones_provisionales"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
@@ -113,7 +118,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
         assert (
             conexion.scalar(text("select version_num from alembic_version"))
-            == "ofertas_socios_hipotecarias"
+            == "selecciones_provisionales"
         )
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
@@ -142,12 +147,43 @@ def test_union_conserva_suscripcion_y_saga_de_develop(alembic_config):
     url = f"/v1/solicitudes-cotizacion/{solicitud_id}"
     query = {"clienteId": payload["clienteId"]}
     oferta = cliente.get(f"{url}/ofertas", query_string=query).get_json()["ofertas"][0]
-    seleccion = cliente.put(
-        f"{url}/seleccion",
-        query_string=query,
-        json={"ofertaId": oferta["id"], "version": oferta["version"]},
-        headers={"Idempotency-Key": str(uuid4())},
-    )
+    # El codigo actual requiere la migracion nueva; sembramos la aceptacion del esquema 0006.
+    import hashlib
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import UUID
+
+    from cotizacion.infrastructure.persistence.models import CotizacionModel, SeleccionOfertaModel
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    clave_aceptacion = uuid4()
+    fingerprint_aceptacion = hashlib.sha256(
+        f"{oferta['id']}:{oferta['version']}".encode()
+    ).hexdigest()
+    motor_historico = create_engine(database_url)
+    with ExitStack() as recursos, Session(motor_historico) as sesion, sesion.begin():
+        recursos.callback(motor_historico.dispose)
+        cotizacion = sesion.scalar(
+            select(CotizacionModel).where(CotizacionModel.solicitud_id == solicitud_id)
+        )
+        assert cotizacion is not None
+        sesion.add(
+            SeleccionOfertaModel(
+                cotizacion_id=cotizacion.cotizacion_id,
+                solicitud_id=solicitud_id,
+                oferta_id=UUID(oferta["id"]),
+                version=oferta["version"],
+                nombre_oferta=oferta["nombre"],
+                prima_mensual=Decimal(oferta["prima"]["monto"]),
+                moneda=oferta["prima"]["moneda"],
+                periodicidad=oferta["periodicidad"],
+                seleccionada_en=datetime.now(UTC),
+                idempotency_key=clave_aceptacion,
+                request_fingerprint=fingerprint_aceptacion,
+            )
+        )
+    seleccion = cliente.get(f"{url}/seleccion", query_string=query)
     assert seleccion.status_code == 200
     creada = cliente.post(
         f"{url}/suscripcion",
@@ -164,7 +200,65 @@ def test_union_conserva_suscripcion_y_saga_de_develop(alembic_config):
     despues = create_app(Config(database_url=database_url)).test_client()
     assert despues.get(f"{url}/suscripcion", query_string=query).get_json() == creada.get_json()
     assert despues.get(f"{url}/seleccion", query_string=query).get_json() == seleccion.get_json()
+    replay = despues.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": oferta["id"], "version": oferta["version"]},
+        headers={"Idempotency-Key": str(clave_aceptacion)},
+    )
+    assert replay.status_code == 200 and replay.get_json() == seleccion.get_json()
     assert (
         despues.application.extensions["repositorio_cotizaciones"].obtener_suscripcion(solicitud_id)
         == antes
     )
+
+
+def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
+    client, alembic_config, database_url
+):
+    from uuid import uuid4
+
+    from .test_seleccion_provisional import elegir, preparar
+
+    url, query, ofertas = preparar(client)
+    aceptada = client.put(
+        f"{url}/seleccion",
+        query_string=query,
+        json={"ofertaId": ofertas[0]["id"], "version": 1},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert aceptada.status_code == 200
+    assert (
+        client.post(
+            f"{url}/suscripcion", query_string=query, headers={"Idempotency-Key": str(uuid4())}
+        ).status_code
+        == 201
+    )
+    command.downgrade(alembic_config, "conciliacion_emision")
+    motor = create_engine(database_url)
+
+    def historia():
+        with motor.connect() as connection:
+            return {
+                tabla: sorted(connection.execute(text(f'SELECT * FROM "{tabla}"')).all(), key=repr)
+                for tabla in inspect(connection).get_table_names()
+                if tabla not in {"alembic_version", "selecciones_provisionales"}
+            }
+
+    try:
+        antes = historia()
+        command.upgrade(alembic_config, "head")
+        assert historia() == antes
+        with motor.connect() as connection:
+            assert connection.scalar(text("SELECT COUNT(*) FROM selecciones_provisionales")) == 0
+        assert client.get(f"{url}/seleccion", query_string=query).get_json() == aceptada.get_json()
+        otro_url, otro_query, otras = preparar(client)
+        assert elegir(client, otro_url, otro_query, otras[0], 0).status_code == 200
+        with pytest.raises(RuntimeError, match="Conserve las selecciones"):
+            command.downgrade(alembic_config, "conciliacion_emision")
+        assert (
+            client.get(f"{otro_url}/seleccion-provisional", query_string=otro_query).status_code
+            == 200
+        )
+    finally:
+        motor.dispose()

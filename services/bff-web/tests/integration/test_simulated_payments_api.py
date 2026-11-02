@@ -33,6 +33,8 @@ def test_missing_payment_is_distinct_and_scoped(
         ({}, None),
         ({}, "invalid"),
         ({"importe": "1"}, "d6758e98-bc88-44bf-b7ce-f2f759757101"),
+        ({"estado": "confirmado"}, "d6758e98-bc88-44bf-b7ce-f2f759757101"),
+        ({"estado": "rechazado"}, "d6758e98-bc88-44bf-b7ce-f2f759757101"),
         (None, "d6758e98-bc88-44bf-b7ce-f2f759757101"),
     ],
 )
