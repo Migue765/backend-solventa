@@ -10,6 +10,7 @@ from cotizacion.config import Config
 from cotizacion.infrastructure.persistence.models import (
     CotizacionModel,
     DecisionSuscripcionModel,
+    EfectoPagoSimuladoModel,
     IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
@@ -197,11 +198,14 @@ def test_replay_sobrevive_expiracion_y_avance_saga(client, database_url, monkeyp
     clave = str(uuid4())
     pago = pagar(client, base, query, clave).get_json()
 
-    def no_evaluar():
+    def no_evaluar(*_):
         raise AssertionError("Un pago confirmado nunca vuelve a evaluar el simulador")
 
     monkeypatch.setattr(
-        client.application.extensions["repositorio_pagos"]._proveedor, "evaluar", no_evaluar
+        client.application.extensions["procesar_pago_simulado"]._proveedor, "ejecutar", no_evaluar
+    )
+    monkeypatch.setattr(
+        client.application.extensions["procesar_pago_simulado"]._proveedor, "consultar", no_evaluar
     )
     with Session(create_engine(database_url)) as sesion, sesion.begin():
         sesion.execute(
@@ -239,15 +243,27 @@ def test_peticiones_concurrentes_no_duplican_pago_ni_evento(client, database_url
         barrera.wait(timeout=15)
         with client.application.test_client() as concurrente:
             respuesta = pagar(concurrente, base, query, clave if misma_clave else str(uuid4()))
-            assert respuesta.status_code == 200, respuesta.get_json()
-            return respuesta.get_json()
+            return respuesta.status_code, respuesta.get_json()
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         pagos = list(pool.map(confirmar, range(6)))
-    assert all(pago == pagos[0] for pago in pagos)
+    canonico = client.get(base + "/pago-simulado", query_string=query).get_json()
+    assert canonico["estado"] == "confirmado"
+    for status, pago in pagos:
+        if status == 409:
+            assert not misma_clave
+            assert pago["error"] == "pago_en_proceso" and pago["pagoId"] == canonico["id"]
+        else:
+            assert status == 200
+            assert pago["id"] == canonico["id"]
+            if pago["estado"] == "pendiente":
+                assert misma_clave and "confirmadaEn" not in pago
+            else:
+                assert pago == canonico
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1
         assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
+        assert sesion.scalar(select(func.count()).select_from(EfectoPagoSimuladoModel)) == 1
         assert (
             sesion.scalar(
                 select(func.count())
@@ -261,20 +277,30 @@ def test_peticiones_concurrentes_no_duplican_pago_ni_evento(client, database_url
 
 def test_error_outbox_revierte_pago_y_saga(client, database_url):
     base, query, _, _ = preparar(client)
+    clave = str(uuid4())
+    client.application.extensions["conciliador_emision"].cerrar()
 
     def fallar(*_):
         raise RuntimeError("Fallo controlado de persistencia")
 
     event.listen(OutboxEventoModel, "before_insert", fallar)
     try:
-        assert pagar(client, base, query).status_code == 500
+        assert pagar(client, base, query, clave).status_code == 500
     finally:
         event.remove(OutboxEventoModel, "before_insert", fallar)
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
+        assert sesion.scalar(select(func.count()).select_from(EfectoPagoSimuladoModel)) == 1
         saga = sesion.scalar(select(SagaEmisionModel))
         assert (saga.estado, saga.version) == ("pago_pendiente", 1)
-    assert pagar(client, base, query).status_code == 200
+    assert pagar(client, base, query).status_code == 409
+    replay = pagar(client, base, query, clave)
+    assert replay.status_code == 200 and replay.get_json()["estado"] == "pendiente"
+    procesar = client.application.extensions["procesar_pago_simulado"]
+    procesar._reloj = lambda: datetime.now(UTC) + timedelta(seconds=31)
+    procesar.conciliar_uno()
+    assert pagar(client, base, query, clave).get_json()["estado"] == "confirmado"
 
 
 def test_clave_concurrente_en_distintas_solicitudes_no_confirma_ambas(client, database_url):
@@ -413,10 +439,15 @@ def test_misma_clave_concurrente_conserva_un_resultado_y_un_evento(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         respuestas = list(pool.map(procesar, clientes))
-    assert respuestas[0] == respuestas[1]
+    canonico = client.get(base + "/pago-simulado", query_string=query).get_json()
+    assert canonico["estado"] in resultados
+    for respuesta in respuestas:
+        assert respuesta["id"] == canonico["id"]
+        if respuesta["estado"] != "pendiente":
+            assert respuesta == canonico
     with Session(create_engine(database_url)) as sesion:
         intento = sesion.scalars(select(IntentoPagoSimuladoModel)).one()
-        assert intento.resultado == respuestas[0]["estado"]
+        assert intento.resultado == canonico["estado"]
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == (
             1 if intento.resultado == "confirmado" else 0
         )
@@ -430,7 +461,7 @@ def test_misma_clave_concurrente_conserva_un_resultado_y_un_evento(
         )
 
 
-def test_rechazo_y_clave_se_revierten_si_falla_su_auditoria(client, database_url):
+def test_rechazo_conserva_reserva_y_efecto_si_falla_su_auditoria(client, database_url):
     base, query, _, suscripcion = preparar(client)
     rechazador = cliente_simulador(database_url, "rechazado")
 
@@ -443,7 +474,9 @@ def test_rechazo_y_clave_se_revierten_si_falla_su_auditoria(client, database_url
     finally:
         event.remove(OutboxEventoModel, "before_insert", fallar)
     with Session(create_engine(database_url)) as sesion:
-        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 0
+        assert sesion.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
+        assert sesion.scalar(select(IntentoPagoSimuladoModel.resultado)) == "pendiente"
+        assert sesion.scalar(select(EfectoPagoSimuladoModel.resultado)) == "rechazado"
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
     assert client.get(base + "/suscripcion", query_string=query).get_json() == suscripcion
 
@@ -454,6 +487,11 @@ def test_migracion_de_intentos_preserva_pago_historico(client, database_url, ale
     base, query, _, _ = preparar(client)
     clave = str(uuid4())
     pago = pagar(client, base, query, clave).get_json()
+    client.application.extensions["conciliador_emision"].cerrar()
+    # Construye el fixture pre-0015: pago historico sin tabla de intentos ni efectos.
+    with Session(create_engine(database_url)) as sesion, sesion.begin():
+        sesion.query(EfectoPagoSimuladoModel).delete()
+        sesion.query(IntentoPagoSimuladoModel).delete()
     command.downgrade(alembic_config, "ofertas_socios_hipotecarias")
     with Session(create_engine(database_url)) as sesion:
         antes = dict(sesion.execute(select(PagoSimuladoModel.__table__)).mappings().one())
@@ -482,17 +520,21 @@ def test_dos_claves_concurrentes_con_resultados_distintos_convergen_al_confirmad
     def procesar(cliente):
         barrera.wait(timeout=15)
         respuesta = pagar(cliente, base, query)
-        assert respuesta.status_code == 200, respuesta.get_json()
-        return respuesta.get_json()
+        return respuesta.status_code, respuesta.get_json()
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        confirmado, concurrente = list(pool.map(procesar, clientes))
-    assert confirmado["estado"] == "confirmado"
-    if concurrente["estado"] == "confirmado":
-        assert concurrente == confirmado
+        respuestas = list(pool.map(procesar, clientes))
+    for status, respuesta in respuestas:
+        if status == 409:
+            assert respuesta["error"] == "pago_en_proceso"
+        else:
+            assert status == 200 and respuesta["estado"] in {"confirmado", "rechazado"}
+    actual = client.get(base + "/pago-simulado", query_string=query).get_json()
+    if actual["estado"] == "rechazado":
+        confirmado = pagar(clientes[0], base, query).get_json()
     else:
-        assert concurrente["estado"] == "rechazado"
-        assert concurrente["id"] != confirmado["id"]
+        confirmado = actual
+    assert confirmado["estado"] == "confirmado"
     assert client.get(base + "/pago-simulado", query_string=query).get_json() == confirmado
     with Session(create_engine(database_url)) as sesion:
         assert sesion.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 1

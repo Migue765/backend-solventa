@@ -42,6 +42,29 @@ def payload() -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("terminal_field", [None, "confirmadaEn", "rechazadaEn", "motivo"])
+def test_pending_dashboard_is_strict_and_non_terminal(terminal_field: str | None) -> None:
+    data = payload()
+    payment = data["pagos"][0]
+    del payment["confirmadaEn"]
+    payment.update(
+        estado="pendiente", creadaEn="2026-11-01T12:00:00Z", codigo="resultado_no_confirmado"
+    )
+    if terminal_field:
+        payment[terminal_field] = "2026-11-01T12:00:00Z"
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(data).encode()),
+    ):
+        gateway = HttpQuoteGateway("http://cotizacion", internal_api_token="test")
+        if terminal_field:
+            with pytest.raises(QuoteServiceUnavailableError):
+                gateway.get_dashboard(uuid4())
+        else:
+            result = gateway.get_dashboard(uuid4())
+            assert result.model_dump(by_alias=True, mode="json")["pagos"] == data["pagos"]
+
+
 @pytest.mark.parametrize(
     ("collection", "key", "value"),
     [

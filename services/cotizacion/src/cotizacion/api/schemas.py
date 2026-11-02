@@ -22,7 +22,11 @@ from cotizacion.domain.ofertas import (
     SeleccionOferta,
     SeleccionProvisional,
 )
-from cotizacion.domain.pago import PagoSimuladoRechazado, ResultadoPagoSimulado
+from cotizacion.domain.pago import (
+    PagoSimuladoPendiente,
+    PagoSimuladoRechazado,
+    ResultadoPagoSimulado,
+)
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -174,6 +178,18 @@ def pago_simulado_a_json(pago: ResultadoPagoSimulado) -> dict[str, object]:
         "importe": _dinero(pago.importe),
         "periodicidad": pago.periodicidad,
     }
+    if isinstance(pago, PagoSimuladoPendiente):
+        return {
+            **resultado,
+            "estado": "pendiente",
+            "creadaEn": _fecha(pago.creada_en),
+            "codigo": "resultado_no_confirmado",
+            "saga": {
+                "estado": "pago_pendiente",
+                "version": pago.saga_version,
+                "actualizadaEn": _fecha(pago.saga_actualizada_en),
+            },
+        }
     if isinstance(pago, PagoSimuladoRechazado):
         return {
             **resultado,

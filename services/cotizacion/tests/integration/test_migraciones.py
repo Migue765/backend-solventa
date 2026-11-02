@@ -1,12 +1,24 @@
 from contextlib import ExitStack
+from unittest.mock import patch
 
 import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from cotizacion.app import create_app
+from cotizacion.config import Config
+from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
 from cotizacion.infrastructure.persistence.models import Base
 from sqlalchemy import create_engine, inspect, text
+
+
+def cliente_historico(database_url):
+    # El fixture reproduce una version anterior al lifecycle financiero nuevo.
+    with patch.object(ConciliadorEmision, "iniciar"):
+        app = create_app(Config(database_url=database_url))
+    app.extensions["conciliador_emision"].cerrar()
+    return app.test_client()
 
 
 def test_migraciones_coinciden_con_los_modelos(database_url):
@@ -27,6 +39,7 @@ def test_downgrade_elimina_las_tablas(alembic_config, database_url):
     assert "sagas_emision" not in tablas
     assert "pagos_simulados" not in tablas
     assert "intentos_pago_simulado" not in tablas
+    assert "efectos_pago_simulado" not in tablas
     assert "conciliaciones_emision" not in tablas
     assert "selecciones_provisionales" not in tablas
 
@@ -54,8 +67,6 @@ def test_siembra_una_regla_inicial_para_cada_seguro(database_url):
 def test_upgrade_conserva_calculo_y_decision_historicos(alembic_config, database_url):
     from uuid import UUID
 
-    from cotizacion.app import create_app
-    from cotizacion.config import Config
     from cotizacion.infrastructure.persistence.database import crear_sesiones
     from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
         RepositorioCotizacionesSqlAlchemy,
@@ -64,7 +75,7 @@ def test_upgrade_conserva_calculo_y_decision_historicos(alembic_config, database
     from .test_api import solicitud
 
     command.downgrade(alembic_config, "0005")
-    cliente = create_app(Config(database_url=database_url)).test_client()
+    cliente = cliente_historico(database_url)
     respuesta = cliente.post("/v1/cotizaciones", json=solicitud())
     assert respuesta.status_code == 201
     registro = respuesta.get_json()
@@ -88,8 +99,6 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
 ):
     from uuid import UUID
 
-    from cotizacion.app import create_app
-    from cotizacion.config import Config
     from cotizacion.infrastructure.persistence.database import crear_sesiones
     from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
         RepositorioCotizacionesSqlAlchemy,
@@ -98,14 +107,14 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["selecciones_provisionales"]
+    assert script.get_heads() == ["pagos_simulados_pendientes"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
     with create_engine(url).connect() as conexion:
         reglas_antes = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
     assert len(reglas_antes) == cantidad
-    cliente = create_app(Config(database_url=url)).test_client()
+    cliente = cliente_historico(url)
     respuesta = cliente.post("/v1/cotizaciones", json=solicitud())
     assert respuesta.status_code == 201
     repositorio = RepositorioCotizacionesSqlAlchemy(crear_sesiones(url))
@@ -118,7 +127,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
         assert (
             conexion.scalar(text("select version_num from alembic_version"))
-            == "selecciones_provisionales"
+            == "pagos_simulados_pendientes"
         )
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
@@ -135,7 +144,7 @@ def test_union_conserva_suscripcion_y_saga_de_develop(alembic_config):
 
     command.upgrade(alembic_config, "0006")
     database_url = alembic_config.get_main_option("sqlalchemy.url")
-    cliente = create_app(Config(database_url=database_url)).test_client()
+    cliente = cliente_historico(database_url)
     payload = nueva_solicitud()
     respuesta = cliente.post(
         "/v1/solicitudes-cotizacion",
@@ -234,6 +243,7 @@ def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
         ).status_code
         == 201
     )
+    client.application.extensions["conciliador_emision"].cerrar()
     command.downgrade(alembic_config, "conciliacion_emision")
     motor = create_engine(database_url)
 
@@ -242,7 +252,8 @@ def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
             return {
                 tabla: sorted(connection.execute(text(f'SELECT * FROM "{tabla}"')).all(), key=repr)
                 for tabla in inspect(connection).get_table_names()
-                if tabla not in {"alembic_version", "selecciones_provisionales"}
+                if tabla
+                not in {"alembic_version", "selecciones_provisionales", "efectos_pago_simulado"}
             }
 
     try:
@@ -251,6 +262,7 @@ def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
         assert historia() == antes
         with motor.connect() as connection:
             assert connection.scalar(text("SELECT COUNT(*) FROM selecciones_provisionales")) == 0
+            assert connection.scalar(text("SELECT COUNT(*) FROM efectos_pago_simulado")) == 0
         assert client.get(f"{url}/seleccion", query_string=query).get_json() == aceptada.get_json()
         otro_url, otro_query, otras = preparar(client)
         assert elegir(client, otro_url, otro_query, otras[0], 0).status_code == 200

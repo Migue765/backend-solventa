@@ -46,9 +46,7 @@ def test_lee_variables_de_entorno(monkeypatch):
 def test_resultado_simulado_se_configura_solo_en_servidor(monkeypatch, resultado):
     monkeypatch.setenv("PAGO_SIMULADO_RESULTADO", resultado)
     config = Config.desde_entorno()
-    assert SimuladorPago(config.pago_simulado_resultado).evaluar() == ResultadoSimuladorPago(
-        resultado
-    )
+    assert config.pago_simulado_resultado == ResultadoSimuladorPago(resultado)
 
 
 @pytest.mark.parametrize("resultado", ["", "aprobado", "pendiente", "RECHAZADO", "false"])
@@ -57,7 +55,9 @@ def test_rechaza_configuracion_invalida_del_simulador(monkeypatch, resultado):
     with pytest.raises(ValueError, match="PAGO_SIMULADO_RESULTADO"):
         Config.desde_entorno()
     with pytest.raises(ValueError):
-        SimuladorPago(resultado)
+        from sqlalchemy.orm import sessionmaker
+
+        SimuladorPago(sessionmaker(), resultado)
 
 
 @pytest.mark.parametrize("value", ["", "1", "yes", "academica", "ninguna"])

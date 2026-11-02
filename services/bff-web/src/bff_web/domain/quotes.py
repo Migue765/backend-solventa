@@ -174,4 +174,17 @@ class RejectedSimulatedPayment:
     saga: IssuanceSaga
 
 
-SimulatedPaymentResult = SimulatedPayment | RejectedSimulatedPayment
+@dataclass(frozen=True)
+class PendingSimulatedPayment:
+    payment_id: UUID
+    request_id: str
+    subscription_id: UUID
+    offer_id: UUID
+    offer_version: int
+    amount: Money
+    billing_period: str
+    created_at: datetime
+    saga: IssuanceSaga
+
+
+SimulatedPaymentResult = SimulatedPayment | RejectedSimulatedPayment | PendingSimulatedPayment

@@ -373,11 +373,27 @@ el escenario. Solo una nueva accion explicita tras rechazo definitivo debe usar
 otra clave para un nuevo intento. No cambiar la clave por un timeout, 503,
 recarga o recuperacion de emision. Si ya existe un confirmado, una clave nueva
 recupera el mismo pago; una clave utilizada en otra solicitud produce 409.
-GET pago y `dashboard.pagos` priorizan el confirmado; sin el devuelven el ultimo
+GET pago y `dashboard.pagos` priorizan confirmado, pendiente activo y ultimo
 rechazo, que en dashboard lleva `rechazadaEn`/`motivo` y no `confirmadaEn`.
 Un replay de una clave rechazada antigua no cambia ese resultado actual.
 La UI debe discriminar por `estado`, no interpretar todo HTTP 200 como pago exitoso.
-No hay resultado financiero ambiguo/pendiente ni conciliador automatico.
+Un resultado no confirmado devuelve **200 `estado: pendiente`**, `creadaEn`,
+`codigo: resultado_no_confirmado` y el snapshot previo de saga, sin fecha
+terminal ni motivo de rechazo. Cotizacion recupera automaticamente la misma
+identidad mediante su efecto SQL durable; nunca crea un intento nuevo al conciliar.
+Persistir solicitudId+clave antes del POST. Ante pendiente o perdida de respuesta,
+usar GET con `Idempotency-Key` UUID para recuperar exactamente ese intento.
+Una clave desconocida no selecciona implicitamente el confirmado: devuelve404.
+Una clave usada en otra solicitud propia devuelve409; la propiedad se valida antes.
+Otra clave durante pendiente devuelve409 `pago_en_proceso` con `pagoId` y
+`Location` del GET; no genera ni vincula esa clave. No mostrar un nuevo cobro
+hasta un resultado terminal. Para ese409, consultar sin selector y cotejar
+`pagoId`; nunca reenviar ni vincular la clave rival. El gateway declara `location`
+entre las cabeceras CORS expuestas (cambio IaC, requiere despliegue coordinado).
+La indisponibilidad indefinida permanece pendiente,
+sin rechazo forzado. El parser rechaza variantes pendientes incoherentes.
+Esta superficie debe integrarse con el consumidor adaptado antes de desplegar;
+no habilitar fixtures ambiguos para consumidores antiguos.
 
 GET sin resultado devuelve **404 `pago_no_encontrado` solo después de comprobar ownership**;
 404 `solicitud_no_encontrada` significa ajena/inexistente y no debe habilitar pago.

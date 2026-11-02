@@ -383,8 +383,32 @@ class IntentoPagoSimuladoModel(Base):
     __table_args__ = (
         UniqueConstraint("cliente_id", "idempotency_key", name="uq_intentos_pago_idempotencia"),
         CheckConstraint(
-            "resultado IN ('confirmado', 'rechazado')", name="ck_intentos_pago_resultado"
+            "resultado IN ('pendiente', 'confirmado', 'rechazado')",
+            name="ck_intentos_pago_resultado",
         ),
+        CheckConstraint(
+            "(resultado = 'pendiente' AND evaluado_en IS NULL AND huella IS NOT NULL) OR "
+            "(resultado IN ('confirmado', 'rechazado') AND evaluado_en IS NOT NULL)",
+            name="ck_intentos_pago_evaluacion",
+        ),
+        CheckConstraint("intentos_conciliacion >= 0", name="ck_intentos_pago_conciliacion"),
+        CheckConstraint(
+            "(lease_token IS NULL AND lease_hasta IS NULL) OR "
+            "(lease_token IS NOT NULL AND lease_hasta IS NOT NULL)",
+            name="ck_intentos_pago_lease",
+        ),
+        CheckConstraint(
+            "NOT conciliacion_emision_solicitada OR emision_solicitada",
+            name="ck_intentos_pago_emision",
+        ),
+        Index(
+            "uq_intentos_pago_activo",
+            "suscripcion_id",
+            unique=True,
+            sqlite_where=text("resultado IN ('pendiente', 'confirmado')"),
+            postgresql_where=text("resultado IN ('pendiente', 'confirmado')"),
+        ),
+        Index("ix_intentos_pago_conciliacion", "resultado", "proximo_intento_en"),
     )
 
     intento_id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -400,9 +424,36 @@ class IntentoPagoSimuladoModel(Base):
     moneda: Mapped[str] = mapped_column(String(3))
     periodicidad: Mapped[str] = mapped_column(String(20))
     resultado: Mapped[str] = mapped_column(String(20))
-    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evaluado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     saga_version: Mapped[int]
     saga_actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    huella: Mapped[str | None] = mapped_column(String(64))
+    emision_solicitada: Mapped[bool] = mapped_column(default=False, server_default=false())
+    conciliacion_emision_solicitada: Mapped[bool] = mapped_column(
+        default=False, server_default=false()
+    )
+    intentos_conciliacion: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    proximo_intento_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ultimo_error: Mapped[str | None] = mapped_column(String(80))
+    lease_token: Mapped[UUID | None]
+    lease_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EfectoPagoSimuladoModel(Base):
+    __tablename__ = "efectos_pago_simulado"
+    __table_args__ = (
+        CheckConstraint(
+            "resultado IN ('confirmado', 'rechazado')", name="ck_efecto_pago_resultado"
+        ),
+    )
+
+    intento_id: Mapped[UUID] = mapped_column(
+        ForeignKey("intentos_pago_simulado.intento_id", ondelete="RESTRICT"), primary_key=True
+    )
+    huella: Mapped[str] = mapped_column(String(64))
+    resultado: Mapped[str] = mapped_column(String(20))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class ConciliacionEmisionModel(Base):

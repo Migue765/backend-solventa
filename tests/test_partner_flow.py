@@ -39,7 +39,7 @@ def test_portal_preflight_contract_is_owned_by_gateway_not_bff() -> None:
     for setting, required in (
         ("allow_methods", {"GET", "OPTIONS"}),
         ("allow_headers", {"authorization", "api-version", "x-correlation-id"}),
-        ("expose_headers", {"api-version", "x-correlation-id", "retry-after"}),
+        ("expose_headers", {"api-version", "x-correlation-id", "retry-after", "location"}),
     ):
         match = re.search(rf"\b{setting}\s*=\s*(\[[^\]]*\])", cors)
         assert match is not None

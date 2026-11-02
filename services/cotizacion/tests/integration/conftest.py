@@ -5,8 +5,24 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from cotizacion.app import create_app
 from cotizacion.config import Config
+from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
 
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+@pytest.fixture(autouse=True)
+def cerrar_conciliadores(monkeypatch, alembic_config):
+    iniciados = []
+    iniciar = ConciliadorEmision.iniciar
+
+    def iniciar_registrado(worker):
+        iniciar(worker)
+        iniciados.append(worker)
+
+    monkeypatch.setattr(ConciliadorEmision, "iniciar", iniciar_registrado)
+    yield
+    for worker in reversed(iniciados):
+        worker.cerrar()
 
 
 @pytest.fixture

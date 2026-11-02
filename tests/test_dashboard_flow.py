@@ -1,6 +1,7 @@
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
@@ -372,10 +373,13 @@ def test_database_failure_is_not_empty_success(runtime: Runtime, token: str) -> 
     assert "cotizaciones" not in response.get_json()
 
 
-def test_internal_dashboard_fails_closed_without_configuration(tmp_path: Path) -> None:
-    client = create_quote_app(
-        QuoteConfig(database_url=f"sqlite:///{tmp_path / 'unused.db'}")
-    ).test_client()
+def test_internal_dashboard_fails_closed_without_configuration(runtime: Runtime) -> None:
+    _, client, _ = runtime
+    app = create_quote_app(
+        replace(client.application.extensions["cotizacion_config"], internal_api_token="")
+    )
+    client = app.test_client()
+    app.extensions["conciliador_emision"].cerrar()
     assert (
         client.get(
             "/v1/dashboard",
