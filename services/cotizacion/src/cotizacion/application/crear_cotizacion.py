@@ -47,11 +47,11 @@ class CrearCotizacion:
             producto_id=comando.producto_id,
             coberturas=[
                 CoberturaCotizada(
-                    cobertura_id=c.cobertura_id,
-                    suma_asegurada=Dinero(c.suma_asegurada, comando.moneda),
-                    deducible=Dinero(c.deducible, comando.moneda),
+                    cobertura_id=cobertura.cobertura_id,
+                    suma_asegurada=Dinero(cobertura.suma_asegurada, comando.moneda),
+                    deducible=Dinero(cobertura.deducible, comando.moneda),
                 )
-                for c in comando.coberturas
+                for cobertura in comando.coberturas
             ],
         )
         self._calculadora.calcular(cotizacion, comando.perfil_id, self._reloj())

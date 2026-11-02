@@ -46,8 +46,10 @@ class CrearCotizacionRequest(_Solicitud):
             perfil_id=self.perfil_id,
             moneda=self.moneda,
             coberturas=tuple(
-                CoberturaSolicitada(c.cobertura_id, c.suma_asegurada, c.deducible)
-                for c in self.coberturas
+                CoberturaSolicitada(
+                    cobertura.cobertura_id, cobertura.suma_asegurada, cobertura.deducible
+                )
+                for cobertura in self.coberturas
             ),
         )
 
@@ -185,12 +187,12 @@ def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
         },
         "coberturas": [
             {
-                "coberturaId": str(c.cobertura_id),
-                "sumaAsegurada": _dinero(c.suma_asegurada),
-                "deducible": _dinero(c.deducible),
-                "prima": _prima_cobertura(c.prima),
+                "coberturaId": str(cobertura.cobertura_id),
+                "sumaAsegurada": _dinero(cobertura.suma_asegurada),
+                "deducible": _dinero(cobertura.deducible),
+                "prima": _prima_cobertura(cobertura.prima),
             }
-            for c in cotizacion.coberturas
+            for cobertura in cotizacion.coberturas
         ],
     }
 
