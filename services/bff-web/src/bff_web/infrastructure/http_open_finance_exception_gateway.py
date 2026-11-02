@@ -12,8 +12,13 @@ class HttpOpenFinanceExceptionGateway:
         self._base_url = base_url.rstrip("/")
         self._token = token
 
-    def list_pending(self, partner_id: str, correlation_id: str) -> dict[str, object]:
-        query = urlencode({"socioId": partner_id})
+    def list_pending(
+        self, partner_id: str, correlation_id: str, application_state: str | None = None
+    ) -> dict[str, object]:
+        params = {"socioId": partner_id}
+        if application_state is not None:
+            params["estadoAplicacion"] = application_state
+        query = urlencode(params)
         return self._request("GET", f"/v1/excepciones-open-finance?{query}", correlation_id)
 
     def get(self, exception_id: UUID, partner_id: str, correlation_id: str) -> dict[str, object]:
@@ -37,6 +42,23 @@ class HttpOpenFinanceExceptionGateway:
             f"/v1/excepciones-open-finance/{exception_id}/resolver?{query}",
             correlation_id,
             {"decision": decision, "motivo": reason},
+            str(actor_id),
+        )
+
+    def apply(
+        self,
+        exception_id: UUID,
+        partner_id: str,
+        actor_id: UUID,
+        correlation_id: str,
+        impediment: str | None = None,
+    ) -> dict[str, object]:
+        query = urlencode({"socioId": partner_id})
+        return self._request(
+            "POST",
+            f"/v1/excepciones-open-finance/{exception_id}/aplicar?{query}",
+            correlation_id,
+            {"impedimento": impediment} if impediment is not None else {},
             str(actor_id),
         )
 
@@ -81,6 +103,10 @@ class HttpOpenFinanceExceptionGateway:
                 "conflicto_idempotencia": 409,
                 "excepcion_ya_resuelta": 409,
                 "excepcion_no_integra": 503,
+                "actor_no_autorizado": 403,
+                "decision_pendiente": 409,
+                "excepcion_sin_operacion": 409,
+                "operacion_no_integra": 503,
             }
             if isinstance(code, str) and allowed.get(code) == error.code:
                 raise OpenFinanceExceptionError(code, error.code) from error

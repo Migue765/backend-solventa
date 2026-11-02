@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from bff_web.domain.open_finance_exceptions import ExceptionApplication
+
 
 class ClientInformationEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -31,8 +33,23 @@ class ClientInformationResult(BaseModel):
     consulted_at: datetime = Field(alias="consultadaEn")
 
 
+class ClientInformationState(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    operation_id: UUID = Field(alias="operationId")
+    partner_id: str = Field(alias="socioId")
+    client_id: UUID = Field(alias="clienteId")
+    product_id: str = Field(alias="productoId")
+    exception_id: UUID = Field(alias="excepcionId")
+    decision_state: Literal["pendiente", "aprobada", "rechazada"] = Field(alias="estadoDecision")
+    application: ExceptionApplication = Field(alias="aplicacion")
+
+
 class ClientInformationError(Exception):
-    def __init__(self, code: str, status: int) -> None:
+    def __init__(
+        self, code: str, status: int, operation: ClientInformationState | None = None
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.status = status
+        self.operation = operation

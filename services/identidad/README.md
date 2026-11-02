@@ -15,6 +15,15 @@ publica. Contrato: `contracts/openapi/identidad-v1.yaml`.
 | `GET`  | `/.well-known/openid-configuration` | Metadatos del emisor (sin autenticación)      |
 | `GET`  | `/.well-known/jwks.json`            | Clave pública de firma (sin autenticación)    |
 | `GET`  | `/ping`                             | Disponibilidad                                |
+| `GET`  | `/v1/autorizaciones/socios/{socioId}/usuarios/{actorId}?rol=asesor\|socio` | Autorizacion actual interna de HU44 |
+
+La lectura de autorizacion usa el token interno existente y devuelve solamente
+`{actorId,socioId,rol,autorizado}` con `Cache-Control: no-store`. Comprueba el rol y la
+pertenencia a un socio activo desde SQL, no desde un JWT antiguo. Usuario inexistente,
+rol incorrecto o pertenencia ausente/inactiva producen `autorizado:false`; no divulga
+otros socios, correo ni nombre. No concede permisos ni sustituye consentimiento.
+Perfilamiento la usa al aplicar/recuperar una operacion HU44 vinculada; debe estar
+disponible antes de habilitar ese recorrido en las versiones compatibles del BFF/UI.
 
 `/oauth/token` y `/oauth/revoke` aceptan `application/json` y
 `application/x-www-form-urlencoded`. `client_id` (`web` o `movil`) es obligatorio.

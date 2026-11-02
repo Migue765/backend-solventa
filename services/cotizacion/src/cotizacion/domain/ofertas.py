@@ -54,3 +54,18 @@ class SeleccionOferta:
     idempotency_key: UUID
     request_fingerprint: str
     periodicidad: str = "mensual"
+
+
+@dataclass(frozen=True)
+class SeleccionProvisional:
+    seleccion: SeleccionOferta
+    revision: int
+    vigente_hasta: datetime
+
+
+@dataclass(frozen=True)
+class EstadoSeleccionProvisional:
+    solicitud_id: str
+    seleccion: SeleccionProvisional | None
+    aceptacion: SeleccionOferta | None
+    estado_oferta: EstadoOferta | None

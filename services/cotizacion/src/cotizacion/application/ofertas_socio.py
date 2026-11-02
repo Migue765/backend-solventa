@@ -80,7 +80,10 @@ class CalcularOfertaSocio:
         assert evidencia is not None
         if datetime.fromisoformat(evidencia["vigenteHasta"]) <= ahora:
             raise EntradaOfertaInvalidaError("perfil_vencido")
-        if any(datetime.fromisoformat(f["vigenteHasta"]) <= ahora for f in evidencia["fuentes"]):
+        if any(
+            datetime.fromisoformat(fuente["vigenteHasta"]) <= ahora
+            for fuente in evidencia["fuentes"]
+        ):
             raise EntradaOfertaInvalidaError("fuente_vencida")
         if Decimal(instantanea.contenido["perfil"]["score"]) != perfil.score:
             raise EntradaOfertaInvalidaError("decision_inconsistente")

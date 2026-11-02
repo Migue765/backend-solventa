@@ -53,15 +53,13 @@ class DashboardSubscription(DashboardModel):
     saga: DashboardSaga
 
 
-class DashboardPayment(DashboardModel):
+class DashboardPaymentBase(DashboardModel):
     id: UUID
     request_id: str = Field(alias="solicitudId", min_length=1)
     subscription_id: UUID = Field(alias="suscripcionId")
-    status: Literal["confirmado"] = Field(alias="estado")
     simulated: Literal[True] = Field(alias="simulada")
     amount: DashboardMoney = Field(alias="importe")
     billing_period: BillingPeriod = Field(alias="periodicidad")
-    confirmed_at: AwareDatetime = Field(alias="confirmadaEn")
 
     @field_validator("amount")
     @classmethod
@@ -76,6 +74,17 @@ class DashboardPayment(DashboardModel):
         if value is not True:
             raise ValueError("El tablero solo admite pagos simulados")
         return value
+
+
+class DashboardPayment(DashboardPaymentBase):
+    status: Literal["confirmado"] = Field(alias="estado")
+    confirmed_at: AwareDatetime = Field(alias="confirmadaEn")
+
+
+class DashboardRejectedPayment(DashboardPaymentBase):
+    status: Literal["rechazado"] = Field(alias="estado")
+    rejected_at: AwareDatetime = Field(alias="rechazadaEn")
+    reason: Literal["rechazo_simulado"] = Field(alias="motivo")
 
 
 class UnimplementedDomain(DashboardModel):
@@ -124,6 +133,6 @@ class DashboardPolicy(DashboardModel):
 class Dashboard(DashboardModel):
     quotes: list[DashboardQuote] = Field(alias="cotizaciones")
     subscriptions: list[DashboardSubscription] = Field(alias="suscripciones")
-    payments: list[DashboardPayment] = Field(alias="pagos")
+    payments: list[DashboardPayment | DashboardRejectedPayment] = Field(alias="pagos")
     policies: list[DashboardPolicy] | UnimplementedDomain = Field(alias="polizas")
     notifications: UnimplementedDomain = Field(alias="notificaciones")

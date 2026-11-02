@@ -154,6 +154,32 @@ def recover(operation_id: UUID) -> Response:
     return response
 
 
+@bp.get("/consultas-informacion-cliente/<uuid:operation_id>/estado")
+def operation_state(operation_id: UUID) -> Response:
+    claims = partner_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "version_no_soportada", "Version no soportada", "Usa la version 1 de la API."
+        )
+    socio_id = request.args.get("socioId", "")
+    if socio_id not in claims.user.partner_ids:
+        return problem_response(
+            403, "socio_no_autorizado", "Socio no autorizado", "La cuenta no pertenece al socio."
+        )
+    g.audit_partner_id = socio_id
+    gateway = cast(ClientInformationGateway, current_app.extensions["client_information_gateway"])
+    try:
+        state = gateway.state(socio_id, operation_id, claims.user.user_id, str(g.correlation_id))
+    except ClientInformationError as error:
+        return _controlled_error(error)
+    response = jsonify(state.model_dump(mode="json", by_alias=True))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
 def _invalid() -> Response:
     return problem_response(
         400,
@@ -180,12 +206,21 @@ def _controlled_error(error: ClientInformationError) -> Response:
         "finalidad_no_autorizada": "finalidad_no_autorizada",
         "conflicto_idempotencia": "idempotencia_conflicto",
         "consulta_no_encontrada": "consulta_no_encontrada",
+        "actor_no_autorizado": "actor_no_autorizado",
+        "consulta_bloqueada": "consulta_bloqueada",
+        "operacion_rechazada": "operacion_rechazada",
     }
     code = codes.get(error.code, "servicio_no_disponible")
     status = error.status if error.code in codes else 503
+    extensions: dict[str, object] | None = None
+    if error.operation is not None:
+        extensions = {"operacion": error.operation.model_dump(mode="json", by_alias=True)}
+        if status == 503:
+            code = "consulta_bloqueada"
     return problem_response(
         status,
         code,
         "Consulta no autorizada" if status == 403 else "Consulta no disponible",
         "No fue posible consultar informacion autorizada del cliente.",
+        extensions=extensions,
     )

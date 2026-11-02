@@ -1,9 +1,9 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
@@ -15,8 +15,14 @@ from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.documentos import validar_identificacion
-from cotizacion.domain.ofertas import Oferta, ResultadoOfertas, SeleccionOferta
-from cotizacion.domain.pago import PagoSimulado
+from cotizacion.domain.ofertas import (
+    EstadoSeleccionProvisional,
+    Oferta,
+    ResultadoOfertas,
+    SeleccionOferta,
+    SeleccionProvisional,
+)
+from cotizacion.domain.pago import PagoSimuladoRechazado, ResultadoPagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, ProductoSeguro
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -46,8 +52,10 @@ class CrearCotizacionRequest(_Solicitud):
             perfil_id=self.perfil_id,
             moneda=self.moneda,
             coberturas=tuple(
-                CoberturaSolicitada(c.cobertura_id, c.suma_asegurada, c.deducible)
-                for c in self.coberturas
+                CoberturaSolicitada(
+                    cobertura.cobertura_id, cobertura.suma_asegurada, cobertura.deducible
+                )
+                for cobertura in self.coberturas
             ),
         )
 
@@ -134,25 +142,54 @@ class IniciarOperacionHipotecariaRequest(_Solicitud):
 class SeleccionarOfertaRequest(_Solicitud):
     oferta_id: UUID
     version: int = Field(ge=1)
+    revision_seleccion: int | None = Field(default=None, ge=1, strict=True)
+
+    @field_validator("revision_seleccion", mode="before")
+    @classmethod
+    def revision_no_nula(cls, valor: object) -> object:
+        if valor is None:
+            raise ValueError("La revision enviada debe ser un entero positivo.")
+        return valor
+
+
+class SeleccionarProvisionalRequest(_Solicitud):
+    oferta_id: UUID
+    version: int = Field(ge=1)
+    revision_esperada: int = Field(ge=0, strict=True)
 
 
 class ConfirmarPagoSimuladoRequest(_Solicitud):
     pass
 
 
-def pago_simulado_a_json(pago: PagoSimulado) -> dict[str, object]:
-    fecha = pago.confirmada_en.isoformat().replace("+00:00", "Z")
-    return {
+def pago_simulado_a_json(pago: ResultadoPagoSimulado) -> dict[str, object]:
+    resultado: dict[str, object] = {
         "id": str(pago.pago_id),
         "solicitudId": pago.solicitud_id,
         "suscripcionId": str(pago.suscripcion_id),
         "ofertaId": str(pago.oferta_id),
         "ofertaVersion": pago.oferta_version,
-        "estado": "confirmado",
         "simulada": True,
         "referenciaInterna": f"SIM-{pago.pago_id}",
         "importe": _dinero(pago.importe),
         "periodicidad": pago.periodicidad,
+    }
+    if isinstance(pago, PagoSimuladoRechazado):
+        return {
+            **resultado,
+            "estado": "rechazado",
+            "rechazadaEn": _fecha(pago.rechazada_en),
+            "motivo": "rechazo_simulado",
+            "saga": {
+                "estado": "pago_pendiente",
+                "version": pago.saga_version,
+                "actualizadaEn": _fecha(pago.saga_actualizada_en),
+            },
+        }
+    fecha = _fecha(pago.confirmada_en)
+    return {
+        **resultado,
+        "estado": "confirmado",
         "confirmadaEn": fecha,
         "saga": {
             "estado": "pago_confirmado",
@@ -185,12 +222,12 @@ def cotizacion_a_json(cotizacion: Cotizacion) -> dict:
         },
         "coberturas": [
             {
-                "coberturaId": str(c.cobertura_id),
-                "sumaAsegurada": _dinero(c.suma_asegurada),
-                "deducible": _dinero(c.deducible),
-                "prima": _prima_cobertura(c.prima),
+                "coberturaId": str(cobertura.cobertura_id),
+                "sumaAsegurada": _dinero(cobertura.suma_asegurada),
+                "deducible": _dinero(cobertura.deducible),
+                "prima": _prima_cobertura(cobertura.prima),
             }
-            for c in cotizacion.coberturas
+            for cobertura in cotizacion.coberturas
         ],
     }
 
@@ -266,6 +303,23 @@ def seleccion_oferta_a_json(seleccion: SeleccionOferta) -> dict[str, object]:
     }
 
 
+def seleccion_provisional_a_json(seleccion: SeleccionProvisional) -> dict[str, object]:
+    return {
+        **seleccion_oferta_a_json(seleccion.seleccion),
+        "revision": seleccion.revision,
+        "vigenteHasta": _fecha(seleccion.vigente_hasta),
+    }
+
+
+def estado_seleccion_a_json(estado: EstadoSeleccionProvisional) -> dict[str, object]:
+    return {
+        "solicitudId": estado.solicitud_id,
+        "seleccion": seleccion_provisional_a_json(estado.seleccion) if estado.seleccion else None,
+        "aceptacion": seleccion_oferta_a_json(estado.aceptacion) if estado.aceptacion else None,
+        "estadoOferta": estado.estado_oferta.value if estado.estado_oferta else None,
+    }
+
+
 def suscripcion_a_json(suscripcion: Suscripcion) -> dict[str, object]:
     return {
         "id": str(suscripcion.suscripcion_id),
@@ -315,7 +369,9 @@ def _oferta_a_json(oferta: Oferta) -> dict[str, object]:
 
 
 def _fecha(fecha: datetime) -> str:
-    return fecha.isoformat().replace("+00:00", "Z")
+    if fecha.tzinfo is None:
+        fecha = fecha.replace(tzinfo=UTC)
+    return fecha.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _producto_publico(producto_interno_id: UUID) -> str:

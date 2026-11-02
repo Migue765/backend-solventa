@@ -41,6 +41,14 @@ class SeleccionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una oferta seleccionada."""
 
 
+class SeleccionDesactualizadaError(Exception):
+    """La confirmacion no corresponde a la revision provisional actual."""
+
+
+class SeleccionNoModificableError(Exception):
+    """La operacion ya tiene una aceptacion terminal."""
+
+
 class SuscripcionNoEncontradaError(Exception):
     """La solicitud todavía no tiene una suscripción."""
 

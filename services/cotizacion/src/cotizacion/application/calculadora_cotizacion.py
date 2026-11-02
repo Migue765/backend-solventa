@@ -98,8 +98,8 @@ class CalculadoraCotizacion:
                 ],
             }
             primas = {
-                c.cobertura_id: self._tarificador.calcular_prima(regla, perfil, c)
-                for c in cotizacion.coberturas
+                cobertura.cobertura_id: self._tarificador.calcular_prima(regla, perfil, cobertura)
+                for cobertura in cotizacion.coberturas
             }
         elif producto is not None:
             if regla.version != VERSION_ACADEMICA or datos_producto is None:
@@ -143,8 +143,8 @@ class CalculadoraCotizacion:
             primas = {cobertura.cobertura_id: Dinero(Decimal(planes[0]["prima"]), "COP")}
         else:
             primas = {
-                c.cobertura_id: self._tarificador.calcular_prima(regla, perfil, c)
-                for c in cotizacion.coberturas
+                cobertura.cobertura_id: self._tarificador.calcular_prima(regla, perfil, cobertura)
+                for cobertura in cotizacion.coberturas
             }
         cotizacion.calcular(primas, ahora, self._vigencia)
         cotizacion.registrar_decision(

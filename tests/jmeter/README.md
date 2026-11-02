@@ -45,6 +45,17 @@ aplicaciones Flask existentes en loopback y puertos efimeros. Usa JWT RSA/JWKS r
 tokens internos aleatorios y el hashing de contrasenas normal de Identidad. No reemplaza
 gateways, no usa Flask test_client ni mocks de servicios propios. Las llamadas entre
 BFF, Identidad, Perfilamiento, Cotizacion y Polizas viajan por HTTP.
+El BFF recibe tambien el puerto efimero del Perfilamiento de su propia
+instancia para consultas de informacion del cliente; no usa el default
+`localhost:5003` de una aplicacion ajena.
+
+Los clientes que cotizan se preparan por la API existente de Identidad en el puerto
+de esta misma instancia, con documento sintetico unico, telefono y fecha de nacimiento.
+Este setup no acredita el registro frontend ni implementa captura de datos maestros.
+El registro minimo por los BFF web/movil se prueba por separado; no proporciona los
+datos completos que exige cotizar. La negativa sin consentimiento conserva su
+`403 consentimiento_ausente`, sin confundirla con el `422 datos_cliente_incompletos`
+que corresponde a una cuenta sin telefono.
 
 `DATABASE_URL`, `DB_SCHEMA` y `POLIZAS_DATABASE_URL` deben estar sin definir: el
 bootstrap se niega a arrancar si pudieran redirigir una migracion fuera del entorno.
@@ -68,7 +79,8 @@ al cerrar normalmente. No usarlo como servidor de produccion.
 El smoke ejecuta ocho contrataciones y una novena durante la falla controlada.
 La fase de reinicio prueba persistencia del servicio Polizas, no un reinicio completo
 de los seis procesos. La recuperacion es por reintento HTTP del cliente, no por un
-worker de conciliacion inexistente. La respuesta de pago conserva la instantanea
+recuperador automatico en la configuracion predeterminada de este harness.
+La respuesta de pago conserva la instantanea
 `saga=pago_confirmado`; la consulta de suscripcion y el dashboard verifican `emitida`.
 
 Los tests pytest existentes siguen cubriendo, entre otros, vencimiento del perfil,
@@ -159,6 +171,14 @@ intentos. Las llamadas entre servicios siguen usando HTTP real. Registrar usuari
 sintéticos conserva el contrato existente; login web requiere desafío + JWE.
 Móvil conserva su login. Sin el flag, no cambia el contrato heredado ni los planes JMeter.
 También se admite `LocalStack(directory, encrypted_login_enabled=True)` desde pytest.
+Para la regresion acotada de acuse perdido puede usarse ademas
+`conciliacion_emision_habilitada=True`: configura la opcion real de Cotizacion,
+mantiene el wiring propio y cierra su hilo/pool junto al servidor. No añade un
+endpoint para elegir el resultado ni modifica autenticacion. La perdida de un
+acuse se inyecta solo en pruebas sobre `PolizasHttp.emitir`, despues de ejecutar
+el metodo real que persiste la poliza, lanzando una unica
+`ServicioPolizasNoDisponibleError`; las siguientes llamadas usan el metodo real.
+Esta opcion no acredita firma, conciliacion financiera ni ASR-EMI-01/AWS.
 El helper CLI guarda SQLite bajo `reports/solventa-e2e-<id>` dentro del checkout
 y elimina solo ese directorio al cerrar.
 
@@ -172,7 +192,30 @@ No hay usuarios sembrados. Registrar `POST /v1/usuarios` (movil:
 `/movil/v1/usuarios`) con `nombre`, `correo` unico `@example.com` y `contrasena`
 `Solventa123!`; login en `/v1/sesiones` o `/movil/v1/sesiones`. Antes de cotizar,
 web debe autorizar `PUT /v1/consentimientos/perfilamiento` con Bearer y
-`{"autorizado":true,"version":0}`. Perfilamiento y Polizas estan habilitados.
+un body completo. Por ejemplo, preparar el JSON con una vigencia calculada
+al ejecutar (maximo 30 dias), no con una fecha fija:
+
+```powershell
+$consentimiento = @{
+  autorizado = $true
+  version = 0
+  solicitud = @{
+    finalidad = 'cotizacion'
+    alcances = @('open_finance', 'open_data')
+    fuentes = @('open_finance', 'open_data')
+    datos = @('indicador_riesgo')
+    versionTerminos = '1.0'
+    vigenteHasta = (Get-Date).ToUniversalTime().AddDays(29).ToString('o')
+  }
+} | ConvertTo-Json -Depth 4
+```
+
+Enviar `$consentimiento` al endpoint indicado con el JWT local, sin imprimirlo.
+Para revocar una autorizacion vigente se envia `autorizado:false` y su version
+actual, sin `solicitud`. Reautorizar requiere nuevamente la solicitud completa.
+Los planes generados usan el mismo alcance y calculan su vigencia de 29 dias
+en cada iteracion mediante `java.time.Instant.now()`, no al generar el JMX.
+Perfilamiento y Polizas estan habilitados.
 La vigencia de la DB dura todo el proceso, por lo que recargas y relogins consultan
 persistencia real. SIGINT/SIGTERM cierra servidores y elimina datos temporales.
 Para CI de otros repos, fijar el SHA que contiene este bootstrap, no un develop anterior.

@@ -1,11 +1,14 @@
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from cotizacion.api.schemas import CrearCotizacionRequest, cotizacion_a_json
+from cotizacion.api.schemas import CrearCotizacionRequest, cotizacion_a_json, pago_simulado_a_json
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
+from cotizacion.domain.pago import PagoSimulado, PagoSimuladoRechazado
+from cotizacion.infrastructure.persistence.repositorio_cotizaciones import _fecha_dashboard
 from pydantic import ValidationError
 
 
@@ -65,3 +68,41 @@ def test_serializa_cotizacion_en_camel_case_y_montos_como_texto():
     assert json["primaEstimada"] == {"monto": "15.00", "moneda": "COP"}
     assert json["validaHasta"] == "2026-10-31T00:00:00+00:00"
     assert json["coberturas"][0]["sumaAsegurada"] == {"monto": "1000.00", "moneda": "COP"}
+
+
+@pytest.mark.parametrize("desfase", [-5, 0, 5.5])
+@pytest.mark.parametrize("rechazado", [False, True])
+def test_snapshot_pago_es_identico_al_recuperar_otro_huso_horario(desfase, rechazado):
+    instante = datetime(2026, 11, 1, 2, 3, 4, 123456, tzinfo=UTC)
+    en_base = instante.astimezone(timezone(timedelta(hours=desfase)))
+    campos = {
+        "pago_id": uuid4(),
+        "solicitud_id": "AQT-2026-ABCDEF1234",
+        "suscripcion_id": uuid4(),
+        "oferta_id": uuid4(),
+        "oferta_version": 1,
+        "importe": Dinero(Decimal("100.00"), "COP"),
+        "periodicidad": "mensual",
+    }
+    if rechazado:
+        pago = PagoSimuladoRechazado(
+            **campos, rechazada_en=instante, saga_version=1, saga_actualizada_en=instante
+        )
+        recuperado = replace(pago, rechazada_en=en_base, saga_actualizada_en=en_base)
+    else:
+        pago = PagoSimulado(**campos, confirmada_en=instante, saga_version=2)
+        recuperado = replace(pago, confirmada_en=en_base)
+    esperado = pago_simulado_a_json(pago)
+    assert esperado["saga"]["actualizadaEn"] == "2026-11-01T02:03:04.123456Z"
+    assert pago_simulado_a_json(recuperado) == esperado
+
+
+@pytest.mark.parametrize("desfase", [None, -5, 0, 5.5])
+def test_dashboard_normaliza_el_instante_utc_sin_cambiarlo(desfase):
+    instante = datetime(2026, 11, 1, 2, 3, 4, 123456, tzinfo=UTC)
+    en_base = (
+        instante.replace(tzinfo=None)
+        if desfase is None
+        else instante.astimezone(timezone(timedelta(hours=desfase)))
+    )
+    assert _fecha_dashboard(en_base) == "2026-11-01T02:03:04.123456Z"

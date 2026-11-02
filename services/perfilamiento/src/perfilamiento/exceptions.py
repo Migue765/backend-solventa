@@ -5,7 +5,13 @@ from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-from perfilamiento.domain import Consentimiento, ErrorPerfilamiento
+from perfilamiento.domain import (
+    AplicacionInformacion,
+    Consentimiento,
+    ErrorPerfilamiento,
+    EstadoAplicacionInformacion,
+    ProcesoInformacion,
+)
 from perfilamiento.persistence import RepositorioPerfiles
 from perfilamiento.ports import Consentimientos
 
@@ -81,6 +87,8 @@ class ExcepcionOpenFinance(BaseModel):
     decision: Literal["aprobar", "rechazar"] | None = None
     motivo: str | None = None
     idempotente: bool = False
+    proceso: ProcesoInformacion | None = None
+    aplicacion: AplicacionInformacion | None = None
 
 
 class GestionarExcepcionesOpenFinance:
@@ -89,10 +97,12 @@ class GestionarExcepcionesOpenFinance:
         repositorio: RepositorioPerfiles,
         consentimientos: Consentimientos,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
+        autorizar_asesor: Callable[[UUID, str, str], None] | None = None,
     ) -> None:
         self._repositorio = repositorio
         self._consentimientos = consentimientos
         self._reloj = reloj
+        self._autorizar_asesor = autorizar_asesor
 
     def abrir(
         self, comando: AbrirExcepcionOpenFinance, correlation_id: str
@@ -110,7 +120,7 @@ class GestionarExcepcionesOpenFinance:
                 or actual.motivo_bloqueo != comando.motivo_bloqueo
             ):
                 raise ErrorPerfilamiento("conflicto_idempotencia", 409)
-            return actual.model_copy(update={"idempotente": True})
+            return self._presentar(actual.model_copy(update={"idempotente": True}))
 
         consentimiento = self._obtener_consentimiento(
             comando.cliente_id,
@@ -118,51 +128,26 @@ class GestionarExcepcionesOpenFinance:
             comando.consentimiento_id,
             comando.consentimiento_version,
         )
-        ahora = self._reloj()
-        excepcion = ExcepcionOpenFinance(
-            excepcion_id=uuid4(),
-            operation_id=comando.operation_id,
-            socio_id=comando.socio_id,
-            cliente_id=comando.cliente_id,
-            codigo=comando.codigo,
-            motivo_bloqueo=comando.motivo_bloqueo,
-            consentimiento=self._consentimiento_json(consentimiento),
-            estado="pendiente",
-            estado_anterior="procesamiento_automatico_bloqueado",
-            creado_en=ahora,
-            correlation_id=correlation_id,
-            trazabilidad={
-                "estadoAnterior": "procesamiento_automatico_bloqueado",
-                "estadoActual": "pendiente",
-                "alcance": "open_finance",
-                "creadoEn": ahora.isoformat(),
-                "correlationId": correlation_id,
-            },
+        excepcion, evento = construir_excepcion(
+            comando, consentimiento, correlation_id, self._reloj()
         )
-        contenido = excepcion.model_dump(mode="json", by_alias=True, exclude={"idempotente"})
-        evento: dict[str, object] = {
-            "eventoId": str(uuid4()),
-            "excepcionId": str(excepcion.excepcion_id),
-            "operationId": str(excepcion.operation_id),
-            "actorId": None,
-            "fecha": ahora.isoformat(),
-            "motivo": comando.motivo_bloqueo,
-            "alcance": "open_finance",
-            "estadoAnterior": "procesamiento_automatico_bloqueado",
-            "estadoActual": "pendiente",
-            "correlationId": correlation_id,
-            "tipo": "ExcepcionOpenFinanceCreada",
-        }
+        contenido = excepcion.model_dump(
+            mode="json", by_alias=True, exclude={"idempotente", "proceso", "aplicacion"}
+        )
         persisted = self._repositorio.registrar_excepcion_open_finance(contenido, evento)
-        return ExcepcionOpenFinance.model_validate(persisted)
+        return self._presentar(ExcepcionOpenFinance.model_validate(persisted))
 
-    def listar_pendientes(self, socio_id: str) -> tuple[ExcepcionOpenFinance, ...]:
-        items = self._repositorio.listar_excepciones_open_finance(socio_id, "pendiente")
-        return tuple(ExcepcionOpenFinance.model_validate(item) for item in items)
+    def listar_pendientes(
+        self, socio_id: str, estado_aplicacion: EstadoAplicacionInformacion | None = None
+    ) -> tuple[ExcepcionOpenFinance, ...]:
+        items = self._repositorio.listar_excepciones_open_finance(
+            socio_id, "pendiente" if estado_aplicacion is None else None, estado_aplicacion
+        )
+        return tuple(self._presentar(ExcepcionOpenFinance.model_validate(item)) for item in items)
 
     def obtener(self, excepcion_id: UUID, socio_id: str) -> ExcepcionOpenFinance:
         contenido = self._repositorio.obtener_excepcion_open_finance(excepcion_id, socio_id)
-        return ExcepcionOpenFinance.model_validate(contenido)
+        return self._presentar(ExcepcionOpenFinance.model_validate(contenido))
 
     def obtener_por_operacion(self, operation_id: UUID, socio_id: str) -> ExcepcionOpenFinance:
         contenido = self._repositorio.obtener_excepcion_open_finance_por_operacion(
@@ -170,7 +155,7 @@ class GestionarExcepcionesOpenFinance:
         )
         if contenido is None:
             raise ErrorPerfilamiento("excepcion_no_encontrada", 404)
-        return ExcepcionOpenFinance.model_validate(contenido)
+        return self._presentar(ExcepcionOpenFinance.model_validate(contenido))
 
     def resolver(
         self,
@@ -181,7 +166,18 @@ class GestionarExcepcionesOpenFinance:
         correlation_id: str,
     ) -> ExcepcionOpenFinance:
         actual = self.obtener(excepcion_id, socio_id)
+        if actual.proceso is not None:
+            if self._autorizar_asesor is None:
+                raise ErrorPerfilamiento("identidad_no_disponible", 503)
+            self._autorizar_asesor(actor_id, socio_id, correlation_id)
         if actual.estado != "pendiente":
+            if (
+                actual.proceso is not None
+                and actual.actor_id == actor_id
+                and actual.decision == decision.decision
+                and actual.motivo == decision.motivo
+            ):
+                return actual.model_copy(update={"idempotente": True})
             raise ErrorPerfilamiento("excepcion_ya_resuelta", 409)
         if decision.decision == "aprobar":
             self._obtener_consentimiento(
@@ -209,7 +205,7 @@ class GestionarExcepcionesOpenFinance:
                 },
                 "idempotente": False,
             }
-        ).model_dump(mode="json", by_alias=True, exclude={"idempotente"})
+        ).model_dump(mode="json", by_alias=True, exclude={"idempotente", "proceso", "aplicacion"})
         evento = {
             "eventoId": str(uuid4()),
             "excepcionId": str(excepcion_id),
@@ -227,7 +223,19 @@ class GestionarExcepcionesOpenFinance:
         persistido = self._repositorio.resolver_excepcion_open_finance(
             excepcion_id, socio_id, contenido, evento
         )
-        return ExcepcionOpenFinance.model_validate(persistido)
+        return self._presentar(ExcepcionOpenFinance.model_validate(persistido))
+
+    def _presentar(self, excepcion: ExcepcionOpenFinance) -> ExcepcionOpenFinance:
+        operacion = self._repositorio.buscar_operacion_informacion(
+            excepcion.socio_id, excepcion.operation_id
+        )
+        if operacion is None:
+            return excepcion
+        if operacion.excepcion_id != excepcion.excepcion_id:
+            raise ErrorPerfilamiento("operacion_no_integra", 503)
+        return excepcion.model_copy(
+            update={"proceso": operacion.proceso(), "aplicacion": operacion.aplicacion}
+        )
 
     def _obtener_consentimiento(
         self,
@@ -237,7 +245,7 @@ class GestionarExcepcionesOpenFinance:
         consentimiento_version: int,
     ) -> Consentimiento:
         consentimiento = self._consentimientos.obtener(cliente_id, correlation_id)
-        consentimiento.validar(cliente_id, self._reloj())
+        consentimiento.validar(cliente_id, self._reloj(), ("open_finance",))
         self._repositorio.validar_version_consentimiento(consentimiento)
         if (
             consentimiento.consentimiento_id != consentimiento_id
@@ -257,3 +265,45 @@ class GestionarExcepcionesOpenFinance:
             "finalidad": consentimiento.finalidad,
             "vigenteHasta": consentimiento.vigente_hasta.isoformat(),
         }
+
+
+def construir_excepcion(
+    comando: AbrirExcepcionOpenFinance,
+    consentimiento: Consentimiento,
+    correlation_id: str,
+    ahora: datetime,
+) -> tuple[ExcepcionOpenFinance, dict[str, object]]:
+    excepcion = ExcepcionOpenFinance(
+        excepcion_id=uuid4(),
+        operation_id=comando.operation_id,
+        socio_id=comando.socio_id,
+        cliente_id=comando.cliente_id,
+        codigo=comando.codigo,
+        motivo_bloqueo=comando.motivo_bloqueo,
+        consentimiento=GestionarExcepcionesOpenFinance._consentimiento_json(consentimiento),
+        estado="pendiente",
+        estado_anterior="procesamiento_automatico_bloqueado",
+        creado_en=ahora,
+        correlation_id=correlation_id,
+        trazabilidad={
+            "estadoAnterior": "procesamiento_automatico_bloqueado",
+            "estadoActual": "pendiente",
+            "alcance": "open_finance",
+            "creadoEn": ahora.isoformat(),
+            "correlationId": correlation_id,
+        },
+    )
+    evento: dict[str, object] = {
+        "eventoId": str(uuid4()),
+        "excepcionId": str(excepcion.excepcion_id),
+        "operationId": str(excepcion.operation_id),
+        "actorId": None,
+        "fecha": ahora.isoformat(),
+        "motivo": comando.motivo_bloqueo,
+        "alcance": "open_finance",
+        "estadoAnterior": "procesamiento_automatico_bloqueado",
+        "estadoActual": "pendiente",
+        "correlationId": correlation_id,
+        "tipo": "ExcepcionOpenFinanceCreada",
+    }
+    return excepcion, evento

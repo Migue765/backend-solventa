@@ -19,6 +19,7 @@ from cotizacion.domain.errors import (
     OfertaNoDisponibleError,
     ReglaDeNegocioError,
     SeleccionNoEncontradaError,
+    SeleccionNoModificableError,
     SolicitudNoEncontradaError,
 )
 from cotizacion.domain.modelo_academico import VERSION_ACADEMICA
@@ -29,9 +30,11 @@ from cotizacion.domain.modelo_climatico import (
 )
 from cotizacion.domain.ofertas import (
     EstadoOferta,
+    EstadoSeleccionProvisional,
     Oferta,
     ResultadoOfertas,
     SeleccionOferta,
+    SeleccionProvisional,
 )
 from cotizacion.domain.perfil_riesgo import perfil_desde_score
 from cotizacion.domain.productos import PRODUCTOS
@@ -94,9 +97,13 @@ class GestionarOfertas:
         oferta_id: UUID,
         version: int,
         idempotency_key: UUID,
+        revision_seleccion: int | None = None,
     ) -> SeleccionOferta:
         resultado = self.listar(solicitud_id, cliente_id)
-        fingerprint = hashlib.sha256(f"{oferta_id}:{version}".encode()).hexdigest()
+        contenido = f"{oferta_id}:{version}"
+        if revision_seleccion is not None:
+            contenido += f":revision:{revision_seleccion}"
+        fingerprint = hashlib.sha256(contenido.encode()).hexdigest()
         existente = self._selecciones.obtener_seleccion(resultado.solicitud_id)
         if existente and existente.idempotency_key == idempotency_key:
             if existente.request_fingerprint != fingerprint:
@@ -104,7 +111,13 @@ class GestionarOfertas:
             return existente
         if existente:
             if existente.oferta_id == oferta_id and existente.version == version:
-                return existente
+                return self._selecciones.guardar_seleccion(
+                    replace(
+                        existente, idempotency_key=idempotency_key, request_fingerprint=fingerprint
+                    ),
+                    cliente_id,
+                    revision_seleccion,
+                )
             raise OfertaNoDisponibleError()
 
         oferta = next(
@@ -122,10 +135,91 @@ class GestionarOfertas:
         ):
             raise OfertaNoDisponibleError()
 
+        seleccion = self._nueva_seleccion(
+            solicitud_id, cliente_id, oferta, idempotency_key, fingerprint
+        )
+        return self._selecciones.guardar_seleccion(seleccion, cliente_id, revision_seleccion)
+
+    def seleccionar_provisional(
+        self,
+        solicitud_id: str,
+        cliente_id: UUID,
+        oferta_id: UUID,
+        version: int,
+        revision_esperada: int,
+        idempotency_key: UUID,
+    ) -> SeleccionProvisional:
+        resultado = self.listar(solicitud_id, cliente_id)
+        fingerprint = hashlib.sha256(
+            f"{solicitud_id}:{oferta_id}:{version}:{revision_esperada}".encode()
+        ).hexdigest()
+        repetida = self._selecciones.buscar_seleccion_provisional(cliente_id, idempotency_key)
+        if repetida is not None:
+            if repetida.seleccion.request_fingerprint != fingerprint:
+                raise ConflictoIdempotenciaError()
+            return repetida
+        if self._selecciones.obtener_seleccion(solicitud_id) is not None:
+            raise SeleccionNoModificableError()
+        oferta = next(
+            (
+                item
+                for item in resultado.ofertas
+                if item.oferta_id == oferta_id and item.version == version
+            ),
+            None,
+        )
+        if (
+            oferta is None
+            or oferta.estado is not EstadoOferta.DISPONIBLE
+            or oferta.vigente_hasta <= self._reloj()
+        ):
+            raise OfertaNoDisponibleError()
+        seleccion = self._nueva_seleccion(
+            solicitud_id, cliente_id, oferta, idempotency_key, fingerprint
+        )
+        return self._selecciones.guardar_seleccion_provisional(
+            SeleccionProvisional(seleccion, revision_esperada + 1, oferta.vigente_hasta),
+            cliente_id,
+            revision_esperada,
+        )
+
+    def consultar_provisional(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> EstadoSeleccionProvisional:
+        resultado = self.listar(solicitud_id, cliente_id)
+        provisional, aceptacion = self._selecciones.consultar_estado_seleccion(
+            solicitud_id, cliente_id
+        )
+        estado = None
+        if provisional is not None:
+            oferta = next(
+                (
+                    item
+                    for item in resultado.ofertas
+                    if item.oferta_id == provisional.seleccion.oferta_id
+                    and item.version == provisional.seleccion.version
+                ),
+                None,
+            )
+            estado = oferta.estado if oferta else EstadoOferta.RETIRADA
+            if oferta and oferta.vigente_hasta <= self._reloj():
+                estado = EstadoOferta.VENCIDA
+            if aceptacion is not None:
+                estado = EstadoOferta.ACEPTADA
+        return EstadoSeleccionProvisional(solicitud_id, provisional, aceptacion, estado)
+
+    def _nueva_seleccion(
+        self,
+        solicitud_id: str,
+        cliente_id: UUID,
+        oferta: Oferta,
+        idempotency_key: UUID,
+        fingerprint: str,
+    ) -> SeleccionOferta:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
-        seleccion = SeleccionOferta(
+        return SeleccionOferta(
             solicitud_id=solicitud_id,
             cotizacion_id=solicitud.cotizacion.cotizacion_id,
             oferta_id=oferta.oferta_id,
@@ -137,8 +231,6 @@ class GestionarOfertas:
             request_fingerprint=fingerprint,
             periodicidad=oferta.periodicidad,
         )
-        self._selecciones.guardar_seleccion(seleccion)
-        return seleccion
 
     def consultar_seleccion(self, solicitud_id: str, cliente_id: UUID) -> SeleccionOferta:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)

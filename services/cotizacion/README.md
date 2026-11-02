@@ -133,10 +133,53 @@ Requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`.
 | POST   | `/v1/solicitudes-cotizacion` | Registra una solicitud idempotente |
 | GET    | `/v1/solicitudes-cotizacion/{id}` | Consulta una solicitud del cliente |
 | GET    | `/v1/solicitudes-cotizacion/{id}/ofertas` | Compara ofertas simuladas |
-| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o guarda una selección idempotente |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion` | Consulta o confirma la aceptación histórica |
+| GET/PUT | `/v1/solicitudes-cotizacion/{id}/seleccion-provisional` | Reanuda o cambia una elección sin aceptar |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
 | GET/POST | `/v1/socios/solicitudes-cotizacion/{operationId}/oferta` | Recupera o calcula y persiste la oferta del socio |
+
+### Selección provisional y aceptación (SOL-300 / SOL-304)
+
+Aplicar `alembic upgrade head`: `selecciones_provisionales`
+(`0017_selecciones_provisionales.py`, sobre `conciliacion_emision`) crea únicamente
+la tabla de revisiones provisionales. No rellena históricos ni convierte
+`selecciones_oferta`, que sigue representando la aceptación terminal.
+
+PUT `/seleccion-provisional` recibe `{ofertaId, version, revisionEsperada}` y una
+clave UUID. GET devuelve `{solicitudId, seleccion, aceptacion, estadoOferta}`.
+`seleccion` puede ser null; su snapshot reutiliza el DTO de selección y añade
+`revision` y `vigenteHasta`. Un cambio exige la revisión actual (0 inicialmente).
+La clave queda ligada al cliente, operación, oferta, versión y revisión esperada:
+replay recupera el acuse original, incluso después de otro cambio, sin reactivarlo.
+GET muestra la verdad actual; no modifica vigencia ni el estado de aceptación.
+
+La transacción bloquea la cotización mediante UPDATE sin cambio de negocio,
+recomprueba revisión, titularidad, aceptación terminal y vigencia, desactiva la
+revisión previa e inserta la nueva. Un índice parcial permite una sola activa;
+la unicidad cliente/clave conserva deduplicación entre réplicas. Un rollback
+revierte también el cambio de activa. Se aplica el mismo bloqueo a la aceptación,
+que ahora inserta una sola vez en vez de reemplazar mediante merge.
+
+PUT histórico `/seleccion` sigue siendo aceptación explícita. Si hay provisional
+exige `revisionSeleccion` y la misma referencia; sin provisional conserva el
+payload previo. No existe compatibilidad incondicional entre versiones mezcladas.
+Una selección obsoleta produce `409 seleccion_desactualizada`; intentar editar
+tras aceptación, `409 seleccion_no_modificable`; reutilizar clave con otros datos,
+`409 conflicto_idempotencia`. Las ofertas no elegibles producen
+`422 oferta_no_disponible`. La aceptación no inicia por sí sola HU15.
+Cliente/operación se conservan por la cotización asociada y oferta/fecha en el
+registro actual, sin reescribir suscripciones, pagos, pólizas o eventos históricos.
+
+La UI debe refrescar antes de confirmar: un cambio de referencia/revisión retira
+la confirmación anterior. Regresar sin aceptar conserva el borrador; no se añade
+cancelación, cambio tras aceptación, consentimiento ni firma. Aplicar la migración
+y actualizar todas las réplicas backend antes de habilitar el nuevo frontend;
+no operar con versiones backend mezcladas. Con revisiones provisionales
+persistidas, un rollback requiere una versión compatible con sus guardias o un
+procedimiento de contención definido y validado por separado. Retirar el nuevo
+recorrido y conservar la tabla no hace seguro volver a código que ignore esas
+revisiones. Downgrade rechaza eliminar revisiones/claves ya persistidas.
 
 ### Persistencia de suscripción
 
@@ -192,7 +235,7 @@ la instantanea de confirmacion version 2, sin efectos de escritura.
 Consultar [Polizas](../polizas/README.md) para reglas de vigencia, persistencia,
 contrato y activacion principal.
 
-POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
+Para un resultado confirmado, POST y GET devuelven `200`, `estado: confirmado`, `simulada: true`,
 `referenciaInterna: SIM-<UUID>` e `importe: {monto, moneda}`. La referencia es
 interna, no bancaria. El reintento recupera el mismo registro incluso con una
 nueva clave o después de vencer la oferta/avanzar la saga; no vuelve a modificarla.
@@ -200,11 +243,101 @@ Solo la clave de creación queda asociada al registro y usarla en otra solicitud
 del mismo cliente devuelve `409 conflicto_idempotencia`. El objeto `saga` del pago
 es la instantánea de confirmación; GET suscripción informa cualquier estado posterior.
 
-GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin pago;
+El proveedor integrado `SimuladorPago` usa exclusivamente
+`PAGO_SIMULADO_RESULTADO=confirmado` (predeterminado) o `rechazado` en el servidor.
+Un valor distinto falla al crear la configuracion; no se admite elegir escenario
+en el body, query o cabeceras del navegador. No se agrega un servicio externo.
+
+Con `rechazado`, POST responde **200** con `estado: rechazado`, `rechazadaEn`,
+`motivo: rechazo_simulado` y sin `confirmadaEn`. Conserva los IDs, importe,
+periodicidad y referencia interna; `id` identifica el intento rechazado, no un
+pago confirmado. La saga conserva `pago_pendiente` version 1 y su fecha original.
+La migracion aditiva `intentos_pago_simulado` guarda intentos y sus claves
+sin modificar ni rellenar pagos historicos. El rechazo y su outbox
+`PagoSimuladoRechazado` son atomicos: no crea pago confirmado, evento de
+confirmacion ni poliza, incluso si Polizas esta habilitado.
+Antes de arrancar esta version, aplicar las migraciones de Cotizacion hasta
+`head` por el procedimiento existente; el dashboard tambien consulta la nueva tabla.
+
+La misma clave recupera el resultado original aunque cambie el escenario del
+servidor o venza la oferta. Una clave nueva tras rechazo permite otra evaluacion
+solo si siguen cumpliendose las precondiciones. Si ya existe un confirmado,
+una clave nueva devuelve ese mismo pago (200, mismo body) sin evaluar ni
+duplicar; la recuperacion de emision conserva su posible 503. Una clave de otra
+solicitud del mismo cliente devuelve 409, incluidos pagos historicos.
+Las carreras comparten la unicidad de intentos; dos claves que confirman la misma
+solicitud convergen al mismo pago. Si un rechazo concurre con una confirmacion,
+puede persistir primero como intento independiente, pero no reemplaza al confirmado.
+
+GET pago y `dashboard.pagos` devuelven el confirmado si existe, o el ultimo rechazo
+por solicitud. El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
+`confirmadaEn`. Repetir una clave rechazada antigua devuelve su rechazo, pero
+no degrada GET/dashboard ni la saga posterior. No hay conciliacion financiera,
+resultado financiero pendiente/ambiguo, firma o documento implementados.
+Las fechas de pago, suscripcion y dashboard se serializan en UTC (`Z`), tambien
+cuando PostgreSQL devuelve un `timestamptz` con otro offset. Asi el replay conserva
+el mismo body y snapshot sin depender de la zona horaria de la conexion ni
+modificar el instante persistido.
+
+GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin resultado;
 una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuelve
 404; una no aprobada, selección inválida, oferta vencida o saga no pendiente devuelve
 `422 pago_no_permitido`. Un fallo de persistencia revierte todo y nunca se informa éxito.
 El contrato público y códigos del BFF están en `contracts/openapi/bff-web-v1.yaml`.
+
+### Recuperacion automatica de emision academica (opt-in)
+
+`COTIZACION_CONCILIACION_EMISION_HABILITADA=false` es el valor predeterminado.
+Solo `true`/`false` son validos. Activarla requiere tambien `POLIZAS_SERVICE_URL`,
+`INTERNAL_API_TOKEN` y la migracion `conciliacion_emision` aplicada antes de
+arrancar. No se activa ni despliega en AWS como parte de esta implementacion.
+
+La tabla nueva `conciliaciones_emision` empieza vacia: NO migra, barre ni
+reactiva pagos historicos, tampoco los que ya tenian `emision_solicitada=true`.
+La elegibilidad (`pago_id`, `autorizada_en`) se crea en la MISMA transaccion
+del pago nuevo confirmado mientras la opcion esta activa. Un rechazo, una
+consulta o un replay de un confirmado anterior no crean elegibilidad.
+Desactivar la opcion al reiniciar procesos detiene el recuperador y la
+creacion de nuevos trabajos; conserva los ya autorizados para una reactivacion.
+
+Cada proceso del servicio inicia un hilo propio desde `create_app`, usando el
+entrypoint Gunicorn existente **sin `--preload`**. No requiere un servicio,
+cron, endpoint de control, broker o infraestructura adicional. Procesa como
+maximo un trabajo por ciclo de 1s; el primer intento vence 2s despues de la
+confirmacion. Una reserva SQL condicional dura 30s y lleva un token de reserva.
+Solo el propietario puede registrar su fallo; una reserva vencida se puede
+recuperar tras reiniciar. Hasta 8 reservas automaticas, con backoff persistido
+de 2/4/8/16/30s (tope 30s). Tras agotarlas, estado tecnico `agotada` y ultimo
+error quedan visibles en SQL/logs; el pago sigue confirmado, nunca rechazado.
+El POST manual idempotente sigue disponible y puede completar tambien ese caso.
+
+La recuperacion comparte el mismo emisor HTTP, evidencia y CAS de saga que
+POST. No consulta al simulador, cobra, genera clave/intento financiero, ni
+actualiza el snapshot v2 del pago. Polizas conserva su unicidad por
+pago/suscripcion; saga, evento unico y finalizacion del trabajo se confirman
+en una transaccion. GET suscripcion/dashboard observa `emitida` v3 despues
+del acuse, mientras GET pago sigue siendo solo lectura y devuelve v2.
+
+El pool del hilo es independiente: conexion PostgreSQL 3s, lock 2s,
+statement 5s y keepalive; SQLite espera de lock 2s. No cambia los presupuestos
+del API ni el timeout HTTP de Polizas. Al cerrar, detiene el hilo y libera
+su pool; hay cierre registrado con `atexit` y cierre explicito en el harness.
+Una interrupcion forzada deja la reserva durable hasta vencer. Un hilo
+terminado inesperadamente degrada `/ping` a 503, no aparenta un recuperador sano.
+
+Rollback de codigo: desactivar la opcion y reciclar procesos, conservando la
+tabla aditiva. El downgrade de esquema rechaza borrar trabajos pendientes o
+agotados; no elimina autorizaciones durables para aparentar un rollback exitoso.
+Cuando todos estan completados, downgrade conserva pagos, sagas y eventos.
+SQLite en memoria no es valido para este recuperador durable.
+
+**Limite:** recupera SOLO la emision academica/simulada existente. No implementa
+firma verificable, documento o poliza legal, ni la conciliacion de una pasarela
+con resultado financiero ambiguo. No convierte consentimiento en firma.
+La medicion local de una perdida de acuse frente a 60s NO acredita ASR-EMI-01,
+capacidad ni SLA AWS: sigue pendiente la firma confirmada exigida por el PDF
+(pp. 21-22; la ambiguedad financiera de p. 17 sigue separada)
+y la decision de activacion productiva. No se modifican IAM/KMS/SQS/DLQ.
 
 El listado y el detalle incluyen coberturas, condiciones y vigencia para los ocho seguros,
 incluido `parametric-weather` (lluvia intensa o sequía, según el evento declarado).

@@ -5,15 +5,18 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -218,6 +221,39 @@ class SeleccionOfertaModel(Base):
     request_fingerprint: Mapped[str] = mapped_column(String(64))
 
 
+class SeleccionProvisionalModel(Base):
+    __tablename__ = "selecciones_provisionales"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_provisional_cliente_clave"),
+        CheckConstraint("revision >= 1", name="ck_provisional_revision"),
+        Index(
+            "uq_provisional_activa",
+            "cotizacion_id",
+            unique=True,
+            sqlite_where=text("activa = 1"),
+            postgresql_where=text("activa = true"),
+        ),
+    )
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cliente_id: Mapped[UUID]
+    solicitud_id: Mapped[str] = mapped_column(String(32))
+    activa: Mapped[bool]
+    oferta_id: Mapped[UUID]
+    version: Mapped[int] = mapped_column(Integer)
+    nombre_oferta: Mapped[str] = mapped_column(String(120))
+    prima_mensual: Mapped[Decimal] = mapped_column(MONTO)
+    periodicidad: Mapped[str] = mapped_column(String(20))
+    moneda: Mapped[str] = mapped_column(String(3))
+    seleccionada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    vigente_hasta: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+
+
 class ReglaTarifaModel(Base):
     __tablename__ = "reglas_tarifa"
     __table_args__ = (
@@ -340,3 +376,54 @@ class PagoSimuladoModel(Base):
     confirmada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     saga_version: Mapped[int] = mapped_column(Integer)
     emision_solicitada: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+class IntentoPagoSimuladoModel(Base):
+    __tablename__ = "intentos_pago_simulado"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_intentos_pago_idempotencia"),
+        CheckConstraint(
+            "resultado IN ('confirmado', 'rechazado')", name="ck_intentos_pago_resultado"
+        ),
+    )
+
+    intento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    solicitud_id: Mapped[str] = mapped_column(String(32), index=True)
+    suscripcion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("suscripciones.suscripcion_id", ondelete="RESTRICT")
+    )
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    idempotency_key: Mapped[UUID]
+    oferta_id: Mapped[UUID]
+    oferta_version: Mapped[int]
+    monto: Mapped[Decimal] = mapped_column(MONTO)
+    moneda: Mapped[str] = mapped_column(String(3))
+    periodicidad: Mapped[str] = mapped_column(String(20))
+    resultado: Mapped[str] = mapped_column(String(20))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    saga_version: Mapped[int]
+    saga_actualizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ConciliacionEmisionModel(Base):
+    __tablename__ = "conciliaciones_emision"
+    __table_args__ = (
+        CheckConstraint(
+            "estado IN ('pendiente', 'en_proceso', 'completada', 'agotada')",
+            name="ck_conciliacion_emision_estado",
+        ),
+        CheckConstraint("intentos >= 0", name="ck_conciliacion_emision_intentos"),
+        Index("ix_conciliacion_emision_pendiente", "estado", "proximo_intento_en"),
+    )
+
+    pago_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pagos_simulados.pago_id", ondelete="RESTRICT"), primary_key=True
+    )
+    autorizada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    estado: Mapped[str] = mapped_column(String(20))
+    intentos: Mapped[int] = mapped_column(Integer)
+    proximo_intento_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[UUID | None]
+    lease_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultimo_error: Mapped[str | None] = mapped_column(String(80))
+    completada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
