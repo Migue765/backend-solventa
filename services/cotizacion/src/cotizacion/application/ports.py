@@ -6,7 +6,12 @@ from uuid import UUID
 from cotizacion.domain.cotizacion import CoberturaCotizada, Cotizacion
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.ofertas import SeleccionOferta, SeleccionProvisional
-from cotizacion.domain.pago import PagoSimulado, ResultadoPagoSimulado, ResultadoSimuladorPago
+from cotizacion.domain.pago import (
+    PagoSimulado,
+    PagoSimuladoPendiente,
+    ResultadoPagoSimulado,
+    ResultadoSimuladorPago,
+)
 from cotizacion.domain.perfil_riesgo import PerfilRiesgo as PerfilRiesgoOferta
 from cotizacion.domain.solicitud import SolicitudCotizacion
 from cotizacion.domain.suscripcion import Suscripcion
@@ -59,18 +64,44 @@ class SuscripcionRepository(Protocol):
     ) -> Suscripcion | None: ...
 
 
+@dataclass(frozen=True)
+class ReservaPagoSimulado:
+    pago: PagoSimuladoPendiente
+    huella: str
+    token: UUID
+    intentos: int
+
+
 class PagoSimuladoRepository(Protocol):
-    def confirmar_pago_simulado(
+    def reservar_pago_simulado(
         self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID, ahora: datetime
+    ) -> tuple[ResultadoPagoSimulado, bool]: ...
+
+    def reclamar_pago_simulado(
+        self, ahora: datetime, intento_id: UUID | None = None, lease_segundos: int = 30
+    ) -> ReservaPagoSimulado | None: ...
+
+    def finalizar_pago_simulado(
+        self, reserva: ReservaPagoSimulado, resultado: ResultadoSimuladorPago, ahora: datetime
     ) -> ResultadoPagoSimulado: ...
 
+    def aplazar_pago_simulado(
+        self, reserva: ReservaPagoSimulado, ahora: datetime, codigo: str
+    ) -> bool: ...
+
     def obtener_pago_simulado(
-        self, solicitud_id: str, cliente_id: UUID
+        self, solicitud_id: str, cliente_id: UUID, idempotency_key: UUID | None = None
     ) -> ResultadoPagoSimulado: ...
+
+    def obtener_intento_pago_simulado(self, intento_id: UUID) -> ResultadoPagoSimulado: ...
 
 
 class ProveedorPagoSimulado(Protocol):
-    def evaluar(self) -> ResultadoSimuladorPago: ...
+    def ejecutar(
+        self, efecto_id: UUID, instantanea: PagoSimuladoPendiente, huella: str
+    ) -> ResultadoSimuladorPago: ...
+
+    def consultar(self, efecto_id: UUID, huella: str) -> ResultadoSimuladorPago | None: ...
 
 
 @dataclass(frozen=True)

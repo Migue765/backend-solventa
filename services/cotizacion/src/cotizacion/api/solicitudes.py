@@ -2,7 +2,7 @@ import hmac
 from typing import cast
 from uuid import UUID
 
-from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
 from pydantic import TypeAdapter, ValidationError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -29,7 +29,11 @@ from cotizacion.application.registrar_solicitud import RegistrarSolicitud
 from cotizacion.application.suscripciones import ProcesarSuscripcion
 from cotizacion.config import Config
 from cotizacion.domain.destinos_viaje import DESTINOS_VIAJE
-from cotizacion.domain.errors import ErrorConsultaPerfil, SolicitudNoEncontradaError
+from cotizacion.domain.errors import (
+    ErrorConsultaPerfil,
+    PagoEnProcesoError,
+    SolicitudNoEncontradaError,
+)
 from cotizacion.domain.pago import PagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
@@ -241,7 +245,20 @@ def confirmar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
         )
     except (ValidationError, TypeError, BadRequest, UnsupportedMediaType):
         return jsonify(error="solicitud_invalida"), 400
-    pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
+    try:
+        pago = _pagos().confirmar(solicitud_id, cliente_id, idempotency_key)
+    except PagoEnProcesoError as error:
+        respuesta = jsonify(
+            error="pago_en_proceso", pagoId=str(error.pago_id), correlationId=g.correlation_id
+        )
+        respuesta.status_code = 409
+        respuesta.headers["Location"] = url_for(
+            "solicitudes.consultar_pago_simulado",
+            solicitud_id=solicitud_id,
+            clienteId=str(cliente_id),
+        )
+        respuesta.headers["Cache-Control"] = "no-store"
+        return respuesta
     polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
     if polizas is not None and isinstance(pago, PagoSimulado):
         repositorio = cast(RepositorioPagosSqlAlchemy, current_app.extensions["repositorio_pagos"])
@@ -254,7 +271,14 @@ def consultar_pago_simulado(solicitud_id: str) -> tuple[Response, int] | Respons
     cliente_id = _cliente_id()
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
-    return jsonify(pago_simulado_a_json(_pagos().consultar(solicitud_id, cliente_id)))
+    selector = request.headers.get("Idempotency-Key")
+    try:
+        clave = UUID_ADAPTER.validate_python(selector) if selector is not None else None
+    except ValidationError:
+        return jsonify(error="solicitud_invalida"), 400
+    respuesta = jsonify(pago_simulado_a_json(_pagos().consultar(solicitud_id, cliente_id, clave)))
+    respuesta.headers["Cache-Control"] = "no-store"
+    return respuesta
 
 
 def _pagos() -> ProcesarPagoSimulado:

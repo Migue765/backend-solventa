@@ -22,6 +22,7 @@ from bff_web.domain.quote_errors import (
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
+    SimulatedPaymentInProgressError,
     SimulatedPaymentNotFoundError,
 )
 from bff_web.domain.quotes import (
@@ -32,6 +33,7 @@ from bff_web.domain.quotes import (
     Offer,
     OfferSelection,
     OffersResult,
+    PendingSimulatedPayment,
     ProductCoverage,
     ProvisionalOfferSelection,
     ProvisionalSelectionState,
@@ -272,10 +274,13 @@ class HttpQuoteGateway(QuoteGateway):
         )
         return _safe_payment_from_json(payload)
 
-    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPaymentResult:
+    def get_simulated_payment(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID | None = None
+    ) -> SimulatedPaymentResult:
         query = urlencode({"clienteId": str(user_id)})
         payload = self._request_json(
-            f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}"
+            f"/v1/solicitudes-cotizacion/{request_id}/pago-simulado?{query}",
+            headers={"Idempotency-Key": str(idempotency_key)} if idempotency_key else None,
         )
         return _safe_payment_from_json(payload)
 
@@ -311,6 +316,12 @@ class HttpQuoteGateway(QuoteGateway):
                 except (ValueError, OSError):
                     raise QuoteRequestConflictError() from error
                 code = problem.get("error") if isinstance(problem, dict) else None
+                if code == "pago_en_proceso":
+                    try:
+                        pago_id = UUID(problem["pagoId"])
+                    except (KeyError, TypeError, ValueError, AttributeError) as invalid:
+                        raise QuoteServiceUnavailableError() from invalid
+                    raise SimulatedPaymentInProgressError(pago_id) from error
                 if isinstance(code, str) and code in {
                     "seleccion_desactualizada",
                     "seleccion_no_modificable",
@@ -384,7 +395,7 @@ def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPaymentResult:
     try:
         if (
             payload["simulada"] is not True
-            or payload["estado"] not in {"confirmado", "rechazado"}
+            or payload["estado"] not in {"confirmado", "rechazado", "pendiente"}
             or payload["referenciaInterna"] != f"SIM-{UUID(payload['id'])}"
             or payload["periodicidad"] not in {"mensual", "por_viaje", "por_vuelo", "por_periodo"}
         ):
@@ -392,6 +403,8 @@ def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPaymentResult:
         amount = Decimal(payload["importe"]["monto"])
         if not amount.is_finite() or amount <= 0:
             raise ValueError("Importe invalido")
+        if payload["estado"] == "pendiente":
+            return _pending_payment_from_json(payload, amount)
         if payload["estado"] == "rechazado":
             if (
                 "confirmadaEn" in payload
@@ -443,8 +456,62 @@ def _safe_payment_from_json(payload: dict[str, Any]) -> SimulatedPaymentResult:
                 updated_at=_datetime(payload["saga"]["actualizadaEn"]),
             ),
         )
-    except (KeyError, TypeError, ValueError, ArithmeticError) as error:
+    except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as error:
         raise QuoteServiceUnavailableError() from error
+
+
+def _pending_payment_from_json(payload: dict[str, Any], amount: Decimal) -> PendingSimulatedPayment:
+    if (
+        set(payload)
+        != {
+            "id",
+            "solicitudId",
+            "suscripcionId",
+            "ofertaId",
+            "ofertaVersion",
+            "estado",
+            "simulada",
+            "referenciaInterna",
+            "importe",
+            "periodicidad",
+            "creadaEn",
+            "codigo",
+            "saga",
+        }
+        or payload["codigo"] != "resultado_no_confirmado"
+        or not isinstance(payload["solicitudId"], str)
+        or not payload["solicitudId"]
+        or type(payload["ofertaVersion"]) is not int
+        or payload["ofertaVersion"] < 1
+        or set(payload["saga"]) != {"estado", "version", "actualizadaEn"}
+        or payload["saga"]["estado"] != "pago_pendiente"
+        or type(payload["saga"]["version"]) is not int
+        or payload["saga"]["version"] != 1
+        or set(payload["importe"]) != {"monto", "moneda"}
+        or not isinstance(payload["importe"]["monto"], str)
+        or payload["importe"]["monto"] != f"{amount:.2f}"
+        or not isinstance(payload["importe"]["moneda"], str)
+        or len(payload["importe"]["moneda"]) != 3
+        or not payload["importe"]["moneda"].isascii()
+        or not payload["importe"]["moneda"].isalpha()
+        or not payload["importe"]["moneda"].isupper()
+    ):
+        raise ValueError("Respuesta de pago pendiente invalida")
+    created_at = _datetime(payload["creadaEn"])
+    updated_at = _datetime(payload["saga"]["actualizadaEn"])
+    if created_at.tzinfo is None or updated_at.tzinfo is None or created_at < updated_at:
+        raise ValueError("Fechas de reserva invalidas")
+    return PendingSimulatedPayment(
+        payment_id=UUID(payload["id"]),
+        request_id=payload["solicitudId"],
+        subscription_id=UUID(payload["suscripcionId"]),
+        offer_id=UUID(payload["ofertaId"]),
+        offer_version=payload["ofertaVersion"],
+        amount=Money(amount, payload["importe"]["moneda"]),
+        billing_period=payload["periodicidad"],
+        created_at=created_at,
+        saga=IssuanceSaga("pago_pendiente", payload["saga"]["version"], updated_at),
+    )
 
 
 def _safe_record_from_json(payload: dict[str, Any]) -> QuoteRequestRecord:

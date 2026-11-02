@@ -14,7 +14,11 @@ from bff_web.domain.quote_errors import (
     QuoteServiceUnavailableError,
     SimulatedPaymentNotFoundError,
 )
-from bff_web.domain.quotes import QuoteRequestDraft, RejectedSimulatedPayment
+from bff_web.domain.quotes import (
+    PendingSimulatedPayment,
+    QuoteRequestDraft,
+    RejectedSimulatedPayment,
+)
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 
 
@@ -65,6 +69,90 @@ def rejected_payment_payload() -> dict[str, object]:
         "motivo": "rechazo_simulado",
         "saga": {"estado": "pago_pendiente", "version": 1, "actualizadaEn": "2026-11-01T12:00:00Z"},
     }
+
+
+def pending_payment_payload() -> dict[str, object]:
+    result = rejected_payment_payload()
+    result.pop("rechazadaEn")
+    result.pop("motivo")
+    return {
+        **result,
+        "estado": "pendiente",
+        "creadaEn": "2026-11-01T12:00:01Z",
+        "codigo": "resultado_no_confirmado",
+    }
+
+
+@pytest.mark.parametrize("method", ["POST", "GET"])
+def test_P14_pending_is_typed_and_get_forwards_original_key(method: str) -> None:
+    key = uuid4()
+    payload = pending_payment_payload()
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(payload).encode()),
+    ) as call:
+        gateway = HttpQuoteGateway("http://cotizacion")
+        result = (
+            gateway.confirm_simulated_payment(uuid4(), "AQT-test", key)
+            if method == "POST"
+            else gateway.get_simulated_payment(uuid4(), "AQT-test", key)
+        )
+    assert isinstance(result, PendingSimulatedPayment)
+    assert str(result.payment_id) == payload["id"] and result.saga.status == "pago_pendiente"
+    assert call.call_args.args[0].get_header("Idempotency-key") == str(key)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"confirmadaEn": "2026-11-01T12:00:01Z"},
+        {"rechazadaEn": "2026-11-01T12:00:01Z"},
+        {"motivo": "rechazo_simulado"},
+        {"estado": "desconocido"},
+        {"simulada": 1},
+        {"codigo": "confirmado"},
+        {"id": {}},
+        {"suscripcionId": "invalido"},
+        {"ofertaId": []},
+        {"ofertaVersion": True},
+        {"ofertaVersion": 0},
+        {"solicitudId": ""},
+        {"creadaEn": None},
+        {"creadaEn": "2026-11-01T12:00:00"},
+        {"creadaEn": "2026-10-01T12:00:00Z"},
+        {"importe": {"monto": "NaN", "moneda": "COP"}},
+        {"importe": {"monto": "0.00", "moneda": "COP"}},
+        {"importe": {"monto": 100, "moneda": "COP"}},
+        {"importe": {"monto": "100.001", "moneda": "COP"}},
+        {"importe": {"monto": "100.00", "moneda": "cop"}},
+        {"importe": {"monto": "100.00", "moneda": "123"}},
+        {
+            "saga": {
+                "estado": "pago_confirmado",
+                "version": 2,
+                "actualizadaEn": "2026-11-01T12:00:00Z",
+            }
+        },
+        {
+            "saga": {
+                "estado": "pago_pendiente",
+                "version": True,
+                "actualizadaEn": "2026-11-01T12:00:00Z",
+            }
+        },
+        {"saga": {"estado": "pago_pendiente", "version": 1, "actualizadaEn": None}},
+    ],
+)
+def test_P14_pending_rejects_invalid_shapes(changes: dict[str, object]) -> None:
+    payload = {**pending_payment_payload(), **changes}
+    with (
+        patch(
+            "bff_web.infrastructure.http_quote_gateway.urlopen",
+            return_value=BytesIO(json.dumps(payload).encode()),
+        ),
+        pytest.raises(QuoteServiceUnavailableError),
+    ):
+        HttpQuoteGateway("http://cotizacion").get_simulated_payment(uuid4(), "AQT-test", uuid4())
 
 
 @pytest.mark.parametrize("method", ["POST", "GET"])

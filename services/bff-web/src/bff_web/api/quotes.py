@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
@@ -22,6 +22,7 @@ from bff_web.domain.quote_errors import (
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
+    SimulatedPaymentInProgressError,
     SimulatedPaymentNotFoundError,
 )
 from bff_web.domain.quotes import (
@@ -31,6 +32,7 @@ from bff_web.domain.quotes import (
     Offer,
     OfferSelection,
     OffersResult,
+    PendingSimulatedPayment,
     ProvisionalOfferSelection,
     QuoteRequestDraft,
     QuoteRequestRecord,
@@ -458,6 +460,18 @@ def confirm_simulated_payment(request_id: str) -> Response:
         )
     try:
         payment = _gateway().confirm_simulated_payment(user_id, request_id, idempotency_key)
+    except SimulatedPaymentInProgressError as error:
+        response = problem_response(
+            409,
+            "pago_en_proceso",
+            "Pago simulado en proceso",
+            "Consulta el intento existente; no inicies otro pago.",
+            extensions={"pagoId": str(error.payment_id)},
+        )
+        response.headers["Location"] = url_for(
+            "quotes.get_simulated_payment", request_id=request_id
+        )
+        return response
     except QuoteRequestNotFoundError:
         return _not_found()
     except QuoteRequestConflictError:
@@ -484,8 +498,22 @@ def get_simulated_payment(request_id: str) -> Response:
     user_id = _authenticated_user_id()
     if user_id is None:
         return _unauthorized()
+    selector = request.headers.get("Idempotency-Key")
     try:
-        payment = _gateway().get_simulated_payment(user_id, request_id)
+        key = UUID(selector) if selector is not None else None
+    except ValueError:
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "La clave debe ser un UUID valido."
+        )
+    try:
+        payment = _gateway().get_simulated_payment(user_id, request_id, key)
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de solicitud",
+            "La clave de idempotencia ya fue utilizada para otra solicitud.",
+        )
     except SimulatedPaymentNotFoundError:
         return problem_response(
             404,
@@ -497,7 +525,9 @@ def get_simulated_payment(request_id: str) -> Response:
         return _not_found()
     except QuoteServiceUnavailableError:
         return _unavailable()
-    return jsonify(_payment_json(payment))
+    response = jsonify(_payment_json(payment))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _payment_json(payment: SimulatedPaymentResult) -> dict[str, object]:
@@ -517,6 +547,13 @@ def _payment_json(payment: SimulatedPaymentResult) -> dict[str, object]:
             "actualizadaEn": _date_json(payment.saga.updated_at),
         },
     }
+    if isinstance(payment, PendingSimulatedPayment):
+        return {
+            **result,
+            "estado": "pendiente",
+            "creadaEn": _date_json(payment.created_at),
+            "codigo": "resultado_no_confirmado",
+        }
     if isinstance(payment, RejectedSimulatedPayment):
         return {
             **result,
