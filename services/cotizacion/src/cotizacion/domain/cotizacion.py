@@ -50,10 +50,10 @@ class Cotizacion:
     def __post_init__(self) -> None:
         if not self.coberturas:
             raise ReglaDeNegocioError("La cotización debe incluir al menos una cobertura.")
-        ids = [c.cobertura_id for c in self.coberturas]
+        ids = [cobertura.cobertura_id for cobertura in self.coberturas]
         if len(ids) != len(set(ids)):
             raise ReglaDeNegocioError("Una cobertura no puede repetirse en la misma cotización.")
-        if len({c.suma_asegurada.moneda for c in self.coberturas}) > 1:
+        if len({cobertura.suma_asegurada.moneda for cobertura in self.coberturas}) > 1:
             raise ReglaDeNegocioError("Todas las coberturas deben estar en la misma moneda.")
 
     @property
@@ -64,7 +64,8 @@ class Cotizacion:
         if self.estado is not EstadoCotizacion.PENDIENTE:
             raise ReglaDeNegocioError("Solo se puede calcular una cotización pendiente.")
         prima_estimada = sum(
-            (primas[c.cobertura_id] for c in self.coberturas), start=Dinero.cero(self.moneda)
+            (primas[cobertura.cobertura_id] for cobertura in self.coberturas),
+            start=Dinero.cero(self.moneda),
         )
         if prima_estimada.monto <= 0:
             raise ReglaDeNegocioError("La prima calculada debe ser mayor a cero.")

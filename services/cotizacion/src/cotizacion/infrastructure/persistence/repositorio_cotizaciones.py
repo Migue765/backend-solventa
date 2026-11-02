@@ -474,13 +474,13 @@ def _a_modelo(cotizacion: Cotizacion) -> CotizacionModel:
         valida_hasta=valida_hasta,
         coberturas=[
             CoberturaCotizadaModel(
-                cobertura_id=c.cobertura_id,
-                suma_asegurada=c.suma_asegurada.monto,
-                deducible=c.deducible.monto,
-                prima=_monto_prima(c.prima),
+                cobertura_id=cobertura.cobertura_id,
+                suma_asegurada=cobertura.suma_asegurada.monto,
+                deducible=cobertura.deducible.monto,
+                prima=_monto_prima(cobertura.prima),
                 orden=orden,
             )
-            for orden, c in enumerate(cotizacion.coberturas)
+            for orden, cobertura in enumerate(cotizacion.coberturas)
         ],
     )
 
@@ -635,13 +635,13 @@ def _a_dominio(modelo: CotizacionModel) -> Cotizacion:
         instantanea=instantanea,
         coberturas=[
             CoberturaCotizada(
-                cobertura_id=c.cobertura_id,
-                suma_asegurada=Dinero(c.suma_asegurada, moneda),
-                deducible=Dinero(c.deducible, moneda),
-                prima=Dinero(c.prima, moneda),
+                cobertura_id=cobertura.cobertura_id,
+                suma_asegurada=Dinero(cobertura.suma_asegurada, moneda),
+                deducible=Dinero(cobertura.deducible, moneda),
+                prima=Dinero(cobertura.prima, moneda),
                 deducible_descuenta_base=detalle.get("deducibleDescuentaBase", True),
             )
-            for c in modelo.coberturas
+            for cobertura in modelo.coberturas
         ],
     )
 
