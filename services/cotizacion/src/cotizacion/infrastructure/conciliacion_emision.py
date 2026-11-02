@@ -7,10 +7,17 @@ from sqlalchemy import Engine, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from cotizacion.application.emision import completar_emision_academica
+from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.application.ports import EmisorPolizas
 from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
+from cotizacion.domain.pago import PagoSimulado
+from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.database import crear_sesiones
-from cotizacion.infrastructure.persistence.models import ConciliacionEmisionModel
+from cotizacion.infrastructure.persistence.models import (
+    ConciliacionEmisionModel,
+    EfectoPagoSimuladoModel,
+    IntentoPagoSimuladoModel,
+)
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 
 logger = logging.getLogger(__name__)
@@ -19,7 +26,14 @@ logger = logging.getLogger(__name__)
 class ConciliadorEmision:
     """Recupera exclusivamente pagos academicos con elegibilidad SQL explicita."""
 
-    def __init__(self, database_url: str, polizas: EmisorPolizas) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        polizas: EmisorPolizas | None,
+        resultado_pago: str,
+        *,
+        conciliar_emision: bool = True,
+    ) -> None:
         self._sesiones = crear_sesiones(
             database_url, pool_size=1, max_overflow=0, limitar_esperas=True
         )
@@ -28,9 +42,14 @@ class ConciliadorEmision:
             assert isinstance(engine, Engine)
             self._engine = engine
         self.repositorio = RepositorioPagosSqlAlchemy(
-            self._sesiones, emitir_polizas=True, conciliar_emision=True
+            self._sesiones,
+            emitir_polizas=polizas is not None,
+            conciliar_emision=conciliar_emision,
         )
+        self.proveedor = SimuladorPago(self._sesiones, resultado_pago)
+        self.pagos = ProcesarPagoSimulado(self.repositorio, self.proveedor)
         self._polizas = polizas
+        self._conciliar_emision = conciliar_emision
         self._detener = Event()
         self._hilo = Thread(
             target=self._ejecutar, name="conciliacion-emision-academica", daemon=True
@@ -45,6 +64,8 @@ class ConciliadorEmision:
             raise RuntimeError("Cada conciliador tiene un unico ciclo de vida.")
         try:
             with self._sesiones() as sesion:
+                sesion.execute(select(IntentoPagoSimuladoModel).limit(0))
+                sesion.execute(select(EfectoPagoSimuladoModel).limit(0))
                 sesion.execute(select(ConciliacionEmisionModel).limit(0))
             self._hilo.start()
         except (SQLAlchemyError, RuntimeError):
@@ -63,9 +84,21 @@ class ConciliadorEmision:
         atexit.unregister(self.cerrar)
 
     def conciliar_uno(self) -> bool:
+        resultado = self.pagos.conciliar_uno()
+        if isinstance(resultado, PagoSimulado) and self._polizas is not None:
+            try:
+                completar_emision_academica(
+                    resultado, self.repositorio, self._polizas, str(resultado.pago_id)
+                )
+            except ServicioPolizasNoDisponibleError:
+                logger.error(
+                    "conciliacion_emision.polizas_no_disponible pago_id=%s", resultado.pago_id
+                )
+        if not self._conciliar_emision or self._polizas is None:
+            return resultado is not None
         reserva = self.repositorio.reservar_emision(datetime.now(UTC))
         if reserva is None:
-            return False
+            return resultado is not None
         try:
             if not completar_emision_academica(
                 reserva.pago, self.repositorio, self._polizas, str(reserva.pago.pago_id)

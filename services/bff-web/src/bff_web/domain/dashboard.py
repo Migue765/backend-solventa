@@ -87,6 +87,12 @@ class DashboardRejectedPayment(DashboardPaymentBase):
     reason: Literal["rechazo_simulado"] = Field(alias="motivo")
 
 
+class DashboardPendingPayment(DashboardPaymentBase):
+    status: Literal["pendiente"] = Field(alias="estado")
+    created_at: AwareDatetime = Field(alias="creadaEn")
+    code: Literal["resultado_no_confirmado"] = Field(alias="codigo")
+
+
 class UnimplementedDomain(DashboardModel):
     availability: Literal["no_implementado"] = Field(alias="disponibilidad")
 
@@ -133,6 +139,8 @@ class DashboardPolicy(DashboardModel):
 class Dashboard(DashboardModel):
     quotes: list[DashboardQuote] = Field(alias="cotizaciones")
     subscriptions: list[DashboardSubscription] = Field(alias="suscripciones")
-    payments: list[DashboardPayment | DashboardRejectedPayment] = Field(alias="pagos")
+    payments: list[DashboardPayment | DashboardRejectedPayment | DashboardPendingPayment] = Field(
+        alias="pagos"
+    )
     policies: list[DashboardPolicy] | UnimplementedDomain = Field(alias="polizas")
     notifications: UnimplementedDomain = Field(alias="notificaciones")

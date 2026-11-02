@@ -1,3 +1,7 @@
+from typing import Literal
+from uuid import UUID
+
+
 class ReglaDeNegocioError(Exception):
     """Una operación viola una regla del dominio de Cotización."""
 
@@ -59,6 +63,21 @@ class PagoNoEncontradoError(Exception):
 
 class PagoNoPermitidoError(Exception):
     """La suscripción, selección o saga no permite confirmar un pago."""
+
+
+class PagoEnProcesoError(Exception):
+    def __init__(self, pago_id: UUID) -> None:
+        super().__init__("pago_en_proceso")
+        self.pago_id = pago_id
+
+
+class ResultadoPagoAmbiguoError(Exception):
+    def __init__(
+        self,
+        codigo: Literal["respuesta_perdida", "proveedor_no_disponible", "respuesta_invalida"],
+    ) -> None:
+        super().__init__(codigo)
+        self.codigo = codigo
 
 
 class ServicioPolizasNoDisponibleError(Exception):

@@ -6,12 +6,14 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from cotizacion.app import create_app
+from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.config import Config
 from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
     ConciliacionEmisionModel,
+    EfectoPagoSimuladoModel,
     IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
@@ -34,13 +36,12 @@ def pendiente(client, *, habilitada=True, resultado="confirmado"):
         factory,
         emitir_polizas=True,
         conciliar_emision=habilitada,
-        proveedor=SimuladorPago(resultado),
     )
     key = uuid4()
     now = datetime.now(UTC)
-    payment = repository.confirmar_pago_simulado(
-        base.rsplit("/", 1)[1], UUID(query["clienteId"]), key, now
-    )
+    payment = ProcesarPagoSimulado(
+        repository, SimuladorPago(factory, resultado), reloj=lambda: now
+    ).confirmar(base.rsplit("/", 1)[1], UUID(query["clienteId"]), key)
     return repository, payment, base, query, key, now
 
 
@@ -52,7 +53,10 @@ def test_solo_confirmacion_nueva_opt_in_crea_elegibilidad(client):
         historical._sesiones, emitir_polizas=True, conciliar_emision=True
     )
     assert (
-        enabled.confirmar_pago_simulado(old.solicitud_id, UUID(query["clienteId"]), key, now) == old
+        ProcesarPagoSimulado(enabled, SimuladorPago(enabled._sesiones, "confirmado")).confirmar(
+            old.solicitud_id, UUID(query["clienteId"]), key
+        )
+        == old
     )
     _, rejection, _, _, _, _ = pendiente(client, resultado="rechazado")
     _, payment, _, _, _, created = pendiente(client)
@@ -83,14 +87,17 @@ def test_elegibilidad_y_pago_se_revierten_juntos(client, model):
     event.listen(model, "before_insert", fail)
     try:
         with pytest.raises(RuntimeError, match="transaccional"):
-            repository.confirmar_pago_simulado(
-                base.rsplit("/", 1)[1], UUID(query["clienteId"]), uuid4(), datetime.now(UTC)
+            ProcesarPagoSimulado(repository, SimuladorPago(factory, "confirmado")).confirmar(
+                base.rsplit("/", 1)[1], UUID(query["clienteId"]), uuid4()
             )
     finally:
         event.remove(model, "before_insert", fail)
     with factory() as session:
-        for table in (PagoSimuladoModel, IntentoPagoSimuladoModel, ConciliacionEmisionModel):
+        for table in (PagoSimuladoModel, ConciliacionEmisionModel):
             assert session.scalar(select(func.count()).select_from(table)) == 0
+        assert session.scalar(select(func.count()).select_from(IntentoPagoSimuladoModel)) == 1
+        assert session.scalar(select(IntentoPagoSimuladoModel.resultado)) == "pendiente"
+        assert session.scalar(select(func.count()).select_from(EfectoPagoSimuladoModel)) == 1
         saga = session.get(SagaEmisionModel, UUID(subscription["id"]))
         assert (saga.estado, saga.version) == ("pago_pendiente", 1)
 
@@ -202,6 +209,10 @@ def test_fallo_outbox_emision_no_completa_trabajo_ni_saga(client):
 def test_migracion_no_activa_historicos_y_rollback_conserva_pago(client, alembic_config):
     repository, payment, base, query, _, _ = pendiente(client, habilitada=False)
     snapshot = client.get(base + "/pago-simulado", query_string=query).get_json()
+    client.application.extensions["conciliador_emision"].cerrar()
+    with repository._sesiones.begin() as session:
+        session.query(EfectoPagoSimuladoModel).delete()
+        session.query(IntentoPagoSimuladoModel).delete()
     command.downgrade(alembic_config, "intentos_pago_simulado")
     command.upgrade(alembic_config, "head")
     with repository._sesiones() as session:
@@ -213,6 +224,10 @@ def test_migracion_no_activa_historicos_y_rollback_conserva_pago(client, alembic
 def test_downgrade_rechaza_borrar_elegibilidad_pendiente(client, alembic_config):
     repository, payment, base, query, _, _ = pendiente(client)
     snapshot = client.get(base + "/pago-simulado", query_string=query).get_json()
+    client.application.extensions["conciliador_emision"].cerrar()
+    with repository._sesiones.begin() as session:
+        session.query(EfectoPagoSimuladoModel).delete()
+        session.query(IntentoPagoSimuladoModel).delete()
     with pytest.raises(RuntimeError, match="elegibilidad pendiente"):
         command.downgrade(alembic_config, "intentos_pago_simulado")
     with repository._sesiones() as session:
@@ -243,7 +258,9 @@ def test_fallo_worker_queda_persistido_y_registrado(client, database_url, caplog
     repository, payment, _, _, _, now = pendiente(client)
     with repository._sesiones.begin() as session:
         session.get(ConciliacionEmisionModel, payment.pago_id).proximo_intento_en = now
-    worker = ConciliadorEmision(database_url, PolizasHttp("http://127.0.0.1:1", "credencial-local"))
+    worker = ConciliadorEmision(
+        database_url, PolizasHttp("http://127.0.0.1:1", "credencial-local"), "confirmado"
+    )
     try:
         assert not worker.conciliar_uno()
         with repository._sesiones() as session:
@@ -320,7 +337,7 @@ assert worker.activo
 @pytest.mark.parametrize("url", ["sqlite://", "sqlite:///:memory:"])
 def test_worker_rechaza_base_no_durable(url):
     with pytest.raises(ValueError, match="persistente"):
-        ConciliadorEmision(url, PolizasHttp("http://127.0.0.1:1", "prueba-local"))
+        ConciliadorEmision(url, PolizasHttp("http://127.0.0.1:1", "prueba-local"), "confirmado")
 
 
 def test_worker_acota_esperas_sin_cambiar_el_pool_del_api(database_url):

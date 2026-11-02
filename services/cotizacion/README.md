@@ -265,15 +265,38 @@ solo si siguen cumpliendose las precondiciones. Si ya existe un confirmado,
 una clave nueva devuelve ese mismo pago (200, mismo body) sin evaluar ni
 duplicar; la recuperacion de emision conserva su posible 503. Una clave de otra
 solicitud del mismo cliente devuelve 409, incluidos pagos historicos.
-Las carreras comparten la unicidad de intentos; dos claves que confirman la misma
-solicitud convergen al mismo pago. Si un rechazo concurre con una confirmacion,
-puede persistir primero como intento independiente, pero no reemplaza al confirmado.
+Durante un pendiente, otra clave recibe `409 pago_en_proceso`, `pagoId` y
+`Location` del GET; esa clave rival no queda aceptada. La misma clave devuelve
+el estado persistido sin ejecutar de nuevo al proveedor. Tras409, recuperar
+sin selector y verificar `pagoId`, sin reenviar la clave rival.
 
-GET pago y `dashboard.pagos` devuelven el confirmado si existe, o el ultimo rechazo
-por solicitud. El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
+GET pago y `dashboard.pagos` priorizan confirmado, pendiente activo y ultimo rechazo.
+GET acepta `Idempotency-Key` UUID opcional para seleccionar exactamente un intento;
+una clave desconocida devuelve `pago_no_encontrado`, sin asociarla al canonico.
+El rechazo en dashboard incluye `rechazadaEn` y `motivo`, sin
 `confirmadaEn`. Repetir una clave rechazada antigua devuelve su rechazo, pero
-no degrada GET/dashboard ni la saga posterior. No hay conciliacion financiera,
-resultado financiero pendiente/ambiguo, firma o documento implementados.
+no degrada GET/dashboard ni la saga posterior.
+
+La migracion `pagos_simulados_pendientes` separa tres transacciones:
+T0 reserva identidad, snapshot, autorizaciones y trabajo durable; T1 escribe un
+efecto idempotente en `efectos_pago_simulado`; T2 finaliza mediante CAS de
+estado/token/lease, con pago, saga y un evento terminal atomicos. El efecto se
+conserva aunque T2 falle. Historicos mantienen IDs/fechas/resultados y no reciben
+efectos ni elegibilidad nuevos. El downgrade rechaza eliminar reservas/efectos nuevos.
+Una ambiguedad tipada devuelve `200 pendiente`, `creadaEn`, `codigo:
+resultado_no_confirmado` y la saga previa, sin `confirmadaEn`, `rechazadaEn` ni
+`motivo`. Errores SQL/no previstos siguen siendo errores, no confirmaciones.
+El ciclo existente recupera pendientes y leases vencidos desde SQL, consultando
+la misma identidad incluso tras reinicio; nunca reserva otro cobro. La fase
+financiera funciona sin URL ni bandera de emision, usa backoff hasta 30s y no
+convierte indisponibilidad permanente en rechazo: conserva pendiente y registra
+causa/contador. Solo confirmados pasan a la emision academica, segun autorizacion
+capturada en T0. GET pago es SQL puro, sin proveedor ni emision.
+Los fallos antes/despues del efecto son fixtures controlados de prueba, no una
+opcion del navegador ni un nuevo valor de `PAGO_SIMULADO_RESULTADO`.
+Antes de integrar/desplegar, adaptar BFF/web para persistir solicitud+clave antes
+del POST y recuperar por GET sin generar otra clave mientras este pendiente.
+No se implementan pasarela real, firma ni documento.
 Las fechas de pago, suscripcion y dashboard se serializan en UTC (`Z`), tambien
 cuando PostgreSQL devuelve un `timestamptz` con otro offset. Asi el replay conserva
 el mismo body y snapshot sin depender de la zona horaria de la conexion ni
@@ -282,7 +305,8 @@ modificar el instante persistido.
 GET responde `404 pago_no_encontrado` únicamente para una solicitud propia sin resultado;
 una ajena/inexistente responde `404 no_encontrado`. POST sin suscripción devuelve
 404; una no aprobada, selección inválida, oferta vencida o saga no pendiente devuelve
-`422 pago_no_permitido`. Un fallo de persistencia revierte todo y nunca se informa éxito.
+`422 pago_no_permitido`. Un fallo T2 revierte resultado/pago/saga/evento; conserva
+reserva y efecto independientes para recuperacion, sin informar exito terminal.
 El contrato público y códigos del BFF están en `contracts/openapi/bff-web-v1.yaml`.
 
 ### Recuperacion automatica de emision academica (opt-in)
@@ -297,13 +321,15 @@ reactiva pagos historicos, tampoco los que ya tenian `emision_solicitada=true`.
 La elegibilidad (`pago_id`, `autorizada_en`) se crea en la MISMA transaccion
 del pago nuevo confirmado mientras la opcion esta activa. Un rechazo, una
 consulta o un replay de un confirmado anterior no crean elegibilidad.
-Desactivar la opcion al reiniciar procesos detiene el recuperador y la
-creacion de nuevos trabajos; conserva los ya autorizados para una reactivacion.
+Desactivar la opcion al reiniciar procesos detiene la fase de emision y la
+creacion de nuevos trabajos de emision; conserva los ya autorizados para una
+reactivacion. La fase financiera del mismo hilo sigue recuperando pendientes.
 
 Cada proceso del servicio inicia un hilo propio desde `create_app`, usando el
 entrypoint Gunicorn existente **sin `--preload`**. No requiere un servicio,
 cron, endpoint de control, broker o infraestructura adicional. Procesa como
-maximo un trabajo por ciclo de 1s; el primer intento vence 2s despues de la
+maximo un intento financiero y un trabajo de emision por ciclo de 1s;
+para emision, el primer intento vence 2s despues de la
 confirmacion. Una reserva SQL condicional dura 30s y lleva un token de reserva.
 Solo el propietario puede registrar su fallo; una reserva vencida se puede
 recuperar tras reiniciar. Hasta 8 reservas automaticas, con backoff persistido
@@ -311,8 +337,8 @@ de 2/4/8/16/30s (tope 30s). Tras agotarlas, estado tecnico `agotada` y ultimo
 error quedan visibles en SQL/logs; el pago sigue confirmado, nunca rechazado.
 El POST manual idempotente sigue disponible y puede completar tambien ese caso.
 
-La recuperacion comparte el mismo emisor HTTP, evidencia y CAS de saga que
-POST. No consulta al simulador, cobra, genera clave/intento financiero, ni
+La fase de emision comparte el mismo emisor HTTP, evidencia y CAS de saga que
+POST. Esta fase no consulta al simulador, cobra, genera clave/intento financiero, ni
 actualiza el snapshot v2 del pago. Polizas conserva su unicidad por
 pago/suscripcion; saga, evento unico y finalizacion del trabajo se confirman
 en una transaccion. GET suscripcion/dashboard observa `emitida` v3 despues
@@ -331,12 +357,12 @@ agotados; no elimina autorizaciones durables para aparentar un rollback exitoso.
 Cuando todos estan completados, downgrade conserva pagos, sagas y eventos.
 SQLite en memoria no es valido para este recuperador durable.
 
-**Limite:** recupera SOLO la emision academica/simulada existente. No implementa
+**Limite:** recupera pago simulado durable y emision academica existente. No implementa
 firma verificable, documento o poliza legal, ni la conciliacion de una pasarela
 con resultado financiero ambiguo. No convierte consentimiento en firma.
 La medicion local de una perdida de acuse frente a 60s NO acredita ASR-EMI-01,
 capacidad ni SLA AWS: sigue pendiente la firma confirmada exigida por el PDF
-(pp. 21-22; la ambiguedad financiera de p. 17 sigue separada)
+(pp. 21-22; el simulador no acredita integracion con una pasarela financiera real)
 y la decision de activacion productiva. No se modifican IAM/KMS/SQS/DLQ.
 
 El listado y el detalle incluyen coberturas, condiciones y vigencia para los ocho seguros,

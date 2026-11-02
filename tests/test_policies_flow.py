@@ -20,10 +20,12 @@ from bff_web.domain.auth import User
 from cotizacion.app import create_app as quote_app
 from cotizacion.application.pagos import ProcesarPagoSimulado
 from cotizacion.config import Config as QuoteConfig
-from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
+from cotizacion.domain.errors import ResultadoPagoAmbiguoError, ServicioPolizasNoDisponibleError
+from cotizacion.domain.pago import PagoSimuladoPendiente
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
 from cotizacion.infrastructure.persistence.models import (
     ConciliacionEmisionModel,
+    EfectoPagoSimuladoModel,
     IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
@@ -83,7 +85,9 @@ def policy_runtime(runtime: Runtime, tmp_path: Path) -> Iterator[Runtime]:
         quotes.application.extensions["polizas"] = PolizasHttp(url, INTERNAL_TOKEN)
         repository = RepositorioPagosSqlAlchemy(factory, emitir_polizas=True)
         quotes.application.extensions["repositorio_pagos"] = repository
-        quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(repository)
+        quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
+            repository, SimuladorPago(factory, "confirmado")
+        )
         quotes.application.extensions["polizas_test_app"] = policies
         yield runtime
 
@@ -167,9 +171,12 @@ def test_automatic_recovery_after_lost_ack_without_another_payment_post(
     selection, subscription, failure = create_paid_request(
         client, token, "automotive", payment_status=503
     )
-    monkeypatch.setattr(
-        SimuladorPago, "evaluar", lambda *_: pytest.fail("No se debe reevaluar el pago confirmado")
-    )
+    for operacion in ("ejecutar", "consultar"):
+        monkeypatch.setattr(
+            SimuladorPago,
+            operacion,
+            lambda *_: pytest.fail("No se debe reevaluar el pago confirmado"),
+        )
     assert lost and failure["code"] == "servicio_no_disponible"
     base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
     payment = client.get(base + "/pago-simulado", headers=bearer(token)).get_json()
@@ -216,9 +223,12 @@ def test_worker_and_manual_recovery_converge_without_duplicates(
     selection, subscription, _ = create_paid_request(
         client, token, "automotive", payment_status=503
     )
-    monkeypatch.setattr(
-        SimuladorPago, "evaluar", lambda *_: pytest.fail("No se debe reevaluar el pago confirmado")
-    )
+    for operacion in ("ejecutar", "consultar"):
+        monkeypatch.setattr(
+            SimuladorPago,
+            operacion,
+            lambda *_: pytest.fail("No se debe reevaluar el pago confirmado"),
+        )
     base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
     snapshot = client.get(base + "/pago-simulado", headers=bearer(token)).get_json()
     with automatic_policy_runtime[2]() as session:
@@ -337,7 +347,9 @@ def test_automatic_recovery_excludes_rejected_payments(
 ) -> None:
     client, quotes, factory = automatic_policy_runtime
     monkeypatch.setattr(
-        quotes.application.extensions["repositorio_pagos"], "_proveedor", SimuladorPago("rechazado")
+        quotes.application.extensions["procesar_pago_simulado"],
+        "_proveedor",
+        SimuladorPago(factory, "rechazado"),
     )
     _, subscription, payment = create_paid_request(client, token, "automotive")
     assert payment["estado"] == "rechazado"
@@ -428,8 +440,14 @@ def test_payment_emits_persisted_policy_visible_only_to_owner(
 def test_historical_payment_never_emits_automatically(policy_runtime: Runtime, token: str) -> None:
     client, quotes, factory = policy_runtime
     historical = RepositorioPagosSqlAlchemy(factory, emitir_polizas=False)
-    quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(historical)
+    quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
+        historical, SimuladorPago(factory, "confirmado")
+    )
     selection, _, _ = create_paid_request(client, token, "automotive")
+    quotes.application.extensions["conciliador_emision"].cerrar()
+    with factory.begin() as session:
+        session.query(EfectoPagoSimuladoModel).delete()
+        session.query(IntentoPagoSimuladoModel).delete()
     migration = Config(str(ROOT / "services" / "cotizacion" / "alembic.ini"))
     migration.set_main_option(
         "sqlalchemy.url", quotes.application.extensions["cotizacion_config"].database_url
@@ -437,7 +455,9 @@ def test_historical_payment_never_emits_automatically(policy_runtime: Runtime, t
     command.downgrade(migration, "pagos_simulados")
     command.upgrade(migration, "head")
     enabled = quotes.application.extensions["repositorio_pagos"]
-    quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(enabled)
+    quotes.application.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
+        enabled, SimuladorPago(factory, "confirmado")
+    )
     response = client.post(
         f"/v1/solicitudes-cotizacion/{selection['solicitudId']}/pago-simulado",
         headers={**bearer(token), "Idempotency-Key": str(uuid4())},
@@ -447,6 +467,100 @@ def test_historical_payment_never_emits_automatically(policy_runtime: Runtime, t
     assert (
         client.get("/v1/clientes/me/dashboard", headers=bearer(token)).get_json()["polizas"] == []
     )
+
+
+@pytest.mark.parametrize("terminal", ["confirmado", "rechazado"])
+def test_P15_pending_HTTP_GET_replay_and_worker_never_emit_before_confirmation(
+    automatic_policy_runtime: Runtime,
+    token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+) -> None:
+    client, quotes, factory = automatic_policy_runtime
+    app = quotes.application
+    worker = app.extensions["conciliador_emision"]
+    worker.cerrar()
+    processor = app.extensions["procesar_pago_simulado"]
+    provider = SimuladorPago(factory, terminal)
+    processor._proveedor = provider
+    original = provider.ejecutar
+    gateway = app.extensions["polizas"]
+    emitir = gateway.emitir
+
+    def perdida(efecto_id: UUID, instantanea: PagoSimuladoPendiente, huella: str) -> None:
+        original(efecto_id, instantanea, huella)
+        raise ResultadoPagoAmbiguoError("respuesta_perdida")
+
+    def prohibida(*_: object) -> UUID:
+        raise AssertionError("El pendiente/rechazo no autoriza emision")
+
+    monkeypatch.setattr(provider, "ejecutar", perdida)
+    monkeypatch.setattr(gateway, "emitir", prohibida)
+    selection, _, pending = create_paid_request(client, token, "automotive")
+    assert pending["estado"] == "pendiente"
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    with factory() as session:
+        attempt: IntentoPagoSimuladoModel = session.scalars(select(IntentoPagoSimuladoModel)).one()
+        key = str(attempt.idempotency_key)
+        assert attempt.resultado == "pendiente"
+        assert session.scalar(select(func.count()).select_from(EfectoPagoSimuladoModel)) == 1
+        assert session.scalar(select(func.count()).select_from(ConciliacionEmisionModel)) == 0
+        assert session.scalar(select(func.count()).select_from(PagoSimuladoModel)) == 0
+    headers = {**bearer(token), "Idempotency-Key": key}
+    assert client.get(base + "/pago-simulado").status_code == 401
+    assert client.get(base + "/pago-simulado", headers=headers).get_json() == pending
+    assert client.post(base + "/pago-simulado", headers=headers, json={}).get_json() == pending
+    conflict = client.post(
+        base + "/pago-simulado", headers={**bearer(token), "Idempotency-Key": str(uuid4())}, json={}
+    )
+    assert conflict.status_code == 409 and conflict.get_json()["pagoId"] == pending["id"]
+    assert conflict.headers["Location"] == base + "/pago-simulado"
+    dashboard = client.get("/v1/clientes/me/dashboard", headers=bearer(token)).get_json()
+    validate_contract(dashboard)
+    assert dashboard["pagos"][0]["estado"] == "pendiente" and dashboard["polizas"] == []
+    document = yaml.safe_load((ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text())
+    contract = document["paths"]["/v1/solicitudes-cotizacion/{solicitudId}/pago-simulado"]
+    assert {"200", "400", "401", "404", "409", "503"} <= set(contract["get"]["responses"])
+    selector = next(p for p in contract["get"]["parameters"] if p.get("name") == "Idempotency-Key")
+    assert selector["required"] is False and selector["schema"]["format"] == "uuid"
+    assert "Location" in contract["post"]["responses"]["409"]["headers"]
+    recovered_rival = client.get(conflict.headers["Location"], headers=bearer(token))
+    assert recovered_rival.status_code == 200 and recovered_rival.get_json()["id"] == pending["id"]
+    for data, schema_name in (
+        (pending, "PagoSimulado"),
+        (conflict.get_json(), "ProblemaPagoEnProceso"),
+    ):
+        OAS31Validator(
+            {"$ref": f"#/components/schemas/{schema_name}", "components": document["components"]},
+            format_checker=OAS31Validator.FORMAT_CHECKER,
+        ).validate(data)
+    worker.pagos._reloj = lambda: datetime.now(UTC) + timedelta(seconds=3)
+    if terminal == "confirmado":
+        monkeypatch.setattr(gateway, "emitir", emitir)
+    assert worker.conciliar_uno()
+    final = client.get(base + "/pago-simulado", headers=headers).get_json()
+    assert final["id"] == pending["id"] and final["estado"] == terminal
+    assert client.post(base + "/pago-simulado", headers=headers, json={}).get_json() == final
+    assert not worker.conciliar_uno()
+    dashboard = client.get("/v1/clientes/me/dashboard", headers=bearer(token)).get_json()
+    validate_contract(dashboard)
+    assert len(dashboard["polizas"]) == (terminal == "confirmado")
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(EfectoPagoSimuladoModel)) == 1
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventoModel)
+                .where(OutboxEventoModel.tipo.like("PagoSimulado%"))
+            )
+            == 1
+        )
+        jobs: list[ConciliacionEmisionModel] = list(
+            session.scalars(select(ConciliacionEmisionModel))
+        )
+        assert len(jobs) == (terminal == "confirmado")
+        if jobs:
+            assert jobs[0].estado == "completada"
 
 
 def test_emission_failure_keeps_payment_and_retry_emits_once(
@@ -605,8 +719,8 @@ def test_rejected_payment_is_visible_only_to_owner_and_never_emits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, quotes, factory = policy_runtime
-    repository = quotes.application.extensions["repositorio_pagos"]
-    monkeypatch.setattr(repository, "_proveedor", SimuladorPago("rechazado"))
+    processor = quotes.application.extensions["procesar_pago_simulado"]
+    monkeypatch.setattr(processor, "_proveedor", SimuladorPago(factory, "rechazado"))
     gateway = quotes.application.extensions["polizas"]
     original = gateway.emitir
 
@@ -698,7 +812,7 @@ def test_rejected_payment_is_visible_only_to_owner_and_never_emits(
     assert len(latest_dashboard["pagos"]) == 1
     assert latest_dashboard["pagos"][0]["id"] == latest["id"]
     assert latest_dashboard["polizas"] == []
-    monkeypatch.setattr(repository, "_proveedor", SimuladorPago("confirmado"))
+    monkeypatch.setattr(processor, "_proveedor", SimuladorPago(factory, "confirmado"))
     replay = client.post(
         base + "/pago-simulado", headers={**headers, "Idempotency-Key": key}, json={}
     )

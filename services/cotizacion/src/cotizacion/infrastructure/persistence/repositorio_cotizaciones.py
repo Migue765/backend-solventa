@@ -60,15 +60,16 @@ class RepositorioCotizacionesSqlAlchemy:
 
     def consultar_dashboard(self, cliente_id: UUID) -> dict[str, object]:
         # Una sola consulta mantiene coherente la proyeccion incluso durante un pago.
-        ultimo_rechazo = (
+        intento_actual = (
             select(IntentoPagoSimuladoModel.intento_id)
             .where(
                 IntentoPagoSimuladoModel.solicitud_id == CotizacionModel.solicitud_id,
                 IntentoPagoSimuladoModel.cliente_id == cliente_id,
-                IntentoPagoSimuladoModel.resultado == "rechazado",
+                IntentoPagoSimuladoModel.resultado.in_(["pendiente", "rechazado"]),
             )
             .order_by(
-                IntentoPagoSimuladoModel.evaluado_en.desc(),
+                (IntentoPagoSimuladoModel.resultado == "pendiente").desc(),
+                IntentoPagoSimuladoModel.creada_en.desc(),
                 IntentoPagoSimuladoModel.intento_id.desc(),
             )
             .limit(1)
@@ -104,7 +105,7 @@ class RepositorioCotizacionesSqlAlchemy:
             )
             .outerjoin(
                 IntentoPagoSimuladoModel,
-                IntentoPagoSimuladoModel.intento_id == ultimo_rechazo,
+                IntentoPagoSimuladoModel.intento_id == intento_actual,
             )
             .where(CotizacionModel.cliente_id == cliente_id)
             .options(raiseload(CotizacionModel.coberturas), raiseload(CotizacionModel.instantanea))
@@ -173,6 +174,20 @@ class RepositorioCotizacionesSqlAlchemy:
                             "importe": {"monto": str(pago.monto), "moneda": pago.moneda},
                             "periodicidad": pago.periodicidad,
                             "confirmadaEn": _fecha_dashboard(pago.confirmada_en),
+                        }
+                    )
+                elif rechazo is not None and rechazo.resultado == "pendiente":
+                    pagos.append(
+                        {
+                            "id": str(rechazo.intento_id),
+                            "solicitudId": rechazo.solicitud_id,
+                            "suscripcionId": str(rechazo.suscripcion_id),
+                            "estado": "pendiente",
+                            "simulada": True,
+                            "importe": {"monto": str(rechazo.monto), "moneda": rechazo.moneda},
+                            "periodicidad": rechazo.periodicidad,
+                            "creadaEn": _fecha_dashboard(rechazo.creada_en),
+                            "codigo": "resultado_no_confirmado",
                         }
                     )
                 elif rechazo is not None:

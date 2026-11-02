@@ -1,14 +1,46 @@
+from unittest.mock import Mock
+from uuid import uuid4
+
 import pytest
 from bff_web.domain.quote_errors import (
     PaymentNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
+    SimulatedPaymentInProgressError,
 )
 from flask import Flask
 from support import FakeJwks, StubQuoteGateway, bearer
 
 PATH = "/v1/solicitudes-cotizacion/AQT-2026-ABCDEF1234/pago-simulado"
+
+
+def test_get_validates_selector_without_calling_gateway(
+    app: Flask, token: str, quotes: StubQuoteGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    call = Mock()
+    monkeypatch.setattr(quotes, "get_simulated_payment", call)
+    response = app.test_client().get(PATH, headers={**bearer(token), "Idempotency-Key": "invalida"})
+    assert response.status_code == 400
+    call.assert_not_called()
+
+
+def test_rival_pending_exposes_existing_id_and_get_location(
+    app: Flask, token: str, quotes: StubQuoteGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payment_id = uuid4()
+    monkeypatch.setattr(
+        quotes,
+        "confirm_simulated_payment",
+        Mock(side_effect=SimulatedPaymentInProgressError(payment_id)),
+    )
+    response = app.test_client().post(
+        PATH, headers={**bearer(token), "Idempotency-Key": str(uuid4())}, json={}
+    )
+    assert response.status_code == 409
+    assert response.headers["Location"] == PATH
+    assert response.get_json()["code"] == "pago_en_proceso"
+    assert response.get_json()["pagoId"] == str(payment_id)
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])

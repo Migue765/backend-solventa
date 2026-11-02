@@ -388,7 +388,9 @@ class StubQuoteGateway(QuoteGateway):
     ) -> SimulatedPayment:
         raise NotImplementedError
 
-    def get_simulated_payment(self, user_id: UUID, request_id: str) -> SimulatedPayment:
+    def get_simulated_payment(
+        self, user_id: UUID, request_id: str, idempotency_key: UUID | None = None
+    ) -> SimulatedPayment:
         self.user_ids.append(user_id)
         raise SimulatedPaymentNotFoundError
 

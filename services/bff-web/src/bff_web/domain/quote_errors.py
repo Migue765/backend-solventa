@@ -1,3 +1,6 @@
+from uuid import UUID
+
+
 class QuoteServiceUnavailableError(Exception):
     """El servicio de cotización no está disponible."""
 
@@ -30,6 +33,12 @@ class OfferSelectionConflictError(Exception):
 
 class SimulatedPaymentNotFoundError(Exception):
     """La solicitud del cliente todavía no tiene un pago simulado."""
+
+
+class SimulatedPaymentInProgressError(Exception):
+    def __init__(self, payment_id: UUID) -> None:
+        super().__init__("pago_en_proceso")
+        self.payment_id = payment_id
 
 
 class PaymentNotAllowedError(Exception):
