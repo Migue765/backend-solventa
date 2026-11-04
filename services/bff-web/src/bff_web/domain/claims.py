@@ -31,7 +31,7 @@ class ClaimStatus(BaseModel):
 
     claim_id: UUID = Field(alias="id")
     policy_id: UUID = Field(alias="polizaId")
-    claim_type: ClaimType = Field(alias="tipo")
+    claim_type: ClaimType | None = Field(alias="tipo")
     state: ClaimState = Field(alias="estado")
     description: str = Field(alias="descripcion", min_length=1)
     occurred_at: UtcDatetime = Field(alias="ocurridoEn")

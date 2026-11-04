@@ -11,7 +11,10 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from flask import Flask
 from siniestros.app import create_app
-from siniestros.infrastructure.models import Base, CambioEstadoModel, SiniestroModel
+from siniestros.domain import Config as ClaimsConfig
+from siniestros.infrastructure.models import Base, CambioEstadoModel
+from siniestros.models import Claim
+from siniestros.repository import fingerprint
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -26,28 +29,36 @@ def app(tmp_path: Path) -> Flask:
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "head")
-    return create_app(url, TOKEN)
+    return create_app(ClaimsConfig(url, tmp_path / "evidencias", TOKEN, "http://polizas.test"))
 
 
 def registrar(app: Flask, cliente_id: UUID, cambios: list[tuple[str, timedelta, bool]]) -> UUID:
     siniestro_id = uuid4()
+    payload = {
+        "polizaId": str(uuid4()),
+        "fechaEvento": (REPORTE - timedelta(days=1)).isoformat(),
+        "tipoEvento": "Accidente",
+        "descripcion": "Descripcion sintetica del evento.",
+        "lugar": "Lugar de prueba",
+    }
     with Session(app.extensions["siniestros_engine"]) as session, session.begin():
         session.add(
-            SiniestroModel(
-                siniestro_id=siniestro_id,
-                cliente_id=cliente_id,
-                poliza_id=uuid4(),
+            Claim(
+                id=str(siniestro_id),
+                owner=str(cliente_id),
+                operation=str(uuid4()),
+                fingerprint=fingerprint(payload),
+                payload=payload,
+                created=REPORTE.isoformat(),
                 tipo="asistido",
                 estado=cambios[-1][0],
-                ocurrido_en=REPORTE - timedelta(days=1),
-                reportado_en=REPORTE,
                 actualizado_en=REPORTE + cambios[-1][1],
             )
         )
         session.flush()
         session.add_all(
             CambioEstadoModel(
-                siniestro_id=siniestro_id,
+                siniestro_id=str(siniestro_id),
                 secuencia=secuencia,
                 estado=estado,
                 ocurrido_en=REPORTE + desfase,
@@ -71,9 +82,8 @@ def test_consulta_estado_vigente_e_historial_permitido(app: Flask) -> None:
     siniestro_id = registrar(app, cliente_id, HISTORIAL)
 
     response = app.test_client().get(
-        f"/v1/siniestros/{siniestro_id}",
-        query_string={"clienteId": str(cliente_id)},
-        headers=HEADERS,
+        f"/v1/siniestros/{siniestro_id}/estado",
+        headers={**HEADERS, "X-Cliente-ID": str(cliente_id)},
     )
 
     assert response.status_code == 200
@@ -100,26 +110,25 @@ def test_siniestro_de_otro_cliente_responde_igual_que_inexistente(app: Flask) ->
     cliente = app.test_client()
 
     ajeno = cliente.get(
-        f"/v1/siniestros/{siniestro_id}",
-        query_string={"clienteId": str(uuid4())},
-        headers=HEADERS,
+        f"/v1/siniestros/{siniestro_id}/estado",
+        headers={**HEADERS, "X-Cliente-ID": str(uuid4())},
     )
     inexistente = cliente.get(
-        f"/v1/siniestros/{uuid4()}",
-        query_string={"clienteId": str(uuid4())},
-        headers=HEADERS,
+        f"/v1/siniestros/{uuid4()}/estado",
+        headers={**HEADERS, "X-Cliente-ID": str(uuid4())},
     )
 
     assert ajeno.status_code == inexistente.status_code == 404
-    assert ajeno.get_json()["error"] == inexistente.get_json()["error"] == "siniestro_no_encontrado"
-    assert set(ajeno.get_json()) == {"error", "correlationId"}
+    assert ajeno.get_json()["code"] == inexistente.get_json()["code"] == "siniestro_no_encontrado"
+    assert "estado" not in ajeno.get_json()
+    assert str(siniestro_id) not in ajeno.get_data(as_text=True)
 
 
 def test_requiere_credencial_interna(app: Flask) -> None:
     siniestro_id = registrar(app, uuid4(), HISTORIAL)
 
     response = app.test_client().get(
-        f"/v1/siniestros/{siniestro_id}", query_string={"clienteId": str(uuid4())}
+        f"/v1/siniestros/{siniestro_id}/estado", headers={"X-Cliente-ID": str(uuid4())}
     )
 
     assert response.status_code == 401
@@ -128,42 +137,59 @@ def test_requiere_credencial_interna(app: Flask) -> None:
 @pytest.mark.parametrize(
     "ruta",
     [
-        f"/v1/siniestros/{uuid4()}",
-        f"/v1/siniestros/{uuid4()}?clienteId=x",
-        f"/v1/siniestros/no-uuid?clienteId={uuid4()}",
-        f"/v1/siniestros/{uuid4()}?clienteId={uuid4()}&clienteId={uuid4()}",
-        f"/v1/siniestros/{uuid4()}?clienteId={uuid4()}&otro=x",
+        "/v1/siniestros/no-uuid/estado",
+        f"/v1/siniestros/{uuid4()}/estado?clienteId=x",
+        f"/v1/siniestros/{uuid4()}/estado?clienteId={uuid4()}&clienteId={uuid4()}",
+        f"/v1/siniestros/{uuid4()}/estado?clienteId={uuid4()}&otro=x",
     ],
 )
 def test_consulta_invalida(app: Flask, ruta: str) -> None:
-    assert app.test_client().get(ruta, headers=HEADERS).status_code == 400
+    assert (
+        app.test_client().get(ruta, headers={**HEADERS, "X-Cliente-ID": str(uuid4())}).status_code
+        == 400
+    )
+
+
+@pytest.mark.parametrize("owner", [None, "no-uuid"])
+def test_requiere_cliente_del_bff(app: Flask, owner: str | None) -> None:
+    headers = {**HEADERS, **({"X-Cliente-ID": owner} if owner else {})}
+    assert (
+        app.test_client().get(f"/v1/siniestros/{uuid4()}/estado", headers=headers).status_code
+        == 400
+    )
 
 
 def test_registro_incoherente_no_es_un_estado_valido(app: Flask) -> None:
     cliente_id = uuid4()
     siniestro_id = registrar(app, cliente_id, HISTORIAL)
     with Session(app.extensions["siniestros_engine"]) as session, session.begin():
-        session.execute(update(SiniestroModel).values(estado="pagado"))
+        session.execute(update(Claim).values(estado="pagado"))
 
     response = app.test_client().get(
-        f"/v1/siniestros/{siniestro_id}",
-        query_string={"clienteId": str(cliente_id)},
-        headers=HEADERS,
+        f"/v1/siniestros/{siniestro_id}/estado",
+        headers={**HEADERS, "X-Cliente-ID": str(cliente_id)},
     )
 
     assert response.status_code == 503
-    assert response.get_json()["error"] == "siniestro_no_integro"
+    assert response.get_json()["code"] == "siniestro_no_integro"
 
 
 def test_fallo_persistencia_no_parece_historial_vacio(tmp_path: Path) -> None:
-    app = create_app(f"sqlite:///{tmp_path / 'sin-migrar.db'}", TOKEN)
+    app = create_app(
+        ClaimsConfig(
+            f"sqlite:///{tmp_path / 'sin-migrar.db'}",
+            tmp_path / "evidencias",
+            TOKEN,
+            "http://polizas.test",
+        )
+    )
 
     response = app.test_client().get(
-        f"/v1/siniestros/{uuid4()}", query_string={"clienteId": str(uuid4())}, headers=HEADERS
+        f"/v1/siniestros/{uuid4()}/estado", headers={**HEADERS, "X-Cliente-ID": str(uuid4())}
     )
 
     assert response.status_code == 503
-    assert response.get_json()["error"] == "servicio_no_disponible"
+    assert response.get_json()["code"] == "servicio_no_disponible"
 
 
 def test_migracion_coincide_con_modelos(app: Flask) -> None:
@@ -179,9 +205,8 @@ def test_latencia_de_consulta(app: Flask) -> None:
     for indice in range(200):
         inicio = perf_counter()
         response = cliente.get(
-            f"/v1/siniestros/{siniestros[indice % len(siniestros)]}",
-            query_string={"clienteId": str(cliente_id)},
-            headers=HEADERS,
+            f"/v1/siniestros/{siniestros[indice % len(siniestros)]}/estado",
+            headers={**HEADERS, "X-Cliente-ID": str(cliente_id)},
         )
         latencias_ms.append((perf_counter() - inicio) * 1000)
         assert response.status_code == 200
@@ -206,9 +231,8 @@ def test_siembra_local_produce_casos_consultables(app: Flask) -> None:
     estados = [
         app.test_client()
         .get(
-            f"/v1/siniestros/{siniestro_id}",
-            query_string={"clienteId": str(cliente_id)},
-            headers=HEADERS,
+            f"/v1/siniestros/{siniestro_id}/estado",
+            headers={**HEADERS, "X-Cliente-ID": str(cliente_id)},
         )
         .get_json()["estado"]
         for siniestro_id in identificadores

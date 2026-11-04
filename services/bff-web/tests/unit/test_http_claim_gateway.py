@@ -50,9 +50,8 @@ def test_consulta_con_cliente_de_sesion_token_y_correlacion() -> None:
     claim_id, client_id = uuid4(), uuid4()
 
     def respond(request: Request, timeout: float) -> io.BytesIO:
-        assert request.full_url == (
-            f"http://siniestros/v1/siniestros/{claim_id}?clienteId={client_id}"
-        )
+        assert request.full_url == (f"http://siniestros/v1/siniestros/{claim_id}/estado")
+        assert request.get_header("X-cliente-id") == str(client_id)
         assert request.get_header("Authorization") == "Bearer token-de-prueba"
         assert request.get_header("X-correlation-id") == "corr-prueba"
         assert timeout == 0.8
@@ -69,20 +68,29 @@ def test_consulta_con_cliente_de_sesion_token_y_correlacion() -> None:
 
 def test_siniestro_no_encontrado() -> None:
     with (
-        patch(TARGET, side_effect=http_error(404, {"error": "siniestro_no_encontrado"})),
+        patch(TARGET, side_effect=http_error(404, {"code": "siniestro_no_encontrado"})),
         pytest.raises(ClaimNotFoundError),
     ):
         HttpClaimGateway("http://siniestros", "t").get_status(uuid4(), uuid4(), "c")
 
 
+def test_tipo_nulo_conserva_clasificacion_desconocida() -> None:
+    claim_id = uuid4()
+    body = io.BytesIO(json.dumps(status_payload(claim_id, tipo=None)).encode())
+    with patch(TARGET, return_value=body):
+        result = HttpClaimGateway("http://siniestros", "t").get_status(claim_id, uuid4(), "c")
+    assert result.claim_type is None
+
+
 @pytest.mark.parametrize(
     "failure",
     [
-        http_error(404, {"error": "otra_ruta"}),
+        http_error(404, {"code": "otra_ruta"}),
+        http_error(404, {"error": "siniestro_no_encontrado"}),
         http_error(404, "no-json"),
-        http_error(400, {"error": "solicitud_invalida"}),
-        http_error(401, {"error": "no_autorizado"}),
-        http_error(503, {"error": "siniestro_no_integro"}),
+        http_error(400, {"code": "solicitud_invalida"}),
+        http_error(401, {"code": "no_autorizado"}),
+        http_error(503, {"code": "siniestro_no_integro"}),
         URLError("caido"),
         TimeoutError(),
     ],
@@ -125,8 +133,9 @@ def test_respuesta_incoherente_no_se_presenta_como_estado(overrides: dict[str, o
         HttpClaimGateway("http://siniestros", "t").get_status(claim_id, uuid4(), "c")
 
 
-def test_sin_credencial_interna_no_consulta() -> None:
+@pytest.mark.parametrize("url,token", [("http://siniestros", ""), ("", "local-test-token")])
+def test_sin_configuracion_interna_no_consulta(url: str, token: str) -> None:
     with patch(TARGET) as urlopen, pytest.raises(ClaimServiceUnavailableError):
-        HttpClaimGateway("http://siniestros", "").get_status(uuid4(), uuid4(), "c")
+        HttpClaimGateway(url, token).get_status(uuid4(), uuid4(), "c")
 
     urlopen.assert_not_called()

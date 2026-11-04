@@ -23,7 +23,10 @@ from flask.testing import FlaskClient
 from jwt.algorithms import RSAAlgorithm
 from openapi_schema_validator import OAS31Validator
 from siniestros.app import create_app as create_claims_app
-from siniestros.infrastructure.models import CambioEstadoModel, SiniestroModel
+from siniestros.domain import Config as ClaimsConfig
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.models import Claim
+from siniestros.repository import fingerprint
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 from werkzeug.serving import make_server
@@ -47,7 +50,7 @@ def keypair() -> rsa.RSAPrivateKey:
 
 @pytest.fixture
 def token(keypair: rsa.RSAPrivateKey) -> str:
-    return sign_token(keypair)
+    return sign_token(keypair, scope="cliente")
 
 
 @pytest.fixture
@@ -56,7 +59,9 @@ def runtime(tmp_path: Path, keypair: rsa.RSAPrivateKey) -> Iterator[Runtime]:
     migration_config = AlembicConfig(str(ROOT / "services" / "siniestros" / "alembic.ini"))
     migration_config.set_main_option("sqlalchemy.url", url)
     command.upgrade(migration_config, "head")
-    claims_app = create_claims_app(url, INTERNAL_TOKEN)
+    claims_app = create_claims_app(
+        ClaimsConfig(url, tmp_path / "evidencias", INTERNAL_TOKEN, "http://polizas.test")
+    )
     server = make_server("127.0.0.1", 0, claims_app, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -84,23 +89,31 @@ def runtime(tmp_path: Path, keypair: rsa.RSAPrivateKey) -> Iterator[Runtime]:
 
 def register(claims_app: Flask, client_id: UUID) -> UUID:
     claim_id = uuid4()
+    payload = {
+        "polizaId": str(uuid4()),
+        "fechaEvento": (REPORTE - timedelta(hours=2)).isoformat(),
+        "tipoEvento": "Accidente",
+        "descripcion": "Descripcion sintetica del evento.",
+        "lugar": "Lugar de prueba",
+    }
     with Session(claims_app.extensions["siniestros_engine"]) as session, session.begin():
         session.add(
-            SiniestroModel(
-                siniestro_id=claim_id,
-                cliente_id=client_id,
-                poliza_id=uuid4(),
+            Claim(
+                id=str(claim_id),
+                owner=str(client_id),
+                operation=str(uuid4()),
+                fingerprint=fingerprint(payload),
+                payload=payload,
+                created=REPORTE.isoformat(),
                 tipo="asistido",
                 estado=HISTORIAL[-1][0],
-                ocurrido_en=REPORTE - timedelta(hours=2),
-                reportado_en=REPORTE,
                 actualizado_en=REPORTE + HISTORIAL[-1][1],
             )
         )
         session.flush()
         session.add_all(
             CambioEstadoModel(
-                siniestro_id=claim_id,
+                siniestro_id=str(claim_id),
                 secuencia=sequence,
                 estado=state,
                 ocurrido_en=REPORTE + offset,
@@ -147,7 +160,9 @@ def test_siniestro_de_otro_cliente_no_revela_datos(
 ) -> None:
     client, claims_app = runtime
     claim_id = register(claims_app, USER.user_id)
-    other = sign_token(keypair, User(uuid4(), "Otro", "otro@solventa.co", "cliente"))
+    other = sign_token(
+        keypair, User(uuid4(), "Otro", "otro@solventa.co", "cliente"), scope="cliente"
+    )
 
     foreign = client.get(path(claim_id), headers=bearer(other))
     missing = client.get(path(uuid4()), headers=bearer(other))
@@ -163,7 +178,7 @@ def test_registro_incoherente_es_falla_y_no_estado(runtime: Runtime, token: str)
     client, claims_app = runtime
     claim_id = register(claims_app, USER.user_id)
     with Session(claims_app.extensions["siniestros_engine"]) as session, session.begin():
-        session.execute(update(SiniestroModel).values(estado="pagado"))
+        session.execute(update(Claim).values(estado="pagado"))
 
     response = client.get(path(claim_id), headers=bearer(token))
 

@@ -1,14 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
+from siniestros.domain import ClaimInput
 from siniestros.domain.estado import (
     DESCRIPCIONES,
     CambioEstado,
     EstadoConsultado,
     RegistroSiniestro,
+    SiniestroNoIntegro,
     consultar_estado,
 )
-from siniestros.infrastructure.models import CambioEstadoModel, SiniestroModel
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.models import Claim
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -21,27 +24,34 @@ class RepositorioSiniestros:
         """Devuelve None tanto si no existe como si pertenece a otro cliente."""
         with self.sesiones() as sesion:
             siniestro = sesion.scalar(
-                select(SiniestroModel).where(
-                    SiniestroModel.siniestro_id == siniestro_id,
-                    SiniestroModel.cliente_id == cliente_id,
+                select(Claim).where(
+                    Claim.id == str(siniestro_id),
+                    Claim.owner == str(cliente_id),
                 )
             )
             if siniestro is None:
                 return None
             cambios = sesion.scalars(
                 select(CambioEstadoModel)
-                .where(CambioEstadoModel.siniestro_id == siniestro_id)
+                .where(CambioEstadoModel.siniestro_id == str(siniestro_id))
                 .order_by(CambioEstadoModel.secuencia)
             ).all()
+            try:
+                aviso = ClaimInput.model_validate(siniestro.payload)
+                reportado_en = datetime.fromisoformat(siniestro.created)
+            except (ValueError, TypeError) as error:
+                raise SiniestroNoIntegro("El aviso persistido no es valido.") from error
+            if siniestro.actualizado_en is None:
+                raise SiniestroNoIntegro("El siniestro no tiene fecha de actualizacion.")
             return _serializar(
                 consultar_estado(
                     RegistroSiniestro(
-                        siniestro.siniestro_id,
-                        siniestro.poliza_id,
+                        UUID(siniestro.id),
+                        aviso.polizaId,
                         siniestro.tipo,
                         siniestro.estado,
-                        siniestro.ocurrido_en,
-                        siniestro.reportado_en,
+                        aviso.fechaEvento,
+                        reportado_en,
                         siniestro.actualizado_en,
                     ),
                     [

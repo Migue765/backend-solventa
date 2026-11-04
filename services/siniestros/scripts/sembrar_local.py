@@ -1,7 +1,7 @@
 """Siembra siniestros de ejemplo para probar localmente HU25/HU21 (solo SQLite).
 
-Hasta que exista el registro del aviso (HU18/HU23) no hay otra forma de crear
-siniestros. Este script no debe usarse contra bases desplegadas.
+El registro real usa la API; estos casos permiten explorar estados de evaluacion
+aun sin implementar. Este script no debe usarse contra bases desplegadas.
 
     python services/siniestros/scripts/sembrar_local.py --cliente-id <UUID>
 """
@@ -11,7 +11,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from siniestros.infrastructure.models import CambioEstadoModel, SiniestroModel
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.models import Claim
+from siniestros.repository import fingerprint
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -51,22 +53,30 @@ def sembrar(database_url: str, cliente_id: UUID, ahora: datetime) -> list[UUID]:
             for indice, (tipo, antelacion, cambios) in enumerate(CASOS):
                 siniestro_id = uuid4()
                 reportado_en = ahora - timedelta(days=len(CASOS) - indice)
+                payload = {
+                    "polizaId": str(uuid4()),
+                    "fechaEvento": (reportado_en - antelacion).isoformat(),
+                    "tipoEvento": "Evento sintetico",
+                    "descripcion": "Siniestro sintetico para exploracion local.",
+                    "lugar": "Lugar de prueba",
+                }
                 sesion.add(
-                    SiniestroModel(
-                        siniestro_id=siniestro_id,
-                        cliente_id=cliente_id,
-                        poliza_id=uuid4(),
+                    Claim(
+                        id=str(siniestro_id),
+                        owner=str(cliente_id),
+                        operation=str(uuid4()),
+                        fingerprint=fingerprint(payload),
+                        payload=payload,
+                        created=reportado_en.isoformat(),
                         tipo=tipo,
                         estado=cambios[-1][0],
-                        ocurrido_en=reportado_en - antelacion,
-                        reportado_en=reportado_en,
                         actualizado_en=reportado_en + cambios[-1][1],
                     )
                 )
                 sesion.flush()
                 sesion.add_all(
                     CambioEstadoModel(
-                        siniestro_id=siniestro_id,
+                        siniestro_id=str(siniestro_id),
                         secuencia=secuencia,
                         estado=estado,
                         ocurrido_en=reportado_en + desfase,

@@ -1,6 +1,5 @@
 import json
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -16,15 +15,15 @@ class HttpClaimGateway:
         self._timeout = timeout
 
     def get_status(self, claim_id: UUID, client_id: UUID, correlation_id: str) -> ClaimStatus:
-        if not self._token:
+        if not self._base_url or not self._token:
             raise ClaimServiceUnavailableError()
         request = Request(
-            f"{self._base_url}/v1/siniestros/{claim_id}?"
-            + urlencode({"clienteId": str(client_id)}),
+            f"{self._base_url}/v1/siniestros/{claim_id}/estado",
             headers={
                 "Authorization": "Bearer " + self._token,
                 "Accept": "application/json",
                 "X-Correlation-ID": correlation_id,
+                "X-Cliente-ID": str(client_id),
             },
         )
         try:
@@ -46,4 +45,4 @@ def _error_code(error: HTTPError) -> object:
         payload = json.load(error)
     except ValueError:
         return None
-    return payload.get("error") if isinstance(payload, dict) else None
+    return payload.get("code") if isinstance(payload, dict) else None

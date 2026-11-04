@@ -5,6 +5,7 @@ from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import (
+    claim_status,
     claims,
     client_information,
     consents,
@@ -122,6 +123,7 @@ def create_app(
     app.register_blueprint(partner_quotes.bp)
     app.register_blueprint(client_information.bp)
     app.register_blueprint(claims.bp)
+    app.register_blueprint(claim_status.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

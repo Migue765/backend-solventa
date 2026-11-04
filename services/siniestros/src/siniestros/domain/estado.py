@@ -37,7 +37,7 @@ class CambioEstado:
 class RegistroSiniestro:
     siniestro_id: UUID
     poliza_id: UUID
-    tipo: str
+    tipo: str | None
     estado: str
     ocurrido_en: datetime
     reportado_en: datetime
@@ -63,7 +63,7 @@ def consultar_estado(
         reportado_en=_utc(registro.reportado_en),
         actualizado_en=_utc(registro.actualizado_en),
     )
-    if siniestro.tipo not in TIPOS:
+    if siniestro.tipo is not None and siniestro.tipo not in TIPOS:
         raise SiniestroNoIntegro("El siniestro tiene un tipo desconocido.")
     if siniestro.ocurrido_en > siniestro.reportado_en:
         raise SiniestroNoIntegro("El evento no puede ocurrir despues del reporte.")

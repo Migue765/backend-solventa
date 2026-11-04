@@ -13,6 +13,11 @@ from support import USER, KeyPair, sign_token
 CLAIM_ID = UUID("6f1d2c1a-8a52-4b1e-9d0f-3c2b1a0e9f77")
 
 
+@pytest.fixture
+def token(keypair: KeyPair) -> str:
+    return sign_token(keypair, scope="cliente")
+
+
 def claim_status() -> ClaimStatus:
     return ClaimStatus.model_validate(
         {
@@ -101,6 +106,17 @@ def test_token_de_otro_canal_no_consulta(
 
     assert response.status_code == 401
     assert claims.calls == []
+
+
+@pytest.mark.parametrize("role,scope", [("cliente", "cotizaciones"), ("socio", "cliente")])
+def test_requiere_rol_y_scope_cliente(
+    app: Flask, claims: StubClaimGateway, keypair: KeyPair, role: str, scope: str
+) -> None:
+    credential = sign_token(keypair, rol=role, scope=scope)
+    response = app.test_client().get(path(), headers={"Authorization": "Bearer " + credential})
+    assert response.status_code == 403
+    assert claims.calls == []
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 @pytest.mark.parametrize("target", [path("no-es-uuid"), path() + "?clienteId=" + str(uuid4())])

@@ -1,1 +1,1 @@
-"""Servicio de siniestros."""
+"""Siniestros compartidos entre canales."""
