@@ -127,3 +127,28 @@ def test_event_date_uses_utc_not_local_day(
             value.model_copy(update={"fechaEvento": datetime(2026, 11, 4, 23, tzinfo=UTC)}),
             "cid",
         )
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        None,
+        {},
+        {"polizas": {}},
+        {"polizas": [{"estado": "vigente"}]},
+        {"polizas": [{"estado": "vencida"}]},
+    ],
+)
+def test_invalid_policy_response_is_not_an_authorization(
+    repository: Repository,
+    monkeypatch: pytest.MonkeyPatch,
+    document: object,
+) -> None:
+    response = MagicMock(status=200)
+    response.__enter__.return_value = response
+    response.read.return_value = json.dumps(document).encode()
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr("siniestros.policies.build_opener", lambda *_: opener)
+    with pytest.raises(Problem, match="servicio_no_disponible"):
+        policies(repository.config, "owner", "cid")

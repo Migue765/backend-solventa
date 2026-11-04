@@ -60,21 +60,17 @@ fi
 
 echo "== Rollout =="
 if [ "$SERVICE_NAME" = "bff-web" ]; then
-  # Extraer solo imagen y dependencias; el resto del entorno pertenece al runtime.
+  # Extraer solo imagen y dependencia; el resto del entorno pertenece al runtime.
   if ! bff_patch="$(kubectl set image --local -f "${K8S_DIR}/deployment.yaml" "bff-web=${IMAGE}" \
     --allow-missing-template-keys=false -o go-template='
 {{- range $container := .spec.template.spec.containers -}}
 {{- if eq $container.name "bff-web" -}}
-{{- $profile := "" -}}
-{{- $claims := "" -}}
 {{- range $container.env -}}
+{{- if eq .name "PERFILAMIENTO_SERVICE_URL" -}}
 {{- if index . "value" -}}
-{{- if eq .name "PERFILAMIENTO_SERVICE_URL" -}}{{- $profile = .value -}}{{- end -}}
-{{- if eq .name "SINIESTROS_SERVICE_URL" -}}{{- $claims = .value -}}{{- end -}}
+{"spec":{"template":{"spec":{"containers":[{"name":"bff-web","image":{{printf "%q" $container.image}},"env":[{"name":"PERFILAMIENTO_SERVICE_URL","value":{{printf "%q" .value}},"valueFrom":null}]}]}}}}
 {{- end -}}
 {{- end -}}
-{{- if and $profile $claims -}}
-{"spec":{"template":{"spec":{"containers":[{"name":"bff-web","image":{{printf "%q" $container.image}},"env":[{"name":"PERFILAMIENTO_SERVICE_URL","value":{{printf "%q" $profile}},"valueFrom":null},{"name":"SINIESTROS_SERVICE_URL","value":{{printf "%q" $claims}},"valueFrom":null}]}]}}}}
 {{- end -}}
 {{- end -}}
 {{- end -}}')"; then
@@ -82,7 +78,7 @@ if [ "$SERVICE_NAME" = "bff-web" ]; then
     exit 1
   fi
   if [ -z "$bff_patch" ]; then
-    echo "Falta PERFILAMIENTO_SERVICE_URL o SINIESTROS_SERVICE_URL con valor en el manifiesto de bff-web." >&2
+    echo "Falta PERFILAMIENTO_SERVICE_URL con valor en el manifiesto de bff-web." >&2
     exit 1
   fi
 fi

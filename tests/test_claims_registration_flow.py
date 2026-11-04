@@ -13,7 +13,7 @@ from polizas.infrastructure.models import PolizaModel
 from siniestros.app import create_app
 from siniestros.domain import Problem
 from sqlalchemy import create_engine, text, update
-from werkzeug.test import TestResponse
+from werkzeug.test import TestResponse as ClientResponse
 
 from tests.claims_local_stack import serve, stack
 
@@ -31,7 +31,7 @@ def headers(runtime: dict[str, Any], index: int = 0, key: str | None = None) -> 
     return result
 
 
-def post(runtime: dict[str, Any], payload: dict[str, Any], key: str) -> TestResponse:
+def post(runtime: dict[str, Any], payload: dict[str, Any], key: str) -> ClientResponse:
     app: Flask = runtime["webApp"]
     with app.test_client() as client:
         return client.post("/v1/siniestros", json=payload, headers=headers(runtime, key=key))
@@ -203,7 +203,15 @@ def test_text_limits_and_multibyte_body_limit(runtime: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize("tail", ["", "/polizas", "/11111111-1111-4111-8111-111111111111"])
-@pytest.mark.parametrize("body", [{}, {"siniestros": [{}]}, {"polizas": [{}]}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"siniestros": [{}]},
+        {"polizas": [{}]},
+        pytest.param({"siniestros": [], "extra": "x" * (1024 * 1024)}, id="over1MiB"),
+    ],
+)
 def test_malformed_success_is_not_presented_as_data(
     runtime: dict[str, Any],
     tail: str,
@@ -244,3 +252,56 @@ def test_unrelated_confirmation_is_rejected_without_logging_payload(
         finally:
             app.extensions["bff_config"] = config
     assert "private-unrelated-description" not in caplog.text
+
+
+def test_internal_redirect_does_not_forward_credentials(runtime: dict[str, Any]) -> None:
+    target = Flask("unexpected-target")
+    calls: list[bool] = []
+
+    @target.get("/capture")
+    def capture() -> dict[str, list[object]]:
+        calls.append(True)
+        return {"siniestros": []}
+
+    upstream = Flask("redirecting-service")
+    with serve(target) as target_url:
+        upstream.add_url_rule(
+            "/v1/siniestros",
+            view_func=lambda: ("", 302, {"Location": target_url + "/capture"}),
+        )
+        with serve(upstream) as url:
+            app = runtime["webApp"]
+            config = app.extensions["bff_config"]
+            app.extensions["bff_config"] = replace(config, claims_service_url=url)
+            try:
+                with app.test_client() as client:
+                    assert client.get("/v1/siniestros", headers=headers(runtime)).status_code == 503
+            finally:
+                app.extensions["bff_config"] = config
+    assert calls == []
+
+
+def test_missing_configuration_is_explicit(runtime: dict[str, Any]) -> None:
+    app = runtime["webApp"]
+    config = app.extensions["bff_config"]
+    try:
+        for field in ("claims_service_url", "internal_api_token"):
+            app.extensions["bff_config"] = replace(config, **{field: ""})
+            with app.test_client() as client:
+                response = client.get("/v1/siniestros", headers=headers(runtime))
+            assert response.status_code == 503
+            assert response.get_json()["code"] == "servicio_no_disponible"
+    finally:
+        app.extensions["bff_config"] = config
+
+
+def test_database_failure_does_not_confirm_or_return_partial_results(
+    runtime: dict[str, Any],
+) -> None:
+    engine = runtime["app"].extensions["siniestros_engine"]
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE historial_estados_siniestro"))
+        connection.execute(text("DROP TABLE siniestros"))
+    with runtime["webApp"].test_client() as client:
+        assert client.get("/v1/siniestros", headers=headers(runtime)).status_code == 503
+    assert post(runtime, runtime["users"][0]["claimPayload"], str(uuid4())).status_code == 503

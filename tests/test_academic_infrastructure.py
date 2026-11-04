@@ -163,9 +163,6 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
     )
     declared_env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
     dependency = next(item for item in declared_env if item["name"] == "PERFILAMIENTO_SERVICE_URL")
-    claim_dependency = next(
-        item for item in declared_env if item["name"] == "SINIESTROS_SERVICE_URL"
-    )
     assert patch == {
         "spec": {
             "template": {
@@ -176,7 +173,6 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
                             "image": "registry/test:test",
                             "env": [
                                 {**dependency, "valueFrom": None},
-                                {**claim_dependency, "valueFrom": None},
                             ],
                         }
                     ]
@@ -192,7 +188,11 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
     pod = runtime["spec"]["template"]["spec"]
     container = pod["containers"][0]
     container["image"] = "registry/previous:1"
-    container["env"] = [item for item in container["env"] if item["name"] != dependency["name"]]
+    container["env"] = [
+        item
+        for item in container["env"]
+        if item["name"] not in {dependency["name"], "SINIESTROS_SERVICE_URL"}
+    ]
     for item in container["env"]:
         if item["name"] == "ENCRYPTED_LOGIN_ENABLED":
             item["value"] = "true"
@@ -214,6 +214,7 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
             else {"valueFrom": {"configMapKeyRef": {"name": "legacy-url", "key": "url"}}}
         )
         container["env"].append({"name": dependency["name"], **previous_dependency})
+        container["env"].append({"name": "SINIESTROS_SERVICE_URL", **previous_dependency})
     expected = deepcopy(runtime)
     expected_container = expected["spec"]["template"]["spec"]["containers"][1]
     expected_container["image"] = "registry/test:test"
@@ -274,16 +275,12 @@ def test_bff_dependency_comes_from_manifest_not_a_hardcoded_url(tmp_path: Path) 
     assert result.returncode == 0, result.stdout + result.stderr
     assert bff_patch(result)["spec"]["template"]["spec"]["containers"][0]["env"] == [
         {**dependency, "valueFrom": None},
-        {
-            **next(item for item in environment if item["name"] == "SINIESTROS_SERVICE_URL"),
-            "valueFrom": None,
-        },
     ]
 
 
 @pytest.mark.parametrize("missing", [True, False])
 @pytest.mark.parametrize("name", ["PERFILAMIENTO_SERVICE_URL", "SINIESTROS_SERVICE_URL"])
-def test_bff_dependency_missing_or_empty_stops_before_mutations(
+def test_bff_requires_only_active_profile_dependency(
     tmp_path: Path, missing: bool, name: str
 ) -> None:
     path = bff_workspace(tmp_path)
@@ -296,8 +293,13 @@ def test_bff_dependency_missing_or_empty_stops_before_mutations(
         dependency["value"] = ""
     path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     result = run_deploy("bff-web", root=tmp_path)
+    if name == "SINIESTROS_SERVICE_URL":
+        assert result.returncode == 0, result.stderr
+        environment = bff_patch(result)["spec"]["template"]["spec"]["containers"][0]["env"]
+        assert all(item["name"] != name for item in environment)
+        return
     assert result.returncode != 0
-    assert "Falta PERFILAMIENTO_SERVICE_URL o SINIESTROS_SERVICE_URL" in result.stderr
+    assert "Falta PERFILAMIENTO_SERVICE_URL" in result.stderr
     assert not any(command in result.stderr for command in ("apply -f", " scale ", " patch "))
     assert "completado." not in result.stdout
 
@@ -428,3 +430,12 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
         "name": "siniestros-runtime",
         "key": "SINIESTROS_DATABASE_URL",
     }
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    storage = next(item for item in environment if item["name"] == "SINIESTROS_STORAGE_ROOT")
+    assert storage["value"] == "/var/lib/solventa/evidencias"
+    assert container["volumeMounts"] == [{"name": "evidencias", "mountPath": "/var/lib/solventa"}]
+    assert pod["volumes"] == [
+        {"name": "evidencias", "persistentVolumeClaim": {"claimName": "siniestros-evidencias"}}
+    ]
+    assert pod["securityContext"]["fsGroup"] == 10001
