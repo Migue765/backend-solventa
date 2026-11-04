@@ -348,6 +348,22 @@ La lectura historica no renueva ni exige perfiles de riesgo vigentes y
 no modifica suscripciones, pagos o transacciones. No ofrece reanudacion con datos parciales.
 El detalle de campos y tipos esta en `contracts/openapi/bff-web-v1.yaml`.
 
+### Estado e historial de siniestro (SOL-318, HU25)
+
+`GET /v1/clientes/me/siniestros/{siniestroId}` requiere JWT del canal Web, rol y scope
+`cliente`, y no acepta
+query ni cuerpo: el cliente procede exclusivamente del principal. El gateway consulta
+`GET /v1/siniestros/{id}/estado` en Siniestros (`SINIESTROS_SERVICE_URL`)
+con el `INTERNAL_API_TOKEN` y `X-Cliente-ID` del principal. Devuelve tipo
+(`asistido` | `parametrico` | `null`), `ocurridoEn`,
+estado vigente, `actualizadoEn` e historial permitido en orden cronologico, con instantes
+normalizados a UTC; no expone monto, decision, fraude ni evidencias; el ultimo cambio coincide siempre con el estado vigente.
+
+Un siniestro inexistente o de otro cliente responde el mismo `404 siniestro_no_encontrado`,
+sin datos del caso. Fallo de red, timeout (0,8 s), credencial interna ausente, registro
+incoherente o respuesta fuera de contrato devuelven `503` con `Retry-After`, nunca un
+estado ni un historial vacio. El BFF no calcula transiciones; solo valida la respuesta.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
@@ -512,6 +528,7 @@ para validar la vigencia con el reloj del servidor.
 | `JWKS_URL`                  | `IDENTIDAD_URL` + `/.well-known/jwks.json` | Origen de las claves públicas |
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
+| `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.

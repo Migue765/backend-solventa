@@ -1,6 +1,15 @@
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -18,6 +27,9 @@ class Claim(Base):
     fingerprint: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created: Mapped[str] = mapped_column(String(40))
+    tipo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    estado: Mapped[str] = mapped_column(String(30), default="reportado", server_default="reportado")
+    actualizado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Upload(Base):

@@ -1,7 +1,7 @@
 [project]
 name = "siniestros"
 version = "0.1.0"
-description = "Siniestros y evidencia privada compartida de Solventa"
+description = "Siniestros, estado, historial y evidencia privada compartida de Solventa"
 requires-python = ">=3.12"
 dependencies = [
     "flask>=3.1,<4",

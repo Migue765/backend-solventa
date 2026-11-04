@@ -139,6 +139,34 @@ def test_real_identity_policies_web_mobile_ownership_and_claim_replays(runtime: 
     assert (status, problem["code"]) == (404, "poliza_no_encontrada")
 
 
+def test_registered_claim_has_shared_status_without_invented_classification(runtime: dict) -> None:
+    first, second = runtime["users"]
+    claim_id = first["claim"]["id"]
+    web = runtime["web"] + "/clientes/me/siniestros/" + claim_id
+    mobile = runtime["mobile"] + "/siniestros/" + claim_id + "/estado"
+    status, result = call(web, token=first["webToken"])
+    assert status == 200
+    assert result["id"] == claim_id and result["tipo"] is None
+    assert result["estado"] == "reportado"
+    assert len(result["historial"]) == 1
+    assert result["historial"][0]["estado"] == "reportado"
+    assert result["actualizadoEn"] == result["reportadoEn"]
+    assert datetime.fromisoformat(result["reportadoEn"]) == datetime.fromisoformat(
+        first["claim"]["registradoEn"]
+    )
+    assert call(mobile, token=first["token"]) == (200, result)
+    assert call(web, token=second["webToken"])[0] == 404
+    assert call(mobile, token=second["token"])[0] == 404
+    assert call(
+        runtime["mobile"] + "/siniestros",
+        "POST",
+        first["claimPayload"],
+        first["token"],
+        {"Idempotency-Key": first["claimOperation"]},
+    ) == (200, first["claim"])
+    assert call(web, token=first["webToken"]) == (200, result)
+
+
 @pytest.mark.parametrize("kind", ["jpeg", "png", "pdf", "mp4"])
 def test_real_formats_durable_confirmation_lost_ack_and_private_download(
     runtime: dict, tmp_path: Path, kind: str

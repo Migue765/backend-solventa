@@ -23,7 +23,7 @@ exclude = ["services/.*/migrations/"]
 [[tool.mypy.overrides]]
 module = [
     "test_profiling_flow", "test_dashboard_flow", "test_policies_flow",
-    "tests.test_dashboard_flow", "tests.test_policies_flow",
+    "tests.test_dashboard_flow", "tests.test_policies_flow", "tests.test_claims_flow",
     "tests.test_profiling_flow",
     "test_partner_flow", "tests.test_partner_flow",
     "test_biometric_flow", "tests.test_biometric_flow",

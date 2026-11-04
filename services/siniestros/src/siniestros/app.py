@@ -10,6 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
+from siniestros.domain.estado import SiniestroNoIntegro
+from siniestros.infrastructure.repositorio import RepositorioSiniestros
 from siniestros.policies import policies
 from siniestros.repository import Repository
 
@@ -22,6 +24,8 @@ def create_app(config: Config | None = None) -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = max(16 * 1024, config.max_chunk)
     repo = Repository(config)
     app.extensions["siniestros_repository"] = repo
+    app.extensions["siniestros_engine"] = repo.engine
+    estados = RepositorioSiniestros(repo.sessions)
 
     @app.before_request
     def authorize() -> None:
@@ -69,6 +73,23 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/health")
     def health() -> Response:
         return jsonify(status="ok")
+
+    @app.get("/v1/siniestros/<claim_id>/estado")
+    def consultar(claim_id: str) -> Response:
+        empty()
+        try:
+            requested = UUID(claim_id)
+        except ValueError as error:
+            raise Problem(400, "solicitud_invalida") from error
+        consulta = estados.consultar(requested, UUID(g.owner))
+        if consulta is None:
+            raise Problem(404, "siniestro_no_encontrado")
+        return jsonify(consulta)
+
+    @app.errorhandler(SiniestroNoIntegro)
+    def no_integro(error: SiniestroNoIntegro) -> Response:
+        logger.error("Siniestro no integro: %s; correlationId=%s", error, g.correlation_id)
+        return problem(Problem(503, "siniestro_no_integro"))
 
     @app.get("/v1/siniestros/configuracion-evidencias")
     def configuration() -> Response:

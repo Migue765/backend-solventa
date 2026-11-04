@@ -94,6 +94,20 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/Siniestro"}
         default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/estado:
+    parameters:
+      - {$ref: "#/components/parameters/SiniestroId"}
+    get:
+      operationId: consultarEstadoSiniestro
+      description: Estado vigente e historial permitido. No sustituye el acuse de registro; tipo es null mientras no exista clasificacion.
+      responses:
+        "200":
+          description: Estado del siniestro autorizado al cliente
+          content:
+            application/json:
+              schema:
+                $ref: "bff-web-v1.yaml#/components/schemas/EstadoSiniestro"
+        default: {$ref: "#/components/responses/Problema"}
   /siniestros/{siniestroId}/cargas:
     parameters:
       - {$ref: "#/components/parameters/SiniestroId"}

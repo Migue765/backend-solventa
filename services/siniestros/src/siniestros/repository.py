@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from siniestros import media
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput, now
+from siniestros.infrastructure.models import CambioEstadoModel
 from siniestros.models import Audit, Claim, Upload
 from siniestros.policies import policies
 
@@ -153,17 +154,29 @@ class Repository:
                 or not selected["fechaInicio"] <= day <= selected["fechaFin"]
             ):
                 raise Problem(422, "fecha_evento_invalida")
+            created = now()
             claim = Claim(
                 id=str(uuid4()),
                 owner=owner,
                 operation=operation,
                 fingerprint=digest,
                 payload=payload,
-                created=now(),
+                created=created,
+                estado="reportado",
+                actualizado_en=datetime.fromisoformat(created),
             )
             session.add(claim)
             self.audit(session, owner, "registrar_siniestro", "registrado", cid)
             session.flush()
+            session.add(
+                CambioEstadoModel(
+                    siniestro_id=claim.id,
+                    secuencia=1,
+                    estado="reportado",
+                    ocurrido_en=datetime.fromisoformat(created),
+                    visible_cliente=True,
+                )
+            )
             return claim_record(claim), 201
 
     def start(
