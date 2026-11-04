@@ -10,7 +10,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 K8S = ROOT / "deploy" / "k8s"
-SERVICES = ("bff-movil", "bff-web", "cotizacion", "identidad", "perfilamiento", "polizas")
+SERVICES = (
+    "bff-movil",
+    "bff-web",
+    "cotizacion",
+    "identidad",
+    "perfilamiento",
+    "polizas",
+    "siniestros",
+)
 HPA_SERVICES = {"bff-movil", "bff-web", "cotizacion", "identidad"}
 BFF_PATCH_PREFIX = "kubectl|-n bff-web patch deployment/bff-web --type=strategic -p "
 
@@ -155,6 +163,9 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
     )
     declared_env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
     dependency = next(item for item in declared_env if item["name"] == "PERFILAMIENTO_SERVICE_URL")
+    claim_dependency = next(
+        item for item in declared_env if item["name"] == "SINIESTROS_SERVICE_URL"
+    )
     assert patch == {
         "spec": {
             "template": {
@@ -163,7 +174,10 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
                         {
                             "name": "bff-web",
                             "image": "registry/test:test",
-                            "env": [{**dependency, "valueFrom": None}],
+                            "env": [
+                                {**dependency, "valueFrom": None},
+                                {**claim_dependency, "valueFrom": None},
+                            ],
                         }
                     ]
                 }
@@ -259,18 +273,23 @@ def test_bff_dependency_comes_from_manifest_not_a_hardcoded_url(tmp_path: Path) 
     result = run_deploy("bff-web", root=tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert bff_patch(result)["spec"]["template"]["spec"]["containers"][0]["env"] == [
-        {**dependency, "valueFrom": None}
+        {**dependency, "valueFrom": None},
+        {
+            **next(item for item in environment if item["name"] == "SINIESTROS_SERVICE_URL"),
+            "valueFrom": None,
+        },
     ]
 
 
 @pytest.mark.parametrize("missing", [True, False])
+@pytest.mark.parametrize("name", ["PERFILAMIENTO_SERVICE_URL", "SINIESTROS_SERVICE_URL"])
 def test_bff_dependency_missing_or_empty_stops_before_mutations(
-    tmp_path: Path, missing: bool
+    tmp_path: Path, missing: bool, name: str
 ) -> None:
     path = bff_workspace(tmp_path)
     manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
     environment = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
-    dependency = next(item for item in environment if item["name"] == "PERFILAMIENTO_SERVICE_URL")
+    dependency = next(item for item in environment if item["name"] == name)
     if missing:
         environment.remove(dependency)
     else:
@@ -278,7 +297,7 @@ def test_bff_dependency_missing_or_empty_stops_before_mutations(
     path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     result = run_deploy("bff-web", root=tmp_path)
     assert result.returncode != 0
-    assert "Falta PERFILAMIENTO_SERVICE_URL" in result.stderr
+    assert "Falta PERFILAMIENTO_SERVICE_URL o SINIESTROS_SERVICE_URL" in result.stderr
     assert not any(command in result.stderr for command in ("apply -f", " scale ", " patch "))
     assert "completado." not in result.stdout
 
@@ -326,7 +345,7 @@ def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -
     rollout = calls.index(
         f"kubectl|-n {service} rollout status deployment/{service} --timeout=300s"
     )
-    if service == "polizas":
+    if service in {"polizas", "siniestros"}:
         assert calls.index("kubectl|apply -f -") < rollout
         assert not any(" scale " in call for call in calls)
     else:
@@ -377,3 +396,26 @@ def test_first_polizas_rollout_failure_has_no_previous_revision_to_undo() -> Non
     assert result.returncode != 0
     assert " rollout undo " not in result.stderr
     assert "completado." not in result.stdout
+
+
+def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> None:
+    gateway = (ROOT / "terraform" / "modules" / "api-gateway" / "main.tf").read_text(
+        encoding="utf-8"
+    )
+    routing = gateway.split('resource "aws_lb_listener_rule" "bff_web_claims" {', 1)[1]
+    routing = routing.split('resource "', 1)[0]
+    assert 'values = ["/v1/siniestros", "/v1/siniestros/*"]' in routing
+    assert "target_group_arn = aws_lb_target_group.bff_web.arn" in routing
+    assert 'route_key          = "ANY /v1/{proxy+}"' in gateway
+    assert 'authorization_type = "JWT"' in gateway
+    service = yaml.safe_load((K8S / "siniestros" / "service.yaml").read_text(encoding="utf-8"))
+    assert service["spec"]["type"] == "ClusterIP"
+    deployment = yaml.safe_load(
+        (K8S / "siniestros" / "deployment.yaml").read_text(encoding="utf-8")
+    )
+    environment = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    database = next(item for item in environment if item["name"] == "SINIESTROS_DATABASE_URL")
+    assert database["valueFrom"]["secretKeyRef"] == {
+        "name": "siniestros-runtime",
+        "key": "SINIESTROS_DATABASE_URL",
+    }

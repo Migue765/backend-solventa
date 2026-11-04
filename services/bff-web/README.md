@@ -25,6 +25,23 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Siniestros Web (SOL-313 y SOL-315)
+
+`POST /v1/siniestros` registra un aviso con `{polizaId, fechaEvento,
+tipoEvento, descripcion, lugar}` e `Idempotency-Key` UUID. Devuelve `201` al
+crear y `200` al recuperar un aviso confirmado. `GET /v1/siniestros/polizas`
+provee las polizas vigentes del selector. `GET /v1/siniestros` lista los casos
+autorizados y `GET /v1/siniestros/{id}` consulta detalle e historial. Exigen
+JWT Web y rol cliente; `clienteId` proviene exclusivamente del principal.
+Las consultas no aceptan cuerpo ni parametros. No se devuelven resultados
+parciales cuando falla el servicio.
+
+Configurar `SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`, compartido con
+Siniestros y Polizas. Un reintento conserva cuerpo y clave para recuperar
+el aviso confirmado sin duplicarlo. Sin servicio configurado responde `503`,
+nunca una confirmacion ficticia. Detalle de validaciones y operacion:
+[Siniestros](../siniestros/README.md).
+
 ### Plataforma de socios (SOL-195)
 
 El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y

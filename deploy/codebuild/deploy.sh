@@ -32,6 +32,10 @@ if [ "$SERVICE_NAME" = "polizas" ] && [ "$NAMESPACE" != "polizas" ]; then
   echo "Polizas solo se despliega en el namespace productivo polizas." >&2
   exit 1
 fi
+if [ "$SERVICE_NAME" = "siniestros" ] && [ "$NAMESPACE" != "siniestros" ]; then
+  echo "Siniestros solo se despliega en el namespace productivo siniestros." >&2
+  exit 1
+fi
 
 export IMAGE="${ECR_REPOSITORY_URL}:${IMAGE_TAG}"
 # Los nombres de Job deben ser DNS-1123: minusculas, digitos y guiones.
@@ -56,17 +60,21 @@ fi
 
 echo "== Rollout =="
 if [ "$SERVICE_NAME" = "bff-web" ]; then
-  # Extraer solo imagen y dependencia; el resto del entorno pertenece al runtime.
+  # Extraer solo imagen y dependencias; el resto del entorno pertenece al runtime.
   if ! bff_patch="$(kubectl set image --local -f "${K8S_DIR}/deployment.yaml" "bff-web=${IMAGE}" \
     --allow-missing-template-keys=false -o go-template='
 {{- range $container := .spec.template.spec.containers -}}
 {{- if eq $container.name "bff-web" -}}
+{{- $profile := "" -}}
+{{- $claims := "" -}}
 {{- range $container.env -}}
-{{- if eq .name "PERFILAMIENTO_SERVICE_URL" -}}
 {{- if index . "value" -}}
-{"spec":{"template":{"spec":{"containers":[{"name":"bff-web","image":{{printf "%q" $container.image}},"env":[{"name":"PERFILAMIENTO_SERVICE_URL","value":{{printf "%q" .value}},"valueFrom":null}]}]}}}}
+{{- if eq .name "PERFILAMIENTO_SERVICE_URL" -}}{{- $profile = .value -}}{{- end -}}
+{{- if eq .name "SINIESTROS_SERVICE_URL" -}}{{- $claims = .value -}}{{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if and $profile $claims -}}
+{"spec":{"template":{"spec":{"containers":[{"name":"bff-web","image":{{printf "%q" $container.image}},"env":[{"name":"PERFILAMIENTO_SERVICE_URL","value":{{printf "%q" $profile}},"valueFrom":null},{"name":"SINIESTROS_SERVICE_URL","value":{{printf "%q" $claims}},"valueFrom":null}]}]}}}}
 {{- end -}}
 {{- end -}}
 {{- end -}}')"; then
@@ -74,14 +82,14 @@ if [ "$SERVICE_NAME" = "bff-web" ]; then
     exit 1
   fi
   if [ -z "$bff_patch" ]; then
-    echo "Falta PERFILAMIENTO_SERVICE_URL con valor en el manifiesto de bff-web." >&2
+    echo "Falta PERFILAMIENTO_SERVICE_URL o SINIESTROS_SERVICE_URL con valor en el manifiesto de bff-web." >&2
     exit 1
   fi
 fi
 if [ -f "${K8S_DIR}/hpa.yaml" ]; then
   kubectl apply -f "${K8S_DIR}/hpa.yaml"
 fi
-if [ "$SERVICE_NAME" = "polizas" ]; then
+if [ "$SERVICE_NAME" = "polizas" ] || [ "$SERVICE_NAME" = "siniestros" ]; then
   kubectl apply -f "${K8S_DIR}/service.yaml"
   envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
 else

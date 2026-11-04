@@ -5,6 +5,7 @@ from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import (
+    claims,
     client_information,
     consents,
     health,
@@ -15,6 +16,7 @@ from bff_web.api import (
     sessions,
     users,
 )
+from bff_web.application.claim_ports import ClaimGateway
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.open_finance_exception_ports import OpenFinanceExceptionGateway
@@ -25,6 +27,7 @@ from bff_web.config import Config
 from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
 from bff_web.domain.profiling import ProfilingError
+from bff_web.infrastructure.http_claim_gateway import HttpClaimGateway
 from bff_web.infrastructure.http_client_information_gateway import (
     HttpClientInformationGateway,
 )
@@ -51,12 +54,16 @@ def create_app(
     mortgage_profiling_gateway: MortgageProfilingGateway | None = None,
     client_information_gateway: ClientInformationGateway | None = None,
     open_finance_exception_gateway: OpenFinanceExceptionGateway | None = None,
+    claim_gateway: ClaimGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
 
     app.extensions["bff_config"] = active_config
     app.extensions["clock"] = lambda: datetime.now(UTC)
+    app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
+        active_config.claim_service_url, active_config.internal_api_token
+    )
     app.extensions["identity_gateway"] = identity_gateway or HttpIdentityGateway(
         active_config.identity_url,
         active_config.identity_timeout_seconds,
@@ -114,6 +121,7 @@ def create_app(
     app.register_blueprint(open_finance_exceptions.bp)
     app.register_blueprint(partner_quotes.bp)
     app.register_blueprint(client_information.bp)
+    app.register_blueprint(claims.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

@@ -102,7 +102,7 @@ cd backend-solventa
 | `perfilamiento` | Personalización y perfil de riesgo | Perfilamiento y Personalización | Implementado, con [README](services/perfilamiento/README.md) |
 | `cotizacion` | Tarificación y Cotización | Cotización | Implementado, con [README](services/cotizacion/README.md) |
 | `polizas` | Suscripción, emisión y ciclo de vida | Producto y Suscripción / Pólizas | Implementado, con [README](services/polizas/README.md) |
-| `siniestros` | Siniestros | Siniestros | Estructura inicial |
+| `siniestros` | Siniestros | Siniestros | Registro y consulta implementados, con [README](services/siniestros/README.md) |
 | `pagos` | Cobros, pagos y recaudo | Pagos y Recaudo | Estructura inicial |
 | `cumplimiento` | Fraude, analítica y auditoría | Cumplimiento y Auditoría | Estructura inicial |
 | `integraciones` | Adaptadores externos | Integraciones | Estructura inicial |

@@ -13,6 +13,7 @@ class Config:
     profiling_service_url: str = "http://localhost:5003"
     internal_api_token: str = ""
     encrypted_login_enabled: bool = False
+    claim_service_url: str = ""
 
     def __post_init__(self) -> None:
         if not self.identity_url.strip():
@@ -40,6 +41,7 @@ class Config:
             profiling_service_url=os.getenv(
                 "PERFILAMIENTO_SERVICE_URL", "http://localhost:5003"
             ).rstrip("/"),
+            claim_service_url=os.getenv("SINIESTROS_SERVICE_URL", "").strip().rstrip("/"),
         )
 
 

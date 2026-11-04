@@ -28,6 +28,7 @@ module = [
     "test_partner_flow", "tests.test_partner_flow",
     "test_biometric_flow", "tests.test_biometric_flow",
     "tests.test_encrypted_local_stack",
+    "test_claims_flow", "tests.test_claims_flow",
     "tests.test_hu44_exception_process_http",
     "tests.jmeter.local_stack", "tests.jmeter.run",
 ]
@@ -42,5 +43,6 @@ pythonpath = [
     "services/cotizacion/src",
     "services/perfilamiento/src",
     "services/polizas/src",
+    "services/siniestros/src",
 ]
 addopts = "--import-mode=importlib"
