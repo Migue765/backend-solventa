@@ -29,15 +29,6 @@ class ClaimDraft(BaseModel):
         return value
 
 
-class ClaimSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: UUID
-    policy_id: UUID = Field(alias="polizaId")
-    reported_at: AwareDatetime = Field(alias="fechaReporte")
-    state: str = Field(alias="estado", min_length=1)
-
-
 class ClaimHistoryEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,13 +41,14 @@ class ClaimDetail(ClaimDraft):
     id: UUID
     state: str = Field(alias="estado", min_length=1)
     registered_at: AwareDatetime = Field(alias="registradoEn")
+    reported_at: AwareDatetime = Field(alias="fechaReporte")
     history: list[ClaimHistoryEntry] = Field(alias="historial", min_length=1)
 
 
 class ClaimList(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    claims: list[ClaimSummary] = Field(alias="siniestros")
+    claims: list[ClaimDetail] = Field(alias="siniestros")
 
 
 class ClaimPolicy(BaseModel):

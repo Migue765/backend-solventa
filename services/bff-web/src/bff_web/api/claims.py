@@ -19,7 +19,7 @@ def authorize() -> Response | None:
         claims = authenticate()
     except InvalidAccessTokenError:
         return invalid_session_response()
-    if claims.user.role != "cliente":
+    if claims.user.role != "cliente" or claims.scope != "cliente":
         return problem_response(
             403,
             "alcance_insuficiente",
@@ -40,6 +40,13 @@ def authorize() -> Response | None:
 @bp.after_request
 def no_store(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if response.status_code >= 400:
+        current_app.logger.warning(
+            "siniestros.rechazo canal=web status=%s correlationId=%s",
+            response.status_code,
+            g.correlation_id,
+        )
     return response
 
 

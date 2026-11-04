@@ -1,8 +1,8 @@
 import json
 from http.client import HTTPException
+from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 from bff_web.domain.claims import ClaimDetail, ClaimDraft, ClaimError, ClaimList, ClaimPolicies
@@ -13,7 +13,14 @@ DOMAIN_ERRORS = {
     (404, "siniestro_no_encontrado"),
     (409, "conflicto_idempotencia"),
     (409, "poliza_no_vigente"),
+    (409, "idempotencia_conflictiva"),
+    (422, "fecha_evento_invalida"),
 }
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class HttpClaimGateway:
@@ -25,6 +32,7 @@ class HttpClaimGateway:
     def _request(
         self,
         path: str,
+        user_id: UUID,
         correlation_id: str,
         body: dict[str, object] | None = None,
         key: UUID | None = None,
@@ -35,6 +43,7 @@ class HttpClaimGateway:
             "Authorization": f"Bearer {self.token}",
             "X-Correlation-ID": correlation_id,
             "Content-Type": "application/json",
+            "X-Cliente-ID": str(user_id),
         }
         if key is not None:
             headers["Idempotency-Key"] = str(key)
@@ -44,17 +53,27 @@ class HttpClaimGateway:
             headers=headers,
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
-                return json.load(response), response.status
+            with build_opener(NoRedirect).open(request, timeout=self.timeout) as response:
+                body_bytes = response.read(1024 * 1024 + 1)
+                if len(body_bytes) > 1024 * 1024:
+                    raise ValueError("Respuesta de siniestros demasiado grande.")
+                return json.loads(body_bytes), response.status
         except HTTPError as error:
             try:
-                payload = json.load(error)
-                code = payload.get("error") if isinstance(payload, dict) else None
+                body_bytes = error.read(1024 * 1024 + 1)
+                if len(body_bytes) > 1024 * 1024:
+                    raise ValueError("Problema de siniestros demasiado grande.")
+                payload = json.loads(body_bytes)
+                code = payload.get("code") if isinstance(payload, dict) else None
             except (OSError, ValueError):
                 code = None
             finally:
                 error.close()
             if isinstance(code, str) and (error.code, code) in DOMAIN_ERRORS:
+                if code == "idempotencia_conflictiva":
+                    raise ClaimError("conflicto_idempotencia", 409) from error
+                if code == "fecha_evento_invalida":
+                    raise ClaimError("solicitud_invalida", 400) from error
                 raise ClaimError(code, error.code) from error
             raise ClaimError("servicio_no_disponible", 503) from error
         except (OSError, HTTPException, ValueError) as error:
@@ -65,8 +84,9 @@ class HttpClaimGateway:
     ) -> tuple[ClaimDetail, bool]:
         payload, status = self._request(
             "/v1/siniestros",
+            user_id,
             correlation_id,
-            {**draft.model_dump(mode="json", by_alias=True), "clienteId": str(user_id)},
+            draft.model_dump(mode="json", by_alias=True),
             key,
         )
         try:
@@ -85,9 +105,7 @@ class HttpClaimGateway:
             raise ClaimError("servicio_no_disponible", 503) from error
 
     def list(self, user_id: UUID, correlation_id: str) -> ClaimList:
-        payload, status = self._request(
-            "/v1/siniestros?" + urlencode({"clienteId": str(user_id)}), correlation_id
-        )
+        payload, status = self._request("/v1/siniestros", user_id, correlation_id)
         try:
             if status != 200:
                 raise ValueError("Estado de listado invalido.")
@@ -97,7 +115,8 @@ class HttpClaimGateway:
 
     def get(self, user_id: UUID, claim_id: UUID, correlation_id: str) -> ClaimDetail:
         payload, status = self._request(
-            f"/v1/siniestros/{claim_id}?" + urlencode({"clienteId": str(user_id)}),
+            f"/v1/siniestros/{claim_id}",
+            user_id,
             correlation_id,
         )
         try:
@@ -109,9 +128,7 @@ class HttpClaimGateway:
             raise ClaimError("servicio_no_disponible", 503) from error
 
     def policies(self, user_id: UUID, correlation_id: str) -> ClaimPolicies:
-        payload, status = self._request(
-            "/v1/siniestros/polizas?" + urlencode({"clienteId": str(user_id)}), correlation_id
-        )
+        payload, status = self._request("/v1/siniestros/polizas", user_id, correlation_id)
         try:
             if status != 200:
                 raise ValueError("Estado de consulta de polizas invalido.")

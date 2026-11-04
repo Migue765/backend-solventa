@@ -143,6 +143,20 @@ paths:
           description: siniestro_no_encontrado; indistinguible de un caso ajeno
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/siniestros/configuracion-evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1configuracion-evidencias"
+  /v1/siniestros/{siniestroId}/cargas:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1contenido"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/confirmacion:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1confirmacion"
+  /v1/siniestros/{siniestroId}/evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias"
+  /v1/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/socios/actual:
     get:
       tags: [Socios]
@@ -1663,11 +1677,11 @@ components:
         siniestros:
           type: array
           items:
-            $ref: "#/components/schemas/ResumenSiniestro"
+            $ref: "#/components/schemas/DetalleSiniestro"
     DetalleSiniestro:
       type: object
       additionalProperties: false
-      required: [id, polizaId, registradoEn, estado, fechaEvento, tipoEvento, descripcion, lugar, historial]
+      required: [id, polizaId, registradoEn, fechaReporte, estado, fechaEvento, tipoEvento, descripcion, lugar, historial]
       properties:
         id:
           type: string
@@ -1676,6 +1690,9 @@ components:
           type: string
           format: uuid
         registradoEn:
+          type: string
+          format: date-time
+        fechaReporte:
           type: string
           format: date-time
         estado:

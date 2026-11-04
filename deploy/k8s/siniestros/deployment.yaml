@@ -22,6 +22,7 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -42,6 +43,11 @@ spec:
                   key: SINIESTROS_DATABASE_URL
             - name: POLIZAS_SERVICE_URL
               value: http://polizas.polizas.svc.cluster.local:8080
+            - name: SINIESTROS_STORAGE_ROOT
+              value: /var/lib/solventa/evidencias
+          volumeMounts:
+            - name: evidencias
+              mountPath: /var/lib/solventa
           resources:
             requests:
               cpu: 100m
@@ -61,3 +67,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+      volumes:
+        - name: evidencias
+          persistentVolumeClaim:
+            claimName: siniestros-evidencias

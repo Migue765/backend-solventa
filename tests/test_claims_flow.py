@@ -1,13 +1,16 @@
+import hashlib
 import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from threading import Thread
 from uuid import UUID, uuid4
 
+import jwt
 import pytest
 import yaml
 from alembic import command
@@ -16,17 +19,20 @@ from alembic.config import Config as AlembicConfig
 from alembic.migration import MigrationContext
 from bff_web.app import create_app as create_bff
 from bff_web.config import Config
+from bff_web.domain.auth import User
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier
 from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask, Response, jsonify
 from flask.testing import FlaskClient
 from jwt.algorithms import RSAAlgorithm
 from openapi_schema_validator import OAS31Validator
+from PIL import Image
 from polizas.app import create_app as create_policies
 from polizas.infrastructure.models import PolizaModel
 from siniestros.app import create_app
-from siniestros.models import Base, SiniestroModel
-from sqlalchemy import func, select
+from siniestros.domain import Config as ClaimsConfig
+from siniestros.models import Base, Claim, Upload
+from sqlalchemy import MetaData, Table, func, select
 from sqlalchemy.orm import Session
 from werkzeug.serving import make_server
 
@@ -56,6 +62,12 @@ def migrate(service: str, url: str) -> AlembicConfig:
     return config
 
 
+def client_token(keypair: rsa.RSAPrivateKey, user: User = USER) -> str:
+    claims = jwt.decode(sign_token(keypair, user), options={"verify_signature": False})
+    claims["scope"] = user.role
+    return jwt.encode(claims, keypair, algorithm="RS256", headers={"kid": "dashboard-test"})
+
+
 @dataclass
 class Runtime:
     client: FlaskClient
@@ -64,6 +76,7 @@ class Runtime:
     token: str
     other_token: str
     partner_token: str
+    wrong_scope_token: str
     policy_id: str
     policy_url: str
     database_url: str
@@ -105,13 +118,20 @@ def runtime(tmp_path: Path) -> Iterator[Runtime]:
     jwk = json.loads(RSAAlgorithm.to_jwk(keypair.public_key()))
     jwk.update(kid="dashboard-test", use="sig", alg="RS256")
     with serve(policies) as policy_url:
-        claims = create_app(database_url, INTERNAL_TOKEN, policy_url)
+        claims = create_app(
+            ClaimsConfig(
+                database_url=database_url,
+                internal_token=INTERNAL_TOKEN,
+                policies_url=policy_url,
+                storage_root=tmp_path / "private",
+            )
+        )
         with serve(claims) as claim_url:
             bff = create_bff(
                 Config(
                     identity_url="http://identity.test",
                     jwt_issuer=ISSUER,
-                    claim_service_url=claim_url,
+                    claims_service_url=claim_url,
                     internal_api_token=INTERNAL_TOKEN,
                 ),
                 token_verifier=JwtVerifier(
@@ -122,9 +142,10 @@ def runtime(tmp_path: Path) -> Iterator[Runtime]:
                 bff.test_client(),
                 claims,
                 policies,
+                client_token(keypair),
+                client_token(keypair, replace(USER, user_id=uuid4())),
+                client_token(keypair, replace(USER, role="socio")),
                 sign_token(keypair),
-                sign_token(keypair, replace(USER, user_id=uuid4())),
-                sign_token(keypair, replace(USER, role="socio")),
                 policy_id,
                 policy_url,
                 database_url,
@@ -170,30 +191,25 @@ def test_registration_list_detail_restart_and_audit(runtime: Runtime) -> None:
     listing = runtime.client.get(PATH, headers=bearer(runtime.token))
     assert listing.status_code == 200
     assert_contract(listing.get_json(), "ListadoSiniestros")
-    assert listing.get_json()["siniestros"] == [
-        {
-            **{name: detail[name] for name in ("id", "polizaId", "estado")},
-            "fechaReporte": detail["registradoEn"],
-        }
-    ]
+    assert listing.get_json()["siniestros"] == [detail]
+    assert detail["fechaReporte"] == detail["registradoEn"]
     assert (
         runtime.client.get(f"{PATH}/{detail['id']}", headers=bearer(runtime.token)).get_json()
         == detail
     )
-    restarted = create_app(runtime.database_url, INTERNAL_TOKEN, runtime.policy_url)
+    restarted = create_app(runtime.claims.extensions["siniestros_repository"].config)
     try:
         response = restarted.test_client().get(
             f"{PATH}/{detail['id']}",
-            query_string={"clienteId": str(USER.user_id)},
-            headers=INTERNAL_HEADERS,
+            headers={**INTERNAL_HEADERS, "X-Cliente-ID": str(USER.user_id)},
         )
         assert response.status_code == 200
         assert response.get_json()["id"] == detail["id"]
         with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-            row: SiniestroModel = session.scalars(select(SiniestroModel)).one()
-            assert row.cliente_id == USER.user_id
-            assert row.poliza_id == UUID(runtime.policy_id)
-            assert row.clave_idempotencia == UUID(headers["Idempotency-Key"])
+            row: Claim = session.scalars(select(Claim)).one()
+            assert row.owner == str(USER.user_id)
+            assert row.payload["polizaId"] == runtime.policy_id
+            assert row.operation == headers["Idempotency-Key"]
     finally:
         restarted.extensions["siniestros_engine"].dispose()
 
@@ -304,7 +320,7 @@ def test_invalid_fields_do_not_persist(runtime: Runtime, change: dict[str, objec
     )
     assert response.status_code == 400
     with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        assert session.scalar(select(func.count()).select_from(SiniestroModel)) == 0
+        assert session.scalar(select(func.count()).select_from(Claim)) == 0
 
 
 def test_invalid_dates_policy_and_idempotency(runtime: Runtime) -> None:
@@ -357,8 +373,28 @@ def test_concurrent_retries_persist_one_claim(runtime: Runtime) -> None:
         assert len({identifier for identifier, _ in results}) == 1
         assert [status for _, status in results].count(201) == 1
     with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        row: SiniestroModel = session.scalars(select(SiniestroModel)).one()
-        assert len(row.historial) == 1
+        row: Claim = session.scalars(select(Claim)).one()
+        assert len(row.history) == 1
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_inactive_owned_policy_cannot_start_a_new_operation(
+    runtime: Runtime, scheduled: bool
+) -> None:
+    with Session(runtime.policies.extensions["polizas_engine"]) as session:
+        policy = session.get(PolizaModel, UUID(runtime.policy_id))
+        assert policy is not None
+        if scheduled:
+            policy.fecha_inicio = datetime.now(UTC).date() + timedelta(days=1)
+        else:
+            policy.fecha_fin = datetime.now(UTC).date() - timedelta(days=1)
+        session.commit()
+    response = runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers())
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "poliza_no_vigente"
+    assert runtime.client.get(PATH + "/polizas", headers=bearer(runtime.token)).get_json() == {
+        "polizas": []
+    }
 
 
 def test_authentication_and_malformed_requests(runtime: Runtime) -> None:
@@ -388,6 +424,15 @@ def test_authentication_and_malformed_requests(runtime: Runtime) -> None:
     )
     for path in (PATH, PATH + "/polizas", PATH + "/" + str(uuid4())):
         assert runtime.client.get(path, headers=bearer(runtime.partner_token)).status_code == 403
+        assert (
+            runtime.client.get(path, headers=bearer(runtime.wrong_scope_token)).status_code == 403
+        )
+    assert (
+        runtime.client.get(
+            PATH + "/configuracion-evidencias", headers=bearer(runtime.wrong_scope_token)
+        ).status_code
+        == 403
+    )
 
 
 def test_lost_confirmation_recovers_without_duplicates(
@@ -425,7 +470,7 @@ def test_dependency_failure_does_not_confirm_or_return_partial_results(
     response = runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers())
     assert response.status_code == 503
     with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        assert session.scalar(select(func.count()).select_from(SiniestroModel)) == 0
+        assert session.scalar(select(func.count()).select_from(Claim)) == 0
     monkeypatch.setitem(runtime.policies.after_request_funcs, None, [])
 
 
@@ -433,6 +478,33 @@ def test_invalid_upstream_payload_is_not_an_empty_list(runtime: Runtime) -> None
     @runtime.claims.after_request
     def malformed(_: Response) -> Response:
         return jsonify(siniestros=[{"id": str(uuid4())}])
+
+    assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
+
+
+def test_internal_redirect_does_not_forward_credentials(runtime: Runtime) -> None:
+    target = Flask("unexpected-target")
+    received: list[bool] = []
+
+    @target.get("/redirected")
+    def redirected() -> Response:
+        received.append(True)
+        return jsonify(siniestros=[])
+
+    with serve(target) as target_url:
+
+        @runtime.claims.after_request
+        def redirect(_: Response) -> Response:
+            return Response(status=302, headers={"Location": target_url + "/redirected"})
+
+        assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
+    assert received == []
+
+
+def test_oversized_upstream_response_is_rejected(runtime: Runtime) -> None:
+    @runtime.claims.after_request
+    def oversized(_: Response) -> Response:
+        return jsonify(siniestros=[], extra="x" * (1024 * 1024))
 
     assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
 
@@ -477,3 +549,69 @@ def test_migration_matches_models_and_is_reversible(runtime: Runtime) -> None:
     command.upgrade(runtime.migration, "head")
     with engine.connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+
+
+def test_migration_backfills_existing_claim_without_losing_evidence(runtime: Runtime) -> None:
+    engine = runtime.claims.extensions["siniestros_engine"]
+    command.downgrade(runtime.migration, "0001_siniestros")
+    claim_id, upload_id = str(uuid4()), str(uuid4())
+    created = "2026-10-01T10:20:30+00:00"
+    buffer = BytesIO()
+    with Image.new("RGB", (2, 2), "blue") as image:
+        image.save(buffer, format="PNG")
+    content = buffer.getvalue()
+    storage = runtime.claims.extensions["siniestros_repository"].config.storage_root
+    path = storage / upload_id
+    path.write_bytes(content)
+    claims = Table("siniestros", MetaData(), autoload_with=engine)
+    with engine.begin() as connection:
+        connection.execute(
+            claims.insert().values(
+                id=claim_id,
+                owner=str(USER.user_id),
+                operation=str(uuid4()),
+                fingerprint="a" * 64,
+                payload=runtime.payload(),
+                created=created,
+            )
+        )
+        connection.execute(
+            Upload.__table__.insert().values(
+                id=upload_id,
+                claim_id=claim_id,
+                owner=str(USER.user_id),
+                operation=str(uuid4()),
+                fingerprint="b" * 64,
+                mime="image/png",
+                size=len(content),
+                digest=hashlib.sha256(content).hexdigest(),
+                offset=len(content),
+                status="confirmada",
+                created=created,
+                confirmed=created,
+            )
+        )
+    command.upgrade(runtime.migration, "head")
+    with Session(engine) as session:
+        claim = session.get(Claim, claim_id)
+        upload = session.get(Upload, upload_id)
+        assert claim is not None and claim.state == "registrado"
+        assert claim.history == [
+            {
+                "estado": "registrado",
+                "fecha": created,
+                "actorId": str(USER.user_id),
+            }
+        ]
+        assert upload is not None and upload.claim_id == claim_id
+        assert upload.status == "confirmada" and upload.offset == len(content)
+        assert path.read_bytes() == content
+    response = runtime.client.get(f"{PATH}/{claim_id}", headers=bearer(runtime.token))
+    assert response.status_code == 200
+    assert response.get_json()["registradoEn"] == "2026-10-01T10:20:30Z"
+    assert response.get_json()["historial"][0]["fecha"] == "2026-10-01T10:20:30Z"
+    download = runtime.client.get(
+        f"{PATH}/{claim_id}/evidencias/{upload_id}/contenido", headers=bearer(runtime.token)
+    )
+    assert download.status_code == 200 and download.data == content
+    assert download.headers["Content-Type"] == "image/png"

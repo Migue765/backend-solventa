@@ -419,3 +419,12 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
         "name": "siniestros-runtime",
         "key": "SINIESTROS_DATABASE_URL",
     }
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    storage = next(item for item in environment if item["name"] == "SINIESTROS_STORAGE_ROOT")
+    assert storage["value"] == "/var/lib/solventa/evidencias"
+    assert container["volumeMounts"] == [{"name": "evidencias", "mountPath": "/var/lib/solventa"}]
+    assert pod["volumes"] == [
+        {"name": "evidencias", "persistentVolumeClaim": {"claimName": "siniestros-evidencias"}}
+    ]
+    assert pod["securityContext"]["fsGroup"] == 10001
