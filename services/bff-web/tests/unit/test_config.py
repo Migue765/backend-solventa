@@ -24,6 +24,7 @@ def test_environment_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JWKS_URL", "https://api.solventa.co/.well-known/jwks.json")
     monkeypatch.setenv("IDENTIDAD_TIMEOUT_SECONDS", "2.5")
     monkeypatch.setenv("QUOTE_SERVICE_URL", "http://cotizacion:8080/")
+    monkeypatch.setenv("SINIESTROS_SERVICE_URL", "http://siniestros:8080/")
 
     config = Config.from_environment()
 
@@ -32,6 +33,7 @@ def test_environment_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.jwks_endpoint == "https://api.solventa.co/.well-known/jwks.json"
     assert config.identity_timeout_seconds == 2.5
     assert config.quote_service_url == "http://cotizacion:8080"
+    assert config.claims_service_url == "http://siniestros:8080"
 
 
 @pytest.mark.parametrize("missing", ["IDENTIDAD_URL", "JWT_ISSUER"])

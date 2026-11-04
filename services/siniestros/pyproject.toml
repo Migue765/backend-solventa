@@ -1,14 +1,22 @@
 [project]
 name = "siniestros"
 version = "0.1.0"
-description = "Registro durable y consulta autorizada de siniestros de Solventa"
+description = "Siniestros, estado, historial y evidencia privada compartida de Solventa"
 requires-python = ">=3.12"
-dependencies = ["flask>=3.1,<4", "pydantic>=2.9,<3", "sqlalchemy>=2.0,<3", "alembic>=1.14,<2"]
+dependencies = [
+    "flask>=3.1,<4",
+    "pydantic>=2.9,<3",
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.14,<2",
+    "Pillow>=11.3,<13",
+    "pypdf>=6.0,<7",
+    "av>=16,<17",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-postgres = ["psycopg[binary]>=3.2,<4"]
 server = ["gunicorn>=23,<24"]
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [build-system]
 requires = ["setuptools>=69"]

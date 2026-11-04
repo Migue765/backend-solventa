@@ -337,7 +337,16 @@ def test_bff_rollout_failure_reverts_the_single_template_change(failure: str, me
     assert "completado." not in result.stdout
 
 
-@pytest.mark.parametrize("service", SERVICES)
+def test_claims_deployment_is_blocked_before_external_calls() -> None:
+    result = run_deploy("siniestros")
+    assert result.returncode != 0
+    assert "almacenamiento persistente" in result.stderr
+    assert "aws|" not in result.stderr
+    assert "kubectl|" not in result.stderr
+    assert "completado." not in result.stdout
+
+
+@pytest.mark.parametrize("service", [service for service in SERVICES if service != "siniestros"])
 def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -> None:
     result = run_deploy(service)
     assert result.returncode == 0, result.stdout + result.stderr

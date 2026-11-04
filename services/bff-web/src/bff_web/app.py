@@ -5,6 +5,7 @@ from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import (
+    claim_status,
     claims,
     client_information,
     consents,
@@ -61,9 +62,6 @@ def create_app(
 
     app.extensions["bff_config"] = active_config
     app.extensions["clock"] = lambda: datetime.now(UTC)
-    app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
-        active_config.claim_service_url, active_config.internal_api_token
-    )
     app.extensions["identity_gateway"] = identity_gateway or HttpIdentityGateway(
         active_config.identity_url,
         active_config.identity_timeout_seconds,
@@ -110,6 +108,9 @@ def create_app(
             active_config.internal_api_token,
         )
     )
+    app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
+        active_config.claims_service_url, active_config.internal_api_token
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
@@ -122,6 +123,7 @@ def create_app(
     app.register_blueprint(partner_quotes.bp)
     app.register_blueprint(client_information.bp)
     app.register_blueprint(claims.bp)
+    app.register_blueprint(claim_status.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

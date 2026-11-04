@@ -32,8 +32,8 @@ if [ "$SERVICE_NAME" = "polizas" ] && [ "$NAMESPACE" != "polizas" ]; then
   echo "Polizas solo se despliega en el namespace productivo polizas." >&2
   exit 1
 fi
-if [ "$SERVICE_NAME" = "siniestros" ] && [ "$NAMESPACE" != "siniestros" ]; then
-  echo "Siniestros solo se despliega en el namespace productivo siniestros." >&2
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  echo "Despliegue de Siniestros bloqueado: falta definir y validar almacenamiento persistente para evidencias." >&2
   exit 1
 fi
 

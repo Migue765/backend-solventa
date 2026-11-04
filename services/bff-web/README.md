@@ -1,5 +1,15 @@
 # BFF Web
 
+## Siniestros y evidencia compartida
+
+Las rutas `/v1/siniestros` conservan el registro web y usan el mismo servicio
+de evidencia que movil. Requieren sesion de cliente y las variables
+`SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`. El BFF deriva el propietario
+del JWT y transmite fragmentos de hasta 1 MiB sin almacenar soportes.
+Sin configuracion devuelve 503, no una confirmacion simulada.
+Contrato: `contracts/openapi/siniestros-v1.yaml`. Operacion y recuperacion:
+`services/siniestros/README.md` (rutas desde la raiz).
+
 Backend for Frontend de la aplicación web de clientes de Solventa. Contrato:
 `contracts/openapi/bff-web-v1.yaml`.
 
@@ -31,10 +41,18 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 tipoEvento, descripcion, lugar}` e `Idempotency-Key` UUID. Devuelve `201` al
 crear y `200` al recuperar un aviso confirmado. `GET /v1/siniestros/polizas`
 provee las polizas vigentes del selector. `GET /v1/siniestros` lista los casos
-autorizados y `GET /v1/siniestros/{id}` consulta detalle e historial. Exigen
-JWT Web y rol cliente; `clienteId` proviene exclusivamente del principal.
+autorizados y `GET /v1/siniestros/{id}` recupera el aviso registrado. Estado e
+historial usan `/v1/clientes/me/siniestros/{id}`, sin reemplazar ese acuse. Exigen
+JWT Web, rol y scope cliente; `clienteId` proviene exclusivamente del principal.
 Las consultas no aceptan cuerpo ni parametros. No se devuelven resultados
 parciales cuando falla el servicio.
+
+El BFF valida los avisos, listados y polizas antes de presentarlos como exitosos.
+Un acuse ajeno al cuerpo enviado o una respuesta incompleta produce 503.
+Se conserva el limite integrado de 16 KiB, tambien para texto multibyte, y
+los rechazos del servicio (`fecha_evento_invalida`, `idempotencia_conflictiva`).
+La propiedad del siniestro corresponde al actor del registro; no cambia si
+despues cambia la poliza. Un replay confirmado no depende de consultar Polizas.
 
 Configurar `SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`, compartido con
 Siniestros y Polizas. Un reintento conserva cuerpo y clave para recuperar
@@ -355,6 +373,22 @@ La lectura historica no renueva ni exige perfiles de riesgo vigentes y
 no modifica suscripciones, pagos o transacciones. No ofrece reanudacion con datos parciales.
 El detalle de campos y tipos esta en `contracts/openapi/bff-web-v1.yaml`.
 
+### Estado e historial de siniestro (SOL-318, HU25)
+
+`GET /v1/clientes/me/siniestros/{siniestroId}` requiere JWT del canal Web, rol y scope
+`cliente`, y no acepta
+query ni cuerpo: el cliente procede exclusivamente del principal. El gateway consulta
+`GET /v1/siniestros/{id}/estado` en Siniestros (`SINIESTROS_SERVICE_URL`)
+con el `INTERNAL_API_TOKEN` y `X-Cliente-ID` del principal. Devuelve tipo
+(`asistido` | `parametrico` | `null`), `ocurridoEn`,
+estado vigente, `actualizadoEn` e historial permitido en orden cronologico, con instantes
+normalizados a UTC; no expone monto, decision, fraude ni evidencias; el ultimo cambio coincide siempre con el estado vigente.
+
+Un siniestro inexistente o de otro cliente responde el mismo `404 siniestro_no_encontrado`,
+sin datos del caso. Fallo de red, timeout (0,8 s), credencial interna ausente, registro
+incoherente o respuesta fuera de contrato devuelven `503` con `Retry-After`, nunca un
+estado ni un historial vacio. El BFF no calcula transiciones; solo valida la respuesta.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
@@ -519,6 +553,7 @@ para validar la vigencia con el reloj del servidor.
 | `JWKS_URL`                  | `IDENTIDAD_URL` + `/.well-known/jwks.json` | Origen de las claves públicas |
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
+| `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.

@@ -46,7 +46,16 @@ no un booleano local. El formato de sesion, refresh y logout no cambia.
 No se certifican hardware, identidad civil, selfie ni prueba de vida.
 Ver [contrato y limites](../../docs/acceso-biometrico.md).
 
-## Configuración
+## Siniestros y evidencia
+
+Las rutas `/movil/v1/siniestros` usan el servicio compartido, sin almacenamiento
+en el BFF. Requieren JWT del canal movil, rol/scope cliente, `SINIESTROS_SERVICE_URL`
+e `INTERNAL_API_TOKEN`; sin configuracion responden 503. El cliente/autor se obtiene
+del JWT y no del cuerpo. Fragmentos de hasta 1 MiB se transmiten por streaming.
+Ver `contracts/openapi/siniestros-v1.yaml` y `services/siniestros/README.md` desde
+la raiz para configuracion, limites, errores y reconciliacion.
+
+## Configuración de identidad
 
 | Variable                    | Default                                    | Descripción                    |
 | --------------------------- | ------------------------------------------ | ------------------------------ |

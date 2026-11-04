@@ -19,130 +19,25 @@ tags:
   - name: Siniestros
 paths:
   /v1/siniestros:
-    post:
-      tags: [Siniestros]
-      operationId: registrarSiniestroWeb
-      summary: Registra un aviso durable para una poliza vigente del cliente
-      description: >-
-        El cliente y actor se derivan exclusivamente del JWT Web con rol cliente.
-        No admite parametros de consulta ni clienteId en el cuerpo.
-        La fecha del evento debe tener zona horaria, no estar en el futuro y
-        estar dentro de la vigencia de la poliza. La clave de idempotencia es
-        obligatoria: un reintento identico devuelve el mismo aviso; cambiar su
-        contenido produce 409. Ante confirmacion perdida, conservar cuerpo y
-        clave para recuperar la operacion sin duplicarla.
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AvisoSiniestro"
-      responses:
-        "200":
-          description: Aviso confirmado recuperado por cuerpo y clave de idempotencia
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetalleSiniestro"
-        "201":
-          description: Aviso persistido; estado inicial registrado
-          headers:
-            Location:
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetalleSiniestro"
-        "400":
-          $ref: "#/components/responses/SolicitudInvalida"
-        "401":
-          $ref: "#/components/responses/NoAutorizado"
-        "403":
-          description: Se requiere rol cliente
-        "404":
-          description: poliza_no_encontrada; misma respuesta para polizas ajenas
-        "409":
-          description: poliza_no_vigente o conflicto_idempotencia
-        "503":
-          $ref: "#/components/responses/ServicioNoDisponible"
-    get:
-      tags: [Siniestros]
-      operationId: listarSiniestrosWeb
-      summary: Lista exclusivamente los siniestros autorizados al cliente autenticado
-      description: >-
-        No admite cuerpo ni parametros de consulta. Incluye siniestros de
-        polizas vencidas que siguen perteneciendo al cliente. Sin resultados
-        devuelve una coleccion vacia. Si falla la consulta o la autorizacion
-        del servicio de polizas devuelve 503, nunca resultados parciales.
-      responses:
-        "200":
-          description: Listado completo ordenado por fecha de reporte descendente
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ListadoSiniestros"
-        "400":
-          $ref: "#/components/responses/SolicitudInvalida"
-        "401":
-          $ref: "#/components/responses/NoAutorizado"
-        "403":
-          description: Se requiere rol cliente
-        "503":
-          $ref: "#/components/responses/ServicioNoDisponible"
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
   /v1/siniestros/polizas:
-    get:
-      tags: [Siniestros]
-      operationId: listarPolizasParaSiniestroWeb
-      summary: Lista polizas vigentes autorizadas para registrar un aviso
-      description: No admite cuerpo ni parametros; el cliente se deriva del JWT.
-      responses:
-        "200":
-          description: Polizas vigentes del cliente, sin datos de otras cuentas
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PolizasParaSiniestro"
-        "400":
-          $ref: "#/components/responses/SolicitudInvalida"
-        "401":
-          $ref: "#/components/responses/NoAutorizado"
-        "403":
-          description: Se requiere rol cliente
-        "503":
-          $ref: "#/components/responses/ServicioNoDisponible"
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1polizas"
+  /v1/siniestros/configuracion-evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1configuracion-evidencias"
   /v1/siniestros/{siniestroId}:
-    get:
-      tags: [Siniestros]
-      operationId: consultarSiniestroWeb
-      summary: Consulta detalle e historial permitido del siniestro
-      description: No admite cuerpo ni parametros de consulta.
-      parameters:
-        - name: siniestroId
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Detalle del caso autorizado con su historial persistido
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetalleSiniestro"
-        "400":
-          $ref: "#/components/responses/SolicitudInvalida"
-        "401":
-          $ref: "#/components/responses/NoAutorizado"
-        "403":
-          description: Se requiere rol cliente
-        "404":
-          description: siniestro_no_encontrado; indistinguible de un caso ajeno
-        "503":
-          $ref: "#/components/responses/ServicioNoDisponible"
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}"
+  /v1/siniestros/{siniestroId}/cargas:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1contenido"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/confirmacion:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1confirmacion"
+  /v1/siniestros/{siniestroId}/evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias"
+  /v1/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/socios/actual:
     get:
       tags: [Socios]
@@ -1481,6 +1376,44 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/siniestros/{siniestroId}:
+    get:
+      tags: [Siniestros]
+      summary: Consulta el estado vigente y el historial permitido de un siniestro
+      operationId: consultarEstadoSiniestro
+      description: |
+        HU25 (SOL-318). El cliente se deriva exclusivamente del JWT; no admite query ni cuerpo.
+        Devuelve el estado vigente, su fecha de actualizacion y el historial permitido al
+        cliente en orden cronologico. El ultimo elemento del historial siempre corresponde
+        al estado vigente. Un siniestro inexistente o de otro cliente responde el mismo 404,
+        sin datos del caso. Un fallo de consulta o un registro incoherente responde 503;
+        nunca se presenta como estado valido ni como historial vacio.
+      parameters:
+        - name: siniestroId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Estado e historial permitido del siniestro
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoSiniestro"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
     bearerAuth:
@@ -1589,59 +1522,14 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
-    AvisoSiniestro:
+    EstadoSiniestro:
       type: object
       additionalProperties: false
-      required: [polizaId, fechaEvento, tipoEvento, descripcion, lugar]
-      properties:
-        polizaId:
-          type: string
-          format: uuid
-        fechaEvento:
-          type: string
-          format: date-time
-        tipoEvento:
-          type: string
-          minLength: 1
-          maxLength: 100
-        descripcion:
-          type: string
-          minLength: 10
-          maxLength: 5000
-        lugar:
-          type: string
-          minLength: 1
-          maxLength: 300
-    PolizasParaSiniestro:
-      type: object
-      additionalProperties: false
-      required: [polizas]
-      properties:
-        polizas:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required: [id, tipo, fechaInicio, fechaFin, estado]
-            properties:
-              id:
-                type: string
-                format: uuid
-              tipo:
-                type: string
-                minLength: 1
-              fechaInicio:
-                type: string
-                format: date
-              fechaFin:
-                type: string
-                format: date
-              estado:
-                const: vigente
-    ResumenSiniestro:
-      type: object
-      additionalProperties: false
-      required: [id, polizaId, fechaReporte, estado]
+      description: >-
+        Proyeccion para el cliente del agregado Siniestro. No incluye monto reclamado,
+        decision, evaluacion de fraude ni evidencias (datos restringidos).
+      required:
+        [id, polizaId, tipo, estado, descripcion, ocurridoEn, reportadoEn, actualizadoEn, historial]
       properties:
         id:
           type: string
@@ -1649,70 +1537,55 @@ components:
         polizaId:
           type: string
           format: uuid
-        fechaReporte:
-          type: string
-          format: date-time
+        tipo:
+          type: [string, "null"]
+          enum: [asistido, parametrico, null]
+          description: Clasificacion del dominio; null mientras no exista una clasificacion real.
         estado:
-          type: string
-          minLength: 1
-    ListadoSiniestros:
-      type: object
-      additionalProperties: false
-      required: [siniestros]
-      properties:
-        siniestros:
-          type: array
-          items:
-            $ref: "#/components/schemas/ResumenSiniestro"
-    DetalleSiniestro:
-      type: object
-      additionalProperties: false
-      required: [id, polizaId, registradoEn, estado, fechaEvento, tipoEvento, descripcion, lugar, historial]
-      properties:
-        id:
-          type: string
-          format: uuid
-        polizaId:
-          type: string
-          format: uuid
-        registradoEn:
-          type: string
-          format: date-time
-        estado:
-          type: string
-          minLength: 1
-        fechaEvento:
-          type: string
-          format: date-time
-        tipoEvento:
-          type: string
-          minLength: 1
-          maxLength: 100
+          $ref: "#/components/schemas/CodigoEstadoSiniestro"
         descripcion:
           type: string
-          minLength: 10
-          maxLength: 5000
-        lugar:
-          type: string
           minLength: 1
-          maxLength: 300
+        ocurridoEn:
+          type: string
+          format: date-time
+          description: Instante del evento; nunca posterior a reportadoEn.
+        reportadoEn:
+          type: string
+          format: date-time
+        actualizadoEn:
+          type: string
+          format: date-time
+          description: Instante del cambio que fijo el estado vigente.
         historial:
           type: array
           minItems: 1
           items:
-            type: object
-            additionalProperties: false
-            required: [estado, fecha, actorId]
-            properties:
-              estado:
-                type: string
-                minLength: 1
-              fecha:
-                type: string
-                format: date-time
-              actorId:
-                type: string
-                format: uuid
+            $ref: "#/components/schemas/CambioEstadoSiniestro"
+    CambioEstadoSiniestro:
+      type: object
+      additionalProperties: false
+      required: [estado, descripcion, ocurridoEn]
+      properties:
+        estado:
+          $ref: "#/components/schemas/CodigoEstadoSiniestro"
+        descripcion:
+          type: string
+          minLength: 1
+        ocurridoEn:
+          type: string
+          format: date-time
+    CodigoEstadoSiniestro:
+      type: string
+      enum:
+        - reportado
+        - en_evaluacion
+        - en_revision
+        - en_inspeccion
+        - aprobado
+        - rechazado
+        - pagado
+        - cerrado
     ClienteRegistrado:
       type: object
       additionalProperties: false

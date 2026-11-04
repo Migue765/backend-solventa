@@ -1,7 +1,7 @@
 import os
 
 from alembic import context
-from siniestros.models import Base
+from siniestros.infrastructure.models import Base
 from sqlalchemy import create_engine, pool
 
 config = context.config

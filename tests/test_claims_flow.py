@@ -1,479 +1,218 @@
+"""HU25 (SOL-318): BFF Web -> HTTP -> Siniestros con base migrada."""
+
 import json
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Thread
+from time import perf_counter
 from uuid import UUID, uuid4
 
 import pytest
 import yaml
 from alembic import command
-from alembic.autogenerate import compare_metadata
 from alembic.config import Config as AlembicConfig
-from alembic.migration import MigrationContext
-from bff_web.app import create_app as create_bff
+from bff_web.app import create_app
 from bff_web.config import Config
+from bff_web.domain.auth import User
+from bff_web.infrastructure.http_claim_gateway import HttpClaimGateway
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier
 from cryptography.hazmat.primitives.asymmetric import rsa
-from flask import Flask, Response, jsonify
+from flask import Flask
 from flask.testing import FlaskClient
 from jwt.algorithms import RSAAlgorithm
 from openapi_schema_validator import OAS31Validator
-from polizas.app import create_app as create_policies
-from polizas.infrastructure.models import PolizaModel
-from siniestros.app import create_app
-from siniestros.models import Base, SiniestroModel
-from sqlalchemy import func, select
+from siniestros.app import create_app as create_claims_app
+from siniestros.domain import Config as ClaimsConfig
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.models import Claim
+from siniestros.repository import fingerprint
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 from werkzeug.serving import make_server
 
 from tests.test_dashboard_flow import INTERNAL_TOKEN, ISSUER, ROOT, USER, bearer, sign_token
 
-PATH = "/v1/siniestros"
-INTERNAL_HEADERS = {"Authorization": f"Bearer {INTERNAL_TOKEN}"}
+REPORTE = datetime(2026, 11, 1, 15, 0, tzinfo=UTC)
+HISTORIAL = [
+    ("reportado", timedelta(0), True),
+    ("en_evaluacion", timedelta(hours=1), True),
+    ("en_revision", timedelta(hours=2), False),
+    ("en_inspeccion", timedelta(hours=3), True),
+]
+Runtime = tuple[FlaskClient, Flask]
 
 
-@contextmanager
-def serve(app: Flask) -> Iterator[str]:
-    server = make_server("127.0.0.1", 0, app, threaded=True)
+@pytest.fixture(scope="module")
+def keypair() -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+@pytest.fixture
+def token(keypair: rsa.RSAPrivateKey) -> str:
+    return sign_token(keypair, scope="cliente")
+
+
+@pytest.fixture
+def runtime(tmp_path: Path, keypair: rsa.RSAPrivateKey) -> Iterator[Runtime]:
+    url = f"sqlite:///{tmp_path / 'siniestros.db'}"
+    migration_config = AlembicConfig(str(ROOT / "services" / "siniestros" / "alembic.ini"))
+    migration_config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(migration_config, "head")
+    claims_app = create_claims_app(
+        ClaimsConfig(url, tmp_path / "evidencias", INTERNAL_TOKEN, "http://polizas.test")
+    )
+    server = make_server("127.0.0.1", 0, claims_app, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    jwk = json.loads(RSAAlgorithm.to_jwk(keypair.public_key()))
+    jwk.update(kid="dashboard-test", use="sig", alg="RS256")
+    bff = create_app(
+        Config(
+            identity_url="http://identidad.test",
+            jwt_issuer=ISSUER,
+            claims_service_url=f"http://127.0.0.1:{server.server_port}",
+            internal_api_token=INTERNAL_TOKEN,
+        ),
+        token_verifier=JwtVerifier(
+            JwksKeyStore(lambda: {"keys": [jwk]}), ISSUER, "solventa-api", "web"
+        ),
+    )
     try:
-        yield f"http://127.0.0.1:{server.server_port}"
+        yield bff.test_client(), claims_app
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        claims_app.extensions["siniestros_engine"].dispose()
 
 
-def migrate(service: str, url: str) -> AlembicConfig:
-    config = AlembicConfig(str(ROOT / "services" / service / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", url)
-    command.upgrade(config, "head")
-    return config
-
-
-@dataclass
-class Runtime:
-    client: FlaskClient
-    claims: Flask
-    policies: Flask
-    token: str
-    other_token: str
-    partner_token: str
-    policy_id: str
-    policy_url: str
-    database_url: str
-    migration: AlembicConfig
-
-    def payload(self) -> dict[str, str]:
-        return {
-            "polizaId": self.policy_id,
-            "fechaEvento": datetime.now(UTC).isoformat(),
-            "tipoEvento": "Colision",
-            "descripcion": "Colision reportada por el cliente.",
-            "lugar": "Bogota",
-        }
-
-    def headers(self, key: UUID | None = None) -> dict[str, str]:
-        return {**bearer(self.token), "Idempotency-Key": str(key or uuid4())}
-
-
-@pytest.fixture
-def runtime(tmp_path: Path) -> Iterator[Runtime]:
-    policies_url = f"sqlite:///{tmp_path / 'polizas.db'}"
-    migrate("polizas", policies_url)
-    policies = create_policies(policies_url, INTERNAL_TOKEN)
-    evidence = {
-        "clienteId": str(USER.user_id),
-        "suscripcionId": str(uuid4()),
-        "pagoId": str(uuid4()),
-        "tipo": "automotive",
-        "confirmadaEn": datetime.now(UTC).isoformat(),
-        "simulada": True,
-        "fechasContratadas": None,
-    }
-    response = policies.test_client().post("/v1/polizas", json=evidence, headers=INTERNAL_HEADERS)
-    assert response.status_code == 200
-    policy_id = response.get_json()["id"]
-    database_url = f"sqlite:///{tmp_path / 'siniestros.db'}"
-    migration = migrate("siniestros", database_url)
-    keypair = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = json.loads(RSAAlgorithm.to_jwk(keypair.public_key()))
-    jwk.update(kid="dashboard-test", use="sig", alg="RS256")
-    with serve(policies) as policy_url:
-        claims = create_app(database_url, INTERNAL_TOKEN, policy_url)
-        with serve(claims) as claim_url:
-            bff = create_bff(
-                Config(
-                    identity_url="http://identity.test",
-                    jwt_issuer=ISSUER,
-                    claim_service_url=claim_url,
-                    internal_api_token=INTERNAL_TOKEN,
-                ),
-                token_verifier=JwtVerifier(
-                    JwksKeyStore(lambda: {"keys": [jwk]}), ISSUER, "solventa-api", "web"
-                ),
-            )
-            yield Runtime(
-                bff.test_client(),
-                claims,
-                policies,
-                sign_token(keypair),
-                sign_token(keypair, replace(USER, user_id=uuid4())),
-                sign_token(keypair, replace(USER, role="socio")),
-                policy_id,
-                policy_url,
-                database_url,
-                migration,
-            )
-        claims.extensions["siniestros_engine"].dispose()
-    policies.extensions["polizas_engine"].dispose()
-
-
-def assert_contract(payload: object, schema: str) -> None:
-    document = yaml.safe_load(
-        (ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text(encoding="utf-8")
-    )
-    OAS31Validator(
-        {"$ref": f"#/components/schemas/{schema}", "components": document["components"]}
-    ).validate(payload)
-
-
-def test_registration_list_detail_restart_and_audit(runtime: Runtime) -> None:
-    correlation = str(uuid4())
-    payload = runtime.payload()
-    headers = {**runtime.headers(), "X-Correlation-ID": correlation}
-    response = runtime.client.post(PATH, json=payload, headers=headers)
-    assert response.status_code == 201, response.get_json()
-    detail = response.get_json()
-    assert_contract(detail, "DetalleSiniestro")
-    assert detail["estado"] == "registrado"
-    assert detail["polizaId"] == runtime.policy_id
-    assert detail["descripcion"] == payload["descripcion"]
-    assert detail["historial"] == [
-        {
-            "estado": "registrado",
-            "fecha": detail["registradoEn"],
-            "actorId": str(USER.user_id),
-        }
-    ]
-    assert response.headers["X-Correlation-ID"] == correlation
-    assert response.headers["Cache-Control"] == "no-store"
-    assert response.headers["Location"] == f"{PATH}/{detail['id']}"
-    retry = runtime.client.post(PATH, json=payload, headers=headers)
-    assert retry.status_code == 200
-    assert retry.get_json() == detail
-    listing = runtime.client.get(PATH, headers=bearer(runtime.token))
-    assert listing.status_code == 200
-    assert_contract(listing.get_json(), "ListadoSiniestros")
-    assert listing.get_json()["siniestros"] == [
-        {
-            **{name: detail[name] for name in ("id", "polizaId", "estado")},
-            "fechaReporte": detail["registradoEn"],
-        }
-    ]
-    assert (
-        runtime.client.get(f"{PATH}/{detail['id']}", headers=bearer(runtime.token)).get_json()
-        == detail
-    )
-    restarted = create_app(runtime.database_url, INTERNAL_TOKEN, runtime.policy_url)
-    try:
-        response = restarted.test_client().get(
-            f"{PATH}/{detail['id']}",
-            query_string={"clienteId": str(USER.user_id)},
-            headers=INTERNAL_HEADERS,
-        )
-        assert response.status_code == 200
-        assert response.get_json()["id"] == detail["id"]
-        with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-            row: SiniestroModel = session.scalars(select(SiniestroModel)).one()
-            assert row.cliente_id == USER.user_id
-            assert row.poliza_id == UUID(runtime.policy_id)
-            assert row.clave_idempotencia == UUID(headers["Idempotency-Key"])
-    finally:
-        restarted.extensions["siniestros_engine"].dispose()
-
-
-def test_isolation_and_empty_results(runtime: Runtime) -> None:
-    response = runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers())
-    detail = response.get_json()
-    other = bearer(runtime.other_token)
-    assert runtime.client.get(PATH, headers=other).get_json() == {"siniestros": []}
-    not_found = runtime.client.get(f"{PATH}/{detail['id']}", headers=other)
-    assert not_found.status_code == 404
-    assert detail["descripcion"] not in not_found.get_data(as_text=True)
-    assert (
-        runtime.client.post(
-            PATH, json=runtime.payload(), headers={**other, "Idempotency-Key": str(uuid4())}
-        ).status_code
-        == 404
-    )
-    assert (
-        runtime.client.post(
-            PATH,
-            json={**runtime.payload(), "clienteId": str(USER.user_id)},
-            headers=runtime.headers(),
-        ).status_code
-        == 400
-    )
-    assert (
-        runtime.client.get(
-            PATH, query_string={"clienteId": str(USER.user_id)}, headers=other
-        ).status_code
-        == 400
-    )
-
-
-def test_policy_selector_uses_authoritative_owned_current_policies(runtime: Runtime) -> None:
-    response = runtime.client.get(PATH + "/polizas", headers=bearer(runtime.token))
-    assert response.status_code == 200
-    result = response.get_json()
-    assert_contract(result, "PolizasParaSiniestro")
-    assert len(result["polizas"]) == 1
-    policy = result["polizas"][0]
-    assert policy["id"] == runtime.policy_id
-    assert policy["tipo"] == "automotive" and policy["estado"] == "vigente"
-    assert runtime.client.get(
-        PATH + "/polizas", headers=bearer(runtime.other_token)
-    ).get_json() == {"polizas": []}
-    with Session(runtime.policies.extensions["polizas_engine"]) as session:
-        row = session.get(PolizaModel, UUID(runtime.policy_id))
-        assert row is not None
-        row.fecha_fin = datetime.now(UTC).date() - timedelta(days=1)
-        session.commit()
-    assert runtime.client.get(PATH + "/polizas", headers=bearer(runtime.token)).get_json() == {
-        "polizas": []
-    }
-
-
-def test_access_is_rechecked_before_exposing_persisted_claim(runtime: Runtime) -> None:
-    payload, headers = runtime.payload(), runtime.headers()
-    response = runtime.client.post(PATH, json=payload, headers=headers)
-    claim_id = response.get_json()["id"]
-    with Session(runtime.policies.extensions["polizas_engine"]) as session:
-        row = session.get(PolizaModel, UUID(runtime.policy_id))
-        assert row is not None
-        row.cliente_id = uuid4()
-        session.commit()
-    assert (
-        runtime.client.get(f"{PATH}/{claim_id}", headers=bearer(runtime.token)).status_code == 404
-    )
-    assert runtime.client.post(PATH, json=payload, headers=headers).status_code == 404
-    assert runtime.client.get(PATH, headers=bearer(runtime.token)).get_json() == {"siniestros": []}
-
-
-@pytest.mark.parametrize("character", ["x", "\U0001f600"])
-def test_maximum_field_lengths_are_persisted_without_truncation(
-    runtime: Runtime, character: str
-) -> None:
+def register(claims_app: Flask, client_id: UUID) -> UUID:
+    claim_id = uuid4()
     payload = {
-        **runtime.payload(),
-        "tipoEvento": character * 100,
-        "descripcion": character * 5000,
-        "lugar": character * 300,
+        "polizaId": str(uuid4()),
+        "fechaEvento": (REPORTE - timedelta(hours=2)).isoformat(),
+        "tipoEvento": "Accidente",
+        "descripcion": "Descripcion sintetica del evento.",
+        "lugar": "Lugar de prueba",
     }
-    response = runtime.client.post(PATH, json=payload, headers=runtime.headers())
-    assert response.status_code == 201
-    for field in ("tipoEvento", "descripcion", "lugar"):
-        assert response.get_json()[field] == payload[field]
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"polizaId": "invalida"},
-        {"descripcion": " "},
-        {"descripcion": "x" * 5001},
-        {"tipoEvento": " "},
-        {"tipoEvento": "x" * 101},
-        {"lugar": ""},
-        {"lugar": "x" * 301},
-        {"fechaEvento": "2026-11-04T08:00:00"},
-        {"fechaEvento": "invalida"},
-        {"fechaEvento": 1793799100},
-        {"campoNoPermitido": True},
-    ],
-)
-def test_invalid_fields_do_not_persist(runtime: Runtime, change: dict[str, object]) -> None:
-    response = runtime.client.post(
-        PATH, json={**runtime.payload(), **change}, headers=runtime.headers()
-    )
-    assert response.status_code == 400
-    with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        assert session.scalar(select(func.count()).select_from(SiniestroModel)) == 0
-
-
-def test_invalid_dates_policy_and_idempotency(runtime: Runtime) -> None:
-    payload = runtime.payload()
-    headers = runtime.headers()
-    assert runtime.client.post(PATH, json=payload, headers=bearer(runtime.token)).status_code == 400
-    assert (
-        runtime.client.post(
-            PATH, json={**payload, "polizaId": str(uuid4())}, headers=headers
-        ).status_code
-        == 404
-    )
-    for when in (datetime.now(UTC) + timedelta(days=1), datetime.now(UTC) - timedelta(days=2)):
-        response = runtime.client.post(
-            PATH, json={**payload, "fechaEvento": when.isoformat()}, headers=headers
+    with Session(claims_app.extensions["siniestros_engine"]) as session, session.begin():
+        session.add(
+            Claim(
+                id=str(claim_id),
+                owner=str(client_id),
+                operation=str(uuid4()),
+                fingerprint=fingerprint(payload),
+                payload=payload,
+                created=REPORTE.isoformat(),
+                tipo="asistido",
+                estado=HISTORIAL[-1][0],
+                actualizado_en=REPORTE + HISTORIAL[-1][1],
+            )
         )
-        assert response.status_code == 400
-        assert response.get_json()["code"] == "solicitud_invalida"
-    assert runtime.client.post(PATH, json=payload, headers=headers).status_code == 201
-    assert (
-        runtime.client.post(
-            PATH,
-            json={**payload, "descripcion": "Descripcion diferente del mismo aviso."},
-            headers=headers,
-        ).status_code
-        == 409
-    )
-    with Session(runtime.policies.extensions["polizas_engine"]) as session:
-        policy = session.get(PolizaModel, UUID(runtime.policy_id))
-        assert policy is not None
-        policy.fecha_fin = datetime.now(UTC).date() - timedelta(days=1)
-        session.commit()
-    assert runtime.client.post(PATH, json=payload, headers=headers).status_code == 200
-    assert runtime.client.post(PATH, json=payload, headers=runtime.headers()).status_code == 409
-    listing = runtime.client.get(PATH, headers=bearer(runtime.token)).get_json()
-    assert len(listing["siniestros"]) == 1
+        session.flush()
+        session.add_all(
+            CambioEstadoModel(
+                siniestro_id=str(claim_id),
+                secuencia=sequence,
+                estado=state,
+                ocurrido_en=REPORTE + offset,
+                visible_cliente=visible,
+            )
+            for sequence, (state, offset, visible) in enumerate(HISTORIAL, start=1)
+        )
+    return claim_id
 
 
-def test_concurrent_retries_persist_one_claim(runtime: Runtime) -> None:
-    payload, headers = runtime.payload(), runtime.headers()
-
-    def send(_: int) -> tuple[str, int]:
-        with runtime.client.application.test_client() as client:
-            response = client.post(PATH, json=payload, headers=headers)
-            assert response.status_code in {200, 201}, response.get_json()
-            return str(response.get_json()["id"]), response.status_code
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(send, range(8)))
-        assert len({identifier for identifier, _ in results}) == 1
-        assert [status for _, status in results].count(201) == 1
-    with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        row: SiniestroModel = session.scalars(select(SiniestroModel)).one()
-        assert len(row.historial) == 1
+def validate_contract(payload: object, schema_name: str) -> None:
+    document = yaml.safe_load((ROOT / "contracts" / "openapi" / "bff-web-v1.yaml").read_text())
+    schema = {"$ref": f"#/components/schemas/{schema_name}", "components": document["components"]}
+    OAS31Validator(schema, format_checker=OAS31Validator.FORMAT_CHECKER).validate(payload)
 
 
-def test_authentication_and_malformed_requests(runtime: Runtime) -> None:
-    for headers in ({}, {"Authorization": "Bearer invalido"}):
-        assert runtime.client.get(PATH, headers=headers).status_code == 401
-        assert runtime.client.post(PATH, json=runtime.payload(), headers=headers).status_code == 401
-    assert (
-        runtime.claims.test_client()
-        .get(PATH, query_string={"clienteId": str(USER.user_id)})
-        .status_code
-        == 401
-    )
-    bodies: tuple[object, ...] = (None, [], {"clienteId": []})
-    for body in bodies:
-        assert runtime.claims.test_client().post(
-            PATH, json=body, headers=INTERNAL_HEADERS
-        ).status_code in {400, 415}
-    assert (
-        runtime.client.post(
-            PATH, data="{", content_type="application/json", headers=runtime.headers()
-        ).status_code
-        == 400
-    )
-    assert runtime.client.get(PATH, json={}, headers=bearer(runtime.token)).status_code == 400
-    assert (
-        runtime.client.get(f"{PATH}/no-es-uuid", headers=bearer(runtime.token)).status_code == 400
-    )
-    for path in (PATH, PATH + "/polizas", PATH + "/" + str(uuid4())):
-        assert runtime.client.get(path, headers=bearer(runtime.partner_token)).status_code == 403
+def path(claim_id: UUID) -> str:
+    return f"/v1/clientes/me/siniestros/{claim_id}"
 
 
-def test_lost_confirmation_recovers_without_duplicates(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+def test_cliente_consulta_estado_e_historial_permitido(runtime: Runtime, token: str) -> None:
+    client, claims_app = runtime
+    claim_id = register(claims_app, USER.user_id)
+
+    response = client.get(path(claim_id), headers=bearer(token))
+
+    assert response.status_code == 200
+    body = response.get_json()
+    validate_contract(body, "EstadoSiniestro")
+    assert body["id"] == str(claim_id)
+    assert body["estado"] == "en_inspeccion"
+    assert body["tipo"] == "asistido"
+    assert body["ocurridoEn"] == "2026-11-01T13:00:00Z"
+    assert body["actualizadoEn"] == "2026-11-01T18:00:00Z"
+    assert [entry["estado"] for entry in body["historial"]] == [
+        "reportado",
+        "en_evaluacion",
+        "en_inspeccion",
+    ]
+
+
+def test_siniestro_de_otro_cliente_no_revela_datos(
+    runtime: Runtime, keypair: rsa.RSAPrivateKey
 ) -> None:
-    @runtime.claims.after_request
-    def lose_confirmation(response: Response) -> Response:
-        if response.status_code == 201:
-            return Response(status=503)
-        return response
+    client, claims_app = runtime
+    claim_id = register(claims_app, USER.user_id)
+    other = sign_token(
+        keypair, User(uuid4(), "Otro", "otro@solventa.co", "cliente"), scope="cliente"
+    )
 
-    payload, headers = runtime.payload(), runtime.headers()
-    first = runtime.client.post(PATH, json=payload, headers=headers)
-    assert first.status_code == 503
-    assert first.get_json()["code"] == "servicio_no_disponible"
-    assert first.headers["Retry-After"] == "5"
-    monkeypatch.setitem(runtime.claims.after_request_funcs, None, [])
-    retry = runtime.client.post(PATH, json=payload, headers=headers)
-    assert retry.status_code == 200
-    listing = runtime.client.get(PATH, headers=bearer(runtime.token)).get_json()
-    assert len(listing["siniestros"]) == 1
+    foreign = client.get(path(claim_id), headers=bearer(other))
+    missing = client.get(path(uuid4()), headers=bearer(other))
+
+    assert foreign.status_code == missing.status_code == 404
+    validate_contract(foreign.get_json(), "Problema")
+    assert foreign.get_json()["code"] == missing.get_json()["code"] == "siniestro_no_encontrado"
+    assert foreign.get_json()["detail"] == missing.get_json()["detail"]
+    assert str(claim_id) not in foreign.get_data(as_text=True)
 
 
-def test_dependency_failure_does_not_confirm_or_return_partial_results(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def unavailable(_: Response) -> Response:
-        return Response(status=503)
+def test_registro_incoherente_es_falla_y_no_estado(runtime: Runtime, token: str) -> None:
+    client, claims_app = runtime
+    claim_id = register(claims_app, USER.user_id)
+    with Session(claims_app.extensions["siniestros_engine"]) as session, session.begin():
+        session.execute(update(Claim).values(estado="pagado"))
 
-    monkeypatch.setitem(runtime.policies.after_request_funcs, None, [unavailable])
-    for path in (PATH, f"{PATH}/{uuid4()}"):
-        response = runtime.client.get(path, headers=bearer(runtime.token))
-        assert response.status_code == 503
-        assert "siniestros" not in response.get_json()
-    response = runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers())
+    response = client.get(path(claim_id), headers=bearer(token))
+
     assert response.status_code == 503
-    with Session(runtime.claims.extensions["siniestros_engine"]) as session:
-        assert session.scalar(select(func.count()).select_from(SiniestroModel)) == 0
-    monkeypatch.setitem(runtime.policies.after_request_funcs, None, [])
+    validate_contract(response.get_json(), "Problema")
+    assert "historial" not in response.get_json()
 
 
-def test_invalid_upstream_payload_is_not_an_empty_list(runtime: Runtime) -> None:
-    @runtime.claims.after_request
-    def malformed(_: Response) -> Response:
-        return jsonify(siniestros=[{"id": str(uuid4())}])
-
-    assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
-
-
-def test_invalid_policy_response_is_not_an_authorization(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def malformed(_: Response) -> Response:
-        return jsonify(polizas=[{"id": runtime.policy_id, "estado": "vigente"}])
-
-    monkeypatch.setitem(runtime.policies.after_request_funcs, None, [malformed])
-    assert runtime.client.get(PATH + "/polizas", headers=bearer(runtime.token)).status_code == 503
-    assert (
-        runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers()).status_code
-        == 503
+def test_servicio_caido_es_falla_y_no_historial_vacio(runtime: Runtime, token: str) -> None:
+    client, claims_app = runtime
+    claim_id = register(claims_app, USER.user_id)
+    client.application.extensions["claim_gateway"] = HttpClaimGateway(
+        "http://127.0.0.1:9", INTERNAL_TOKEN
     )
 
+    response = client.get(path(claim_id), headers=bearer(token))
 
-def test_missing_configuration_is_explicit(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(runtime.client.application.extensions["claim_gateway"], "url", "")
-    assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
-    assert runtime.client.get(PATH + "/polizas", headers=bearer(runtime.token)).status_code == 503
+    assert response.status_code == 503
+    assert response.get_json()["code"] == "servicio_no_disponible"
 
 
-def test_database_failure_is_explicit(runtime: Runtime) -> None:
-    engine = runtime.claims.extensions["siniestros_engine"]
-    Base.metadata.drop_all(engine)
-    assert runtime.client.get(PATH, headers=bearer(runtime.token)).status_code == 503
-    assert (
-        runtime.client.post(PATH, json=runtime.payload(), headers=runtime.headers()).status_code
-        == 503
-    )
+def test_latencia_extremo_a_extremo(runtime: Runtime, token: str) -> None:
+    client, claims_app = runtime
+    claims = [register(claims_app, USER.user_id) for _ in range(20)]
+    headers = bearer(token)
+    for claim_id in claims:
+        assert client.get(path(claim_id), headers=headers).status_code == 200
+    latencies_ms = []
+    for index in range(200):
+        start = perf_counter()
+        response = client.get(path(claims[index % len(claims)]), headers=headers)
+        latencies_ms.append((perf_counter() - start) * 1000)
+        assert response.status_code == 200
+    ordered = sorted(latencies_ms)
 
-
-def test_migration_matches_models_and_is_reversible(runtime: Runtime) -> None:
-    engine = runtime.claims.extensions["siniestros_engine"]
-    with engine.connect() as connection:
-        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
-    command.downgrade(runtime.migration, "base")
-    command.upgrade(runtime.migration, "head")
-    with engine.connect() as connection:
-        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+    assert ordered[189] <= 150, f"p95={ordered[189]:.1f}ms"
+    assert ordered[197] <= 300, f"p99={ordered[197]:.1f}ms"

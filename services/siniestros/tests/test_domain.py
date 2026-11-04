@@ -1,75 +1,129 @@
+import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from siniestros.domain import AvisoSiniestro, ErrorSiniestro, PolizaAutorizada, validar_evento
+from siniestros.domain import ClaimInput, Config, Problem
+from siniestros.models import Base
+from siniestros.policies import policies
+from siniestros.repository import Repository
 
 
-def test_event_normalizes_timezone_and_policy_boundaries() -> None:
-    now = datetime.now(UTC)
-    policy = PolizaAutorizada(
-        id=uuid4(), tipo="automotive", fechaInicio=now.date(), fechaFin=now.date(), estado="vigente"
+@pytest.fixture
+def repository(tmp_path: Path) -> Iterator[Repository]:
+    repo = Repository(
+        Config(
+            database_url=f"sqlite:///{tmp_path / 'claims.db'}",
+            storage_root=tmp_path / "private",
+            internal_token="synthetic-internal",
+            policies_url="http://127.0.0.1:1",
+        )
     )
-    draft = AvisoSiniestro(
-        polizaId=policy.id,
-        fechaEvento=now.astimezone(UTC),
-        tipoEvento="Colision",
-        descripcion="  Evento reportado por el cliente.  ",
-        lugar="Bogota",
+    Base.metadata.create_all(repo.engine)
+    try:
+        yield repo
+    finally:
+        repo.engine.dispose()
+
+
+def draft(instant: str) -> ClaimInput:
+    return ClaimInput.model_validate(
+        {
+            "polizaId": str(uuid4()),
+            "fechaEvento": instant,
+            "tipoEvento": "Colision",
+            "descripcion": "  Evento reportado por el cliente.  ",
+            "lugar": "Bogota",
+        }
     )
-    validar_evento(draft, policy, now)
-    assert draft.descripcion == "Evento reportado por el cliente."
-    assert draft.fecha_ocurrencia.tzinfo == UTC
-    with pytest.raises(ErrorSiniestro, match="solicitud_invalida"):
-        validar_evento(
-            draft.model_copy(update={"fecha_ocurrencia": now + timedelta(seconds=1)}),
-            policy,
-            now,
+
+
+def test_event_normalizes_timezone_and_policy_boundaries(
+    repository: Repository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instant = datetime.now(UTC)
+    value = draft(instant.isoformat())
+    policy = {
+        "id": str(value.polizaId),
+        "fechaInicio": instant.date().isoformat(),
+        "fechaFin": instant.date().isoformat(),
+        "estado": "vigente",
+    }
+    monkeypatch.setattr("siniestros.repository.policies", lambda *_: [policy])
+    assert value.descripcion == "Evento reportado por el cliente."
+    assert value.fechaEvento.tzinfo == UTC
+    assert repository.create_claim("owner", str(uuid4()), value, "cid")[1] == 201
+    with pytest.raises(Problem, match="fecha_evento_invalida"):
+        repository.create_claim(
+            "owner",
+            str(uuid4()),
+            value.model_copy(update={"fechaEvento": datetime.now(UTC) + timedelta(days=1)}),
+            "cid",
         )
 
 
 @pytest.mark.parametrize("state", ["programada", "vencida"])
-def test_inactive_policy_is_rejected(state: str) -> None:
-    now = datetime.now(UTC)
-    policy = PolizaAutorizada.model_validate(
+def test_inactive_policy_is_rejected(
+    state: str,
+    repository: Repository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = draft(datetime.now(UTC).isoformat())
+    response = MagicMock(status=200)
+    response.__enter__.return_value = response
+    response.read.return_value = json.dumps(
         {
-            "id": uuid4(),
-            "tipo": "automotive",
-            "fechaInicio": now.date(),
-            "fechaFin": now.date(),
-            "estado": state,
+            "polizas": [
+                {
+                    "id": str(value.polizaId),
+                    "tipo": "automotive",
+                    "fechaInicio": "2020-01-01",
+                    "fechaFin": "2099-12-31",
+                    "estado": state,
+                }
+            ]
         }
-    )
-    draft = AvisoSiniestro(
-        polizaId=policy.id,
-        fechaEvento=now,
-        tipoEvento="Colision",
-        descripcion="Evento reportado por el cliente.",
-        lugar="Bogota",
-    )
-    with pytest.raises(ErrorSiniestro, match="poliza_no_vigente"):
-        validar_evento(draft, policy, now)
+    ).encode()
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr("siniestros.policies.build_opener", lambda *_: opener)
+    assert policies(repository.config, "owner", "cid") == []
+    with pytest.raises(Problem, match="poliza_no_encontrada"):
+        repository.create_claim("owner", str(uuid4()), value, "cid")
+    assert repository.list_claims("owner") == []
 
 
-def test_event_date_uses_utc_not_local_day() -> None:
-    now = datetime(2026, 11, 5, 1, tzinfo=UTC)
-    policy = PolizaAutorizada(
-        id=uuid4(), tipo="travel", fechaInicio=now.date(), fechaFin=now.date(), estado="vigente"
+def test_event_date_uses_utc_not_local_day(
+    repository: Repository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instant = datetime(2026, 11, 5, 1, tzinfo=UTC)
+    value = draft("2026-11-04T19:30:00-05:00")
+    monkeypatch.setattr(
+        "siniestros.repository.datetime",
+        SimpleNamespace(now=lambda _: instant, fromisoformat=datetime.fromisoformat),
     )
-    draft = AvisoSiniestro.model_validate(
-        {
-            "polizaId": policy.id,
-            "fechaEvento": "2026-11-04T19:30:00-05:00",
-            "tipoEvento": "Accidente",
-            "descripcion": "Evento reportado por el cliente.",
-            "lugar": "Bogota",
-        }
+    monkeypatch.setattr(
+        "siniestros.repository.policies",
+        lambda *_: [
+            {
+                "id": str(value.polizaId),
+                "fechaInicio": "2026-11-05",
+                "fechaFin": "2026-11-05",
+            }
+        ],
     )
-    validar_evento(draft, policy, now)
-    assert draft.fecha_ocurrencia.isoformat() == "2026-11-05T00:30:00+00:00"
-    with pytest.raises(ErrorSiniestro, match="solicitud_invalida"):
-        validar_evento(
-            draft.model_copy(update={"fecha_ocurrencia": datetime(2026, 11, 4, 23, tzinfo=UTC)}),
-            policy,
-            now,
+    assert value.fechaEvento.isoformat() == "2026-11-05T00:30:00+00:00"
+    assert repository.create_claim("owner", str(uuid4()), value, "cid")[1] == 201
+    with pytest.raises(Problem, match="fecha_evento_invalida"):
+        repository.create_claim(
+            "owner",
+            str(uuid4()),
+            value.model_copy(update={"fechaEvento": datetime(2026, 11, 4, 23, tzinfo=UTC)}),
+            "cid",
         )

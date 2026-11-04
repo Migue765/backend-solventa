@@ -1,120 +1,48 @@
 import json
-from http.client import HTTPException
-from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from bff_web.domain.claims import ClaimDetail, ClaimDraft, ClaimError, ClaimList, ClaimPolicies
+from pydantic import ValidationError
 
-DOMAIN_ERRORS = {
-    (400, "solicitud_invalida"),
-    (404, "poliza_no_encontrada"),
-    (404, "siniestro_no_encontrado"),
-    (409, "conflicto_idempotencia"),
-    (409, "poliza_no_vigente"),
-}
+from bff_web.domain.claims import ClaimNotFoundError, ClaimServiceUnavailableError, ClaimStatus
 
 
 class HttpClaimGateway:
-    def __init__(self, base_url: str, token: str, timeout: float = 5) -> None:
-        self.url = base_url.rstrip("/")
-        self.token = token
-        self.timeout = timeout
+    def __init__(self, base_url: str, internal_api_token: str, timeout: float = 0.8) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = internal_api_token
+        self._timeout = timeout
 
-    def _request(
-        self,
-        path: str,
-        correlation_id: str,
-        body: dict[str, object] | None = None,
-        key: UUID | None = None,
-    ) -> tuple[object, int]:
-        if not self.url or not self.token:
-            raise ClaimError("servicio_no_disponible", 503)
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "X-Correlation-ID": correlation_id,
-            "Content-Type": "application/json",
-        }
-        if key is not None:
-            headers["Idempotency-Key"] = str(key)
+    def get_status(self, claim_id: UUID, client_id: UUID, correlation_id: str) -> ClaimStatus:
+        if not self._base_url or not self._token:
+            raise ClaimServiceUnavailableError()
         request = Request(
-            self.url + path,
-            data=json.dumps(body).encode() if body is not None else None,
-            headers=headers,
+            f"{self._base_url}/v1/siniestros/{claim_id}/estado",
+            headers={
+                "Authorization": "Bearer " + self._token,
+                "Accept": "application/json",
+                "X-Correlation-ID": correlation_id,
+                "X-Cliente-ID": str(client_id),
+            },
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
-                return json.load(response), response.status
+            with urlopen(request, timeout=self._timeout) as response:  # noqa: S310
+                status = ClaimStatus.model_validate(json.load(response))
         except HTTPError as error:
-            try:
-                payload = json.load(error)
-                code = payload.get("error") if isinstance(payload, dict) else None
-            except (OSError, ValueError):
-                code = None
-            finally:
-                error.close()
-            if isinstance(code, str) and (error.code, code) in DOMAIN_ERRORS:
-                raise ClaimError(code, error.code) from error
-            raise ClaimError("servicio_no_disponible", 503) from error
-        except (OSError, HTTPException, ValueError) as error:
-            raise ClaimError("servicio_no_disponible", 503) from error
+            if error.code == 404 and _error_code(error) == "siniestro_no_encontrado":
+                raise ClaimNotFoundError() from error
+            raise ClaimServiceUnavailableError() from error
+        except (URLError, OSError, TimeoutError, ValueError, ValidationError) as error:
+            raise ClaimServiceUnavailableError() from error
+        if status.claim_id != claim_id:
+            raise ClaimServiceUnavailableError()
+        return status
 
-    def create(
-        self, user_id: UUID, draft: ClaimDraft, key: UUID, correlation_id: str
-    ) -> tuple[ClaimDetail, bool]:
-        payload, status = self._request(
-            "/v1/siniestros",
-            correlation_id,
-            {**draft.model_dump(mode="json", by_alias=True), "clienteId": str(user_id)},
-            key,
-        )
-        try:
-            result = ClaimDetail.model_validate(payload)
-            if (
-                status not in {200, 201}
-                or result.policy_id != draft.policy_id
-                or result.occurred_at != draft.occurred_at
-                or result.event_type != draft.event_type
-                or result.description != draft.description
-                or result.location != draft.location
-            ):
-                raise ValueError("La confirmacion no corresponde a la poliza.")
-            return result, status == 201
-        except ValueError as error:
-            raise ClaimError("servicio_no_disponible", 503) from error
 
-    def list(self, user_id: UUID, correlation_id: str) -> ClaimList:
-        payload, status = self._request(
-            "/v1/siniestros?" + urlencode({"clienteId": str(user_id)}), correlation_id
-        )
-        try:
-            if status != 200:
-                raise ValueError("Estado de listado invalido.")
-            return ClaimList.model_validate(payload)
-        except ValueError as error:
-            raise ClaimError("servicio_no_disponible", 503) from error
-
-    def get(self, user_id: UUID, claim_id: UUID, correlation_id: str) -> ClaimDetail:
-        payload, status = self._request(
-            f"/v1/siniestros/{claim_id}?" + urlencode({"clienteId": str(user_id)}),
-            correlation_id,
-        )
-        try:
-            result = ClaimDetail.model_validate(payload)
-            if status != 200 or result.id != claim_id:
-                raise ValueError("La respuesta no corresponde al siniestro.")
-            return result
-        except ValueError as error:
-            raise ClaimError("servicio_no_disponible", 503) from error
-
-    def policies(self, user_id: UUID, correlation_id: str) -> ClaimPolicies:
-        payload, status = self._request(
-            "/v1/siniestros/polizas?" + urlencode({"clienteId": str(user_id)}), correlation_id
-        )
-        try:
-            if status != 200:
-                raise ValueError("Estado de consulta de polizas invalido.")
-            return ClaimPolicies.model_validate(payload)
-        except ValueError as error:
-            raise ClaimError("servicio_no_disponible", 503) from error
+def _error_code(error: HTTPError) -> object:
+    try:
+        payload = json.load(error)
+    except ValueError:
+        return None
+    return payload.get("code") if isinstance(payload, dict) else None
