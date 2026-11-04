@@ -1,5 +1,15 @@
 # BFF Web
 
+## Siniestros y evidencia compartida
+
+Las rutas `/v1/siniestros` conservan el registro web y usan el mismo servicio
+de evidencia que movil. Requieren sesion de cliente y las variables
+`SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`. El BFF deriva el propietario
+del JWT y transmite fragmentos de hasta 1 MiB sin almacenar soportes.
+Sin configuracion devuelve 503, no una confirmacion simulada.
+Contrato: `contracts/openapi/siniestros-v1.yaml`. Operacion y recuperacion:
+`services/siniestros/README.md` (rutas desde la raiz).
+
 Backend for Frontend de la aplicación web de clientes de Solventa. Contrato:
 `contracts/openapi/bff-web-v1.yaml`.
 

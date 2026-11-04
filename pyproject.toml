@@ -30,6 +30,8 @@ module = [
     "tests.test_encrypted_local_stack",
     "tests.test_hu44_exception_process_http",
     "tests.jmeter.local_stack", "tests.jmeter.run",
+    "tests.claims_local_stack",
+    "tests.test_claims_evidence_flow",
 ]
 disable_error_code = ["import-untyped"]
 
@@ -42,5 +44,6 @@ pythonpath = [
     "services/cotizacion/src",
     "services/perfilamiento/src",
     "services/polizas/src",
+    "services/siniestros/src",
 ]
 addopts = "--import-mode=importlib"

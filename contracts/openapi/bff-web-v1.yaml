@@ -17,6 +17,26 @@ tags:
   - name: Asesores
   - name: Socios
 paths:
+  /v1/siniestros:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
+  /v1/siniestros/polizas:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1polizas"
+  /v1/siniestros/configuracion-evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1configuracion-evidencias"
+  /v1/siniestros/{siniestroId}:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}"
+  /v1/siniestros/{siniestroId}/cargas:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1contenido"
+  /v1/siniestros/{siniestroId}/cargas/{cargaId}/confirmacion:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas~1{cargaId}~1confirmacion"
+  /v1/siniestros/{siniestroId}/evidencias:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias"
+  /v1/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/socios/actual:
     get:
       tags: [Socios]
