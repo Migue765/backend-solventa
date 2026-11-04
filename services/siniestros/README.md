@@ -1,5 +1,22 @@
 # Siniestros
 
+## Despliegue pendiente de almacenamiento
+
+La preparacion de infraestructura de SOL-313/SOL-315 se conserva sin activarla.
+`deploy/codebuild/deploy.sh` rechaza `SERVICE_NAME=siniestros` antes de llamar a
+AWS, ejecutar migraciones o aplicar manifiestos. El Deployment propone el PVC
+`siniestros-evidencias`, pero no lo provisiona ni acredita su durabilidad; no
+aplicarlo manualmente. El despliegue de BFF Web conserva su URL de Siniestros
+actual y no la redirige al servicio bloqueado. No usar `emptyDir` ni el
+filesystem del contenedor como sustituto. Retirar el
+bloqueo requiere una entrega que defina persistencia, permisos, respaldo y
+recuperacion de evidencias y que valide PostgreSQL. Este PR no despliega recursos.
+
+La integracion usa `0002_estado_historial` del PR84, sin el historial JSON
+alternativo de la rama del PR85. Si se aplico esa migracion alternativa en una
+base local, no actualizarla a ciegas: requiere conciliar su revision y sus datos
+antes de ejecutar Alembic. No modificar una revision ya aplicada en produccion.
+
 Servicio interno con base de datos propia. Comparte registro, evidencia y consulta
 de estado e historial (HU25 Web, SOL-318). HU21 movil reutiliza la misma capacidad
 de consulta, sin otro motor de estados. Las transiciones de evaluacion (HU26/HU27)

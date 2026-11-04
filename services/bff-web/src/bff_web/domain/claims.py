@@ -1,8 +1,16 @@
-from datetime import UTC
+from datetime import UTC, date
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 UtcDatetime = Annotated[AwareDatetime, AfterValidator(lambda value: value.astimezone(UTC))]
 ClaimType = Literal["asistido", "parametrico"]
@@ -55,3 +63,46 @@ class ClaimNotFoundError(Exception):
 
 class ClaimServiceUnavailableError(Exception):
     """El servicio de siniestros no respondió una consulta válida."""
+
+
+class ClaimDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    policy_id: UUID = Field(alias="polizaId")
+    occurred_at: UtcDatetime = Field(alias="fechaEvento")
+    event_type: str = Field(alias="tipoEvento", min_length=1, max_length=100)
+    description: str = Field(alias="descripcion", min_length=10, max_length=5000)
+    location: str = Field(alias="lugar", min_length=1, max_length=300)
+
+    @field_validator("occurred_at", mode="before")
+    @classmethod
+    def validate_date_type(cls, value: object) -> object:
+        if not isinstance(value, str) or "T" not in value:
+            raise ValueError("Se requiere una fecha ISO con zona.")
+        return value
+
+
+class ClaimDetail(ClaimDraft):
+    id: UUID
+    state: Literal["registrado"] = Field(alias="estado")
+    registered_at: UtcDatetime = Field(alias="registradoEn")
+
+
+class ClaimList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claims: list[ClaimDetail] = Field(alias="siniestros")
+
+
+class ClaimPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    type: str = Field(alias="tipo", min_length=1)
+    start: date = Field(alias="fechaInicio")
+    end: date = Field(alias="fechaFin")
+    state: Literal["vigente"] = Field(alias="estado")
+
+
+class ClaimPolicies(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policies: list[ClaimPolicy] = Field(alias="polizas")

@@ -35,6 +35,31 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Siniestros Web (SOL-313 y SOL-315)
+
+`POST /v1/siniestros` registra un aviso con `{polizaId, fechaEvento,
+tipoEvento, descripcion, lugar}` e `Idempotency-Key` UUID. Devuelve `201` al
+crear y `200` al recuperar un aviso confirmado. `GET /v1/siniestros/polizas`
+provee las polizas vigentes del selector. `GET /v1/siniestros` lista los casos
+autorizados y `GET /v1/siniestros/{id}` recupera el aviso registrado. Estado e
+historial usan `/v1/clientes/me/siniestros/{id}`, sin reemplazar ese acuse. Exigen
+JWT Web, rol y scope cliente; `clienteId` proviene exclusivamente del principal.
+Las consultas no aceptan cuerpo ni parametros. No se devuelven resultados
+parciales cuando falla el servicio.
+
+El BFF valida los avisos, listados y polizas antes de presentarlos como exitosos.
+Un acuse ajeno al cuerpo enviado o una respuesta incompleta produce 503.
+Se conserva el limite integrado de 16 KiB, tambien para texto multibyte, y
+los rechazos del servicio (`fecha_evento_invalida`, `idempotencia_conflictiva`).
+La propiedad del siniestro corresponde al actor del registro; no cambia si
+despues cambia la poliza. Un replay confirmado no depende de consultar Polizas.
+
+Configurar `SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`, compartido con
+Siniestros y Polizas. Un reintento conserva cuerpo y clave para recuperar
+el aviso confirmado sin duplicarlo. Sin servicio configurado responde `503`,
+nunca una confirmacion ficticia. Detalle de validaciones y operacion:
+[Siniestros](../siniestros/README.md).
+
 ### Plataforma de socios (SOL-195)
 
 El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y

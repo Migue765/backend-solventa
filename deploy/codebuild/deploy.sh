@@ -32,6 +32,10 @@ if [ "$SERVICE_NAME" = "polizas" ] && [ "$NAMESPACE" != "polizas" ]; then
   echo "Polizas solo se despliega en el namespace productivo polizas." >&2
   exit 1
 fi
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  echo "Despliegue de Siniestros bloqueado: falta definir y validar almacenamiento persistente para evidencias." >&2
+  exit 1
+fi
 
 export IMAGE="${ECR_REPOSITORY_URL}:${IMAGE_TAG}"
 # Los nombres de Job deben ser DNS-1123: minusculas, digitos y guiones.
@@ -81,7 +85,7 @@ fi
 if [ -f "${K8S_DIR}/hpa.yaml" ]; then
   kubectl apply -f "${K8S_DIR}/hpa.yaml"
 fi
-if [ "$SERVICE_NAME" = "polizas" ]; then
+if [ "$SERVICE_NAME" = "polizas" ] || [ "$SERVICE_NAME" = "siniestros" ]; then
   kubectl apply -f "${K8S_DIR}/service.yaml"
   envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
 else

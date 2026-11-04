@@ -5,10 +5,13 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, request, stream_with_context
+from pydantic import ValidationError
 
 from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.domain.claims import ClaimDetail, ClaimDraft, ClaimList, ClaimPolicies
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.problems import problem_response
 
@@ -61,6 +64,14 @@ def forward(tail: str = "") -> Response:
                 411, "longitud_requerida", "Longitud requerida", "Indica longitud."
             )
         length = 0
+    submitted = None
+    if request.method == "POST" and not tail:
+        try:
+            submitted = ClaimDraft.model_validate(request.get_json())
+        except ValidationError:
+            return problem_response(
+                400, "solicitud_invalida", "Solicitud invalida", "Revisa los datos del aviso."
+            )
     headers = {
         "Authorization": f"Bearer {config.internal_api_token}",
         "X-Cliente-ID": str(claims.user.user_id),
@@ -77,7 +88,7 @@ def forward(tail: str = "") -> Response:
         + (f"/{quote(tail, safe='/')}" if tail else ""),
         method=request.method,
         headers=headers,
-        data=request.stream if length else None,
+        data=request.get_data() if submitted is not None else request.stream if length else None,
     )
     try:
         try:
@@ -114,8 +125,27 @@ def forward(tail: str = "") -> Response:
                 return unavailable()
             if upstream.status == 204 and not payload:
                 return Response(status=204)
-            if not isinstance(json.loads(payload), dict):
+            document = json.loads(payload)
+            if not isinstance(document, dict):
                 return unavailable()
+            detail = None
+            if upstream.status in {200, 201}:
+                if submitted is not None:
+                    detail = ClaimDetail.model_validate(document)
+                    if (
+                        detail.model_dump(include=set(ClaimDraft.model_fields))
+                        != submitted.model_dump()
+                    ):
+                        raise ValueError("La confirmacion no corresponde al aviso.")
+                elif request.method == "GET":
+                    if not tail:
+                        ClaimList.model_validate(document)
+                    elif tail == "polizas":
+                        ClaimPolicies.model_validate(document)
+                    elif "/" not in tail and tail != "configuracion-evidencias":
+                        detail = ClaimDetail.model_validate(document)
+                        if detail.id != UUID(tail):
+                            raise ValueError("La respuesta no corresponde al siniestro.")
             if upstream.status not in {
                 200,
                 201,
@@ -141,9 +171,15 @@ def forward(tail: str = "") -> Response:
             )
             if upstream.status == 503:
                 response.headers["Retry-After"] = "5"
+            if submitted is not None and detail is not None:
+                response.headers["Location"] = f"{request.path}/{detail.id}"
             return response
-    except (OSError, HTTPException, ValueError, TypeError, KeyError):
-        current_app.logger.exception("Fallo HTTP de siniestros; no se confirma la operacion.")
+    except (OSError, HTTPException, ValueError, TypeError, KeyError) as error:
+        current_app.logger.error(
+            "Fallo HTTP de siniestros; clase=%s correlationId=%s; no se confirma la operacion.",
+            type(error).__name__,
+            g.correlation_id,
+        )
         return unavailable()
 
 

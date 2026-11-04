@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: siniestros
+  namespace: siniestros
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siniestros
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: siniestros
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: siniestros
+          image: ${IMAGE}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: siniestros-runtime
+                  key: INTERNAL_API_TOKEN
+            - name: SINIESTROS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: siniestros-runtime
+                  key: SINIESTROS_DATABASE_URL
+            - name: POLIZAS_SERVICE_URL
+              value: http://polizas.polizas.svc.cluster.local:8080
+            - name: SINIESTROS_STORAGE_ROOT
+              value: /var/lib/solventa/evidencias
+          volumeMounts:
+            - name: evidencias
+              mountPath: /var/lib/solventa
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: evidencias
+          persistentVolumeClaim:
+            claimName: siniestros-evidencias
