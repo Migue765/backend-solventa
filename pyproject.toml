@@ -33,6 +33,7 @@ module = [
     "tests.jmeter.local_stack", "tests.jmeter.run",
     "tests.claims_local_stack",
     "tests.test_claims_evidence_flow",
+    "tests.test_claims_sync_results",
 ]
 disable_error_code = ["import-untyped"]
 

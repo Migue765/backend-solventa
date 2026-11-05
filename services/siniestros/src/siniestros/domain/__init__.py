@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -23,6 +23,7 @@ class Problem(Exception):
     def __init__(self, status: int, code: str) -> None:
         self.status = status
         self.code = code
+        self.result: dict[str, Any] | None = None
         super().__init__(code)
 
 
