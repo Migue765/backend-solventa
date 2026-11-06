@@ -121,7 +121,13 @@ def create_app(config: Config | None = None) -> Flask:
     @app.post("/v1/siniestros/<uuid:claim_id>/cargas")
     def start(claim_id: UUID) -> tuple[Response, int]:
         data = body()
-        if isinstance(data, dict) and data.get("mimeType") not in config.formats:
+        # Active policy is checked after durable replay recovery in Repository.start.
+        if isinstance(data, dict) and data.get("mimeType") not in {
+            "image/jpeg",
+            "image/png",
+            "application/pdf",
+            "video/mp4",
+        }:
             raise Problem(415, "formato_no_permitido")
         record, status = repo.start(
             g.owner, str(claim_id), operation(), UploadInput.model_validate(data), g.correlation_id
@@ -195,18 +201,22 @@ def create_app(config: Config | None = None) -> Flask:
             "action": request.endpoint or "ruta_desconocida",
         }
         logger.warning(json.dumps(details))
-        try:
-            repo.failure(g.get("owner"), details["action"], error.code, g.correlation_id)
-        except SQLAlchemyError:
-            logger.error(
-                "No se pudo persistir la auditoria de rechazo; correlationId=%s", g.correlation_id
-            )
+        if error.result is None:
+            try:
+                repo.failure(g.get("owner"), details["action"], error.code, g.correlation_id)
+            except (SQLAlchemyError, OSError):
+                logger.error(
+                    "No se pudo persistir la auditoria de rechazo; correlationId=%s",
+                    g.correlation_id,
+                )
+                error = Problem(503, "servicio_no_disponible")
         response = jsonify(
             type=f"https://api.solventa.co/problems/{error.code}",
             title=error.code,
             status=error.status,
             code=error.code,
             correlationId=g.correlation_id,
+            **({"ultimoResultado": error.result} if error.result is not None else {}),
         )
         response.status_code = error.status
         response.content_type = "application/problem+json"

@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -58,6 +59,7 @@ class Upload(Base):
 
 class Audit(Base):
     __tablename__ = "auditoria_siniestros"
+    __table_args__ = (Index("ix_auditoria_operacion", "actor", "action", "operation", "created"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     actor: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -65,3 +67,6 @@ class Audit(Base):
     result: Mapped[str] = mapped_column(String(64))
     correlation: Mapped[str] = mapped_column(String(36))
     created: Mapped[str] = mapped_column(String(40))
+    operation: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)

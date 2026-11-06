@@ -31,35 +31,37 @@ class RepositorioSiniestros:
             )
             if siniestro is None:
                 return None
-            cambios = sesion.scalars(
-                select(CambioEstadoModel)
-                .where(CambioEstadoModel.siniestro_id == str(siniestro_id))
-                .order_by(CambioEstadoModel.secuencia)
-            ).all()
-            try:
-                aviso = ClaimInput.model_validate(siniestro.payload)
-                reportado_en = datetime.fromisoformat(siniestro.created)
-            except (ValueError, TypeError) as error:
-                raise SiniestroNoIntegro("El aviso persistido no es valido.") from error
-            if siniestro.actualizado_en is None:
-                raise SiniestroNoIntegro("El siniestro no tiene fecha de actualizacion.")
-            return _serializar(
-                consultar_estado(
-                    RegistroSiniestro(
-                        UUID(siniestro.id),
-                        aviso.polizaId,
-                        siniestro.tipo,
-                        siniestro.estado,
-                        aviso.fechaEvento,
-                        reportado_en,
-                        siniestro.actualizado_en,
-                    ),
-                    [
-                        CambioEstado(cambio.estado, cambio.ocurrido_en, cambio.visible_cliente)
-                        for cambio in cambios
-                    ],
-                )
-            )
+            return _serializar(validar(sesion, siniestro))
+
+
+def validar(sesion: Session, siniestro: Claim) -> EstadoConsultado:
+    cambios = sesion.scalars(
+        select(CambioEstadoModel)
+        .where(CambioEstadoModel.siniestro_id == siniestro.id)
+        .order_by(CambioEstadoModel.secuencia)
+    ).all()
+    try:
+        aviso = ClaimInput.model_validate(siniestro.payload)
+        reportado_en = datetime.fromisoformat(siniestro.created)
+    except (ValueError, TypeError) as error:
+        raise SiniestroNoIntegro("El aviso persistido no es valido.") from error
+    if siniestro.actualizado_en is None:
+        raise SiniestroNoIntegro("El siniestro no tiene fecha de actualizacion.")
+    return consultar_estado(
+        RegistroSiniestro(
+            UUID(siniestro.id),
+            aviso.polizaId,
+            siniestro.tipo,
+            siniestro.estado,
+            aviso.fechaEvento,
+            reportado_en,
+            siniestro.actualizado_en,
+        ),
+        [
+            CambioEstado(cambio.estado, cambio.ocurrido_en, cambio.visible_cliente)
+            for cambio in cambios
+        ],
+    )
 
 
 def _serializar(consulta: EstadoConsultado) -> dict[str, object]:

@@ -4,7 +4,7 @@ import socket
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,7 +19,8 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject
 from siniestros.app import create_app
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
-from siniestros.models import Audit, Upload
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.models import Audit, Claim, Upload
 from siniestros.repository import Repository
 from sqlalchemy import event, func, select
 from sqlalchemy.engine import Connection
@@ -639,3 +640,174 @@ def test_pdf_attachment_is_not_an_unchecked_nested_upload(runtime: dict) -> None
     assert put(runtime, url, data)[0] == 200
     status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
     assert (status, problem["code"]) == (422, "formato_invalido")
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_operation_recovery_precedes_changed_mime_policy(runtime: dict, confirmed: bool) -> None:
+    data = image_bytes()
+    _, url, upload = start_upload(runtime, data)
+    user = runtime["users"][0]
+    repo = runtime["app"].extensions["siniestros_repository"]
+    with repo.sessions() as session:
+        operation = session.get(Upload, upload["id"]).operation
+    if confirmed:
+        assert put(runtime, url, data)[0] == 200
+        assert call(url + "/confirmacion", "POST", token=user["token"])[0] == 200
+    expected = call(url, token=user["token"])[1]
+    app = create_app(replace(runtime["config"], allowed_mimes=("application/pdf",)))
+    client = app.test_client()
+    headers = {
+        "Authorization": f"Bearer {runtime['internal']}",
+        "X-Cliente-ID": user["id"],
+        "Idempotency-Key": operation,
+    }
+    route = f"/v1/siniestros/{user['claim']['id']}/cargas"
+    payload = {
+        "mimeType": "image/jpeg",
+        "tamanoBytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    try:
+        replay = client.post(route, json=payload, headers=headers)
+        assert replay.status_code == 200
+        assert replay.get_json() == expected
+        collision = client.post(route, json={**payload, "sha256": "0" * 64}, headers=headers)
+        assert collision.status_code == 409
+        assert collision.get_json()["code"] == "idempotencia_conflictiva"
+        fresh = client.post(
+            route, json=payload, headers={**headers, "Idempotency-Key": str(uuid4())}
+        )
+        assert fresh.status_code == 415
+        assert fresh.get_json()["code"] == "formato_no_permitido"
+        if confirmed:
+            assert (
+                client.post(
+                    route + "/" + upload["id"] + "/confirmacion", headers=headers
+                ).get_json()
+                == expected
+            )
+        else:
+            assert (
+                client.put(
+                    route + "/" + upload["id"] + "/contenido",
+                    data=data,
+                    headers={
+                        **headers,
+                        "Content-Type": "application/octet-stream",
+                        "Upload-Offset": "0",
+                    },
+                ).status_code
+                == 415
+            )
+        observed = call(url, token=user["token"])[1]
+        if not confirmed:
+            assert observed["ultimoResultado"]["code"] == "formato_no_permitido"
+            assert observed["ultimoResultado"]["httpStatus"] == 415
+            expected = {**expected, "ultimoResultado": observed["ultimoResultado"]}
+        assert observed == expected
+    finally:
+        app.extensions["siniestros_repository"].engine.dispose()
+
+
+def test_partial_queue_preserves_accepted_and_unprocessed_operations(runtime: dict) -> None:
+    data = image_bytes()
+    root, accepted_url, accepted = start_upload(runtime, data)
+    _, interrupted_url, interrupted = start_upload(runtime, data)
+    _, untouched_url, untouched = start_upload(runtime, data)
+    user = runtime["users"][0]
+    assert put(runtime, accepted_url, data)[0] == 200
+    receipt = call(accepted_url + "/confirmacion", "POST", token=user["token"])
+    assert receipt[0] == 200 and receipt[1]["estado"] == "confirmada"
+    split = len(data) // 2
+    assert put(runtime, interrupted_url, data[:split])[0] == 200
+    assert (
+        call(interrupted_url + "/confirmacion", "POST", token=user["token"])[1]["code"]
+        == "carga_incompleta"
+    )
+
+    restarted = create_app(runtime["config"])
+    headers = {"Authorization": f"Bearer {runtime['internal']}", "X-Cliente-ID": user["id"]}
+    route = f"/v1/siniestros/{user['claim']['id']}"
+    client = restarted.test_client()
+    try:
+        assert (
+            client.get(route + "/cargas/" + accepted["id"], headers=headers).get_json()
+            == (receipt[1])
+        )
+        partial = client.get(route + "/cargas/" + interrupted["id"], headers=headers).get_json()
+        assert (partial["estado"], partial["offset"], partial["evidenciaId"]) == (
+            "pendiente",
+            split,
+            None,
+        )
+        assert (
+            client.get(route + "/cargas/" + untouched["id"], headers=headers).get_json()
+            == untouched
+        )
+        assert call(untouched_url, token=user["token"])[1] == untouched
+        assert call(accepted_url + "/confirmacion", "POST", token=user["token"]) == receipt
+        assert put(runtime, interrupted_url, data[:split])[1]["code"] == "offset_conflictivo"
+        assert put(runtime, interrupted_url, data[split:], split)[0] == 200
+        assert call(interrupted_url + "/confirmacion", "POST", token=user["token"])[0] == 200
+        ids = [
+            item["id"] for item in call(root + "/evidencias", token=user["token"])[1]["evidencias"]
+        ]
+        assert ids.count(accepted["id"]) == ids.count(interrupted["id"]) == 1
+        assert untouched["id"] not in ids
+    finally:
+        restarted.extensions["siniestros_repository"].engine.dispose()
+
+
+def test_lost_registration_ack_replay_preserves_central_status_and_history(runtime: dict) -> None:
+    user = runtime["users"][0]
+    root = runtime["mobile"] + "/siniestros"
+    operation = str(uuid4())
+    payload = user["claimPayload"]
+    headers = {"Idempotency-Key": operation}
+    status, receipt = call(root, "POST", payload, user["token"], headers)
+    assert status == 201
+    repo = runtime["app"].extensions["siniestros_repository"]
+    with repo.write() as session:
+        claim = session.get(Claim, receipt["id"])
+        claim.estado = "en_evaluacion"
+        claim.actualizado_en = datetime.fromisoformat(receipt["registradoEn"]) + timedelta(
+            seconds=1
+        )
+        session.add(
+            CambioEstadoModel(
+                siniestro_id=claim.id,
+                secuencia=2,
+                estado=claim.estado,
+                ocurrido_en=claim.actualizado_en,
+                visible_cliente=True,
+            )
+        )
+    central = call(root + "/" + receipt["id"] + "/estado", token=user["token"])
+    assert central[0] == 200 and central[1]["estado"] == "en_evaluacion"
+    restarted = create_app(runtime["config"])
+    client = restarted.test_client()
+    internal_headers = {
+        **headers,
+        "Authorization": f"Bearer {runtime['internal']}",
+        "X-Cliente-ID": user["id"],
+    }
+    try:
+        replay = client.post("/v1/siniestros", json=payload, headers=internal_headers)
+        assert replay.status_code == 200 and replay.get_json() == receipt
+        collision = client.post(
+            "/v1/siniestros", json={**payload, "lugar": "Otro lugar"}, headers=internal_headers
+        )
+        assert collision.status_code == 409
+        assert collision.get_json()["code"] == "idempotencia_conflictiva"
+        assert call(root + "/" + receipt["id"] + "/estado", token=user["token"]) == central
+        with repo.sessions() as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(CambioEstadoModel)
+                    .where(CambioEstadoModel.siniestro_id == receipt["id"])
+                )
+                == 2
+            )
+    finally:
+        restarted.extensions["siniestros_repository"].engine.dispose()

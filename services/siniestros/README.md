@@ -42,6 +42,9 @@ columnas e historial sin recrear la tabla ni las cargas. Para avisos existentes
 registra el reporte inicial con la fecha durable `created`, sin inventar avances
 ni clasificacion. Cada nuevo aviso guarda ese cambio en la misma transaccion;
 un replay no duplica el historial ni modifica su fecha.
+`0003_resultados_operacion` agrega UUID de operacion, huella y estado HTTP a la
+auditoria, con indice para recuperar resultados. Conserva las filas anteriores con
+campos nuevos null y no cambia avisos, cargas ni archivos.
 
 El acuse de registro conserva `estado=registrado` para web y movil. La consulta
 de avance devuelve el estado de dominio, inicialmente `reportado`, y su historial.
@@ -263,8 +266,9 @@ tiene permiso. No se recomprime ni cambia el hash silenciosamente.
 | 503 | `servicio_no_disponible` |
 
 Errores usan `application/problem+json` y `correlationId`. La auditoria SQL guarda
-actor UUID, accion, resultado, fecha y correlacion; no cuerpos, archivos, claves,
-tokens ni coordenadas. Rechazos sin acceso a SQL se registran en el log sin
+actor UUID, accion, resultado, fecha y correlacion; para sincronizacion agrega UUID
+de operacion, huella y estado HTTP, sin cuerpos, archivos, credenciales ni coordenadas.
+Rechazos sin acceso a SQL se registran en el log sin
 parametros SQL ni datos del cuerpo.
 
 ## Ejecucion local
@@ -295,5 +299,143 @@ La emision de polizas sigue siendo la simulada existente del producto; no repres
 un pago real. El archivo temporal contiene credenciales sinteticas de esa ejecucion:
 no imprimirlo, publicarlo ni conservarlo al finalizar. Detener solo este proceso.
 
-Alcance de HU41/SOL-328: reanudacion y reconciliacion de operaciones de evidencia.
-No implementa una cola universal de sincronizacion ni cierra SOL-328 completa.
+## Sincronizacion movil: SOL-193 / SOL-237 / SOL-328
+
+Las operaciones moviles disponibles son registro de siniestro e inicio, fragmentos
+y confirmacion de evidencia. No hay comandos moviles de comentarios o transiciones:
+sus criterios de deduplicacion no se acreditan con estas pruebas ni se implementan
+operaciones nuevas para cubrirlos. La consulta de estado es de solo lectura.
+
+Se reutilizan los endpoints anteriores, sin lote ni framework de sincronizacion.
+La identidad de una operacion es cliente autenticado, tipo de operacion y UUID
+`Idempotency-Key`; la huella conserva el cuerpo normalizado y, para cargas, el siniestro.
+La misma clave nunca reemplaza un cuerpo aceptado. La pertenencia se verifica en cada
+intento; una carga ajena no se recupera con conocer su UUID. El orden de envio de
+operaciones pendientes es responsabilidad de la cola local, no del UUID.
+
+| Resultado observado | Recuperacion con el contrato existente |
+|---|---|
+| Registro 201 o replay 200 | Conservar id y `registradoEn`; ACK perdido se recupera repitiendo clave y cuerpo |
+| Inicio de carga 201 o replay 200 | Conservar id de carga; `pendiente` no acredita evidencia recibida |
+| Carga `confirmada` | ACK perdido se recupera por GET o repeticion de confirmacion; `creadaEn` esta en el listado de evidencias |
+| 409 `idempotencia_conflictiva` | Conflicto: conservar entrada local y resultado central, sin sobrescribir ni renovar UUID automaticamente |
+| 409 `offset_conflictivo` o `carga_incompleta` | Reconciliar GET de la carga; no tratar todo 409 como conflicto de contenido ni confirmar bytes faltantes |
+| 409 `carga_cancelada` | La operacion original sigue cancelada; no crear otra implicitamente |
+| 400/403/404/413/415/422 u otro rechazo de negocio | Conservar motivo `code`; no declarar recepcion ni convertirlo en exito |
+| 401 | Recuperar sesion del mismo usuario antes de continuar; no cambiar propietario de la entrada |
+| Fallo de transporte o 503 | Resultado desconocido/recuperable: consultar o repetir con la misma identidad, nunca generar otra por perder el ACK |
+
+Con UUID y cuerpo validos, los rechazos de negocio de registro/inicio quedan
+fijos para esa operacion, incluso si luego cambia la cuota o politica. Una correccion
+requiere una operacion nueva decidida por el usuario; el backend no renueva IDs.
+Los rechazos de autenticacion/autorizacion, solicitudes malformadas y fallos 503
+no fijan resultado. En inicio se comprueba propiedad antes de recuperar resultado;
+un siniestro ajeno o inexistente sigue devolviendo 404 sin revelar auditoria.
+El registro trata `poliza_no_encontrada` como rechazo de negocio de la solicitud.
+
+Registro, inicio, GET carga, fragmento, confirmacion y errores de negocio vinculados
+incluyen el objeto aditivo:
+
+```json
+{
+  "ultimoResultado": {
+    "operacionId": "UUID local",
+    "fecha": "2026-11-05T20:00:00+00:00",
+    "httpStatus": 422,
+    "code": "integridad_invalida"
+  }
+}
+```
+
+`code=null` indica exito. `httpStatus` describe el resultado original: en un replay
+HTTP 200 de registro puede ser 201. `fecha` conserva el instante persistido,
+sin actualizarlo por releer/repetir. Un conflicto de huella devuelve su propio
+409/codigo/fecha; no reemplaza el resultado del cuerpo original. El cliente conserva
+por separado la fecha local de observacion y esta fecha central.
+
+No hay endpoint nuevo: repetir POST con UUID/cuerpo originales recupera aceptacion
+o rechazo. GET carga recupera el ultimo rechazo/exito de fragmento o confirmacion
+si se perdio el ACK. Los rechazos de fase no fijan un rechazo final: una incompleta
+puede seguir desde el offset central y una integridad invalida permite reenviar
+bytes correctos con el hash original. Cada fase posterior guarda su propio resultado.
+Una confirmada devuelve su resultado de confirmacion aunque despues se rechace
+un PUT o DELETE. Cancelar dos veces no cambia su fecha. Para canceladas legadas sin
+fecha atribuible, `ultimoResultado=null`; pendientes/confirmadas legadas usan la
+fecha durable de creacion/confirmacion ya existente.
+
+El servicio persiste el rechazo y su huella dentro del lock/transaccion de escritura,
+y responde despues del commit. Repeticiones concurrentes recuperan un resultado.
+Si falla auditoria o commit responde 503 sin resultado durable; no confirma ni guarda
+un resultado ficticio. Una falla de SQL tampoco congela una operacion para el futuro.
+
+El replay recupera una carga ya aceptada aunque su MIME haya sido deshabilitado
+despues; enviar nuevos fragmentos o confirmar una pendiente sigue validando la
+politica actual. Una carga confirmada no se elimina ni se vuelve pendiente por ese cambio.
+Cambiar un cuerpo valido con la misma clave produce conflicto antes de aplicar
+la politica de nuevas cargas; entradas malformadas conservan su rechazo de validacion.
+
+**Politica de estado central:** registro y anexos no son reemplazos del agregado.
+Un replay de registro conserva el acuse original y no restaura `reportado`, no altera
+`actualizado_en` ni duplica historial si el servidor avanzo a `en_evaluacion`.
+La respuesta `estado=registrado` es el acuse, no la version vigente. Inicio nuevo,
+fragmentos y confirmaciones pendientes validan la integridad del agregado e historial
+con la misma Session y dentro del lock. Una incoherencia devuelve el codigo existente
+`503 siniestro_no_integro`; no modifica bytes ni fija rechazo final. Los resultados
+aceptados siguen recuperables, comprobando antes la autorizacion vigente.
+No se agrega version esperada/If-Match ni terminalidad por estado nominal:
+las operaciones disponibles no editan el agregado y el dominio no define una matriz
+que prohiba anexos segun estado. Esta es la decision tecnica acordada para el alcance,
+no una afirmacion de que existe control optimista de versiones.
+
+Cada carga conserva su resultado por separado: una falla deja intactas las evidencias
+aceptadas; una carga parcial o no enviada no aparece como confirmada. La prueba
+`test_partial_queue_preserves_accepted_and_unprocessed_operations` lo verifica tras
+recrear la aplicacion, con reanudacion por offset y sin duplicados.
+
+Las fechas de evento/captura no son fechas de sincronizacion. `registradoEn` y
+`creadaEn` son fechas centrales de aceptacion. La auditoria vincula fecha, actor,
+accion, UUID, huella, estado HTTP y motivo; POST/GET recuperan solo el resultado
+autorizado, no exponen el diario ni cuerpos. La cola conserva tambien su fecha local
+de observacion; no usa evento/captura como fecha de resultado.
+
+### Regresiones aisladas
+
+Desde la raiz, con las dependencias de desarrollo ya instaladas:
+
+```powershell
+python -m pytest tests\test_claims_evidence_flow.py tests\test_claims_sync_results.py services\siniestros\tests --basetemp=reports\sol328-pytest -q -p no:cacheprovider
+```
+
+`--basetemp` debe ser un directorio dedicado a esa ejecucion: pytest borra su contenido.
+La fixture `runtime` reutiliza `tests.claims_local_stack.stack`: migra SQLite bajo
+ese directorio, genera claves y cuentas sinteticas y sirve Identidad, Polizas,
+Siniestros y ambos BFF en puertos efimeros de loopback. `ExitStack` apaga los servidores
+al finalizar; no se ejecuta el modo CLI persistente ni se usan bases productivas.
+Los casos cubren colision de cuerpo, rechazo durable, ACK perdido, reinicio, fallo parcial,
+integridad central, migracion y falla de auditoria SQL, ademas de las regresiones de
+propiedad, concurrencia y archivos.
+Eliminar el directorio dedicado despues de ejecutar. Esta evidencia local no certifica
+PostgreSQL, infraestructura durable, despliegue (SOL-315) ni cierra por si sola SOL-328.
+
+### Integracion fisica con HTTP real
+
+El 2026-11-05 el coordinador ejecuto `OfflineQueueHttpDeviceTest` en un Samsung
+SM-A217M contra el stack local: **1 test aprobado en 4.287 s**. La prueba uso
+cuentas sinteticas, SQLite migrado y las APIs reales de autenticacion, registro
+y evidencia. Verifico rechazo durable de inicio400, replay con fecha original,
+colision de UUID, continuacion de otro item y retirada sin carga remota.
+
+El proxy acotado corto la conexion despues de persistir una confirmacion200 y
+un rechazo422 `integridad_invalida`. Las consultas GET recuperaron los UUID,
+fechas, estados HTTP y codigos originales. El reporte registro `http.passed=true`,
+sin errores, y `cleanupPassed=true`. El coordinador comprobo que no quedaron
+directorio de ejecucion, fixture privada ni reverse18731; no se borraron datos
+previos de la aplicacion.
+
+Evidencia local saneada, excluida de Git:
+`reports/sol193-http-002db18e-6e5a-4235-a6dc-6bcf133f0d21.json` y su archivo `.log`.
+En la validacion final del coordinador tambien pasaron 131 pruebas backend
+en 120.41 s, Ruff y mypy de 10 fuentes; la suite fisica UI/cola/reconexion
+aprobo 4 de 4 pruebas en 19.061 s. Son comprobaciones distintas de la prueba HTTP.
+Esta evidencia acredita la integracion fisica con el entorno local sintetico;
+no acredita PostgreSQL, almacenamiento productivo, SLA ni despliegue.

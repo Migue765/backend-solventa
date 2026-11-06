@@ -82,10 +82,20 @@ class ClaimDraft(BaseModel):
         return value
 
 
+class RegistrationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID = Field(alias="operacionId")
+    occurred_at: UtcDatetime = Field(alias="fecha")
+    http_status: Literal[201] = Field(alias="httpStatus")
+    code: None
+
+
 class ClaimDetail(ClaimDraft):
     id: UUID
     state: Literal["registrado"] = Field(alias="estado")
     registered_at: UtcDatetime = Field(alias="registradoEn")
+    last_result: RegistrationResult | None = Field(default=None, alias="ultimoResultado")
 
 
 class ClaimList(BaseModel):

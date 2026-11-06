@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from siniestros import media
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput, now
 from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.infrastructure.repositorio import validar
 from siniestros.models import Audit, Claim, Upload
 from siniestros.policies import policies
 
@@ -38,10 +39,31 @@ def fingerprint(payload: dict[str, Any]) -> str:
 
 
 def claim_record(claim: Claim) -> dict[str, Any]:
-    return {**claim.payload, "id": claim.id, "estado": "registrado", "registradoEn": claim.created}
+    return {
+        **claim.payload,
+        "id": claim.id,
+        "estado": "registrado",
+        "registradoEn": claim.created,
+        "ultimoResultado": receipt(claim.operation, claim.created, 201),
+    }
 
 
-def upload_record(upload: Upload) -> dict[str, Any]:
+def receipt(operation: str, created: str, status: int, code: str | None = None) -> dict[str, Any]:
+    return {"operacionId": operation, "fecha": created, "httpStatus": status, "code": code}
+
+
+def audit_receipt(audit: Audit) -> dict[str, Any]:
+    if audit.operation is None or audit.http_status is None:
+        raise Problem(503, "servicio_no_disponible")
+    return receipt(
+        audit.operation,
+        audit.created,
+        audit.http_status,
+        audit.result if audit.http_status >= 400 else None,
+    )
+
+
+def upload_record(upload: Upload, result: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "id": upload.id,
         "siniestroId": upload.claim_id,
@@ -51,6 +73,7 @@ def upload_record(upload: Upload) -> dict[str, Any]:
         "mimeType": upload.mime,
         "sha256": upload.digest,
         "evidenciaId": upload.id if upload.status == "confirmada" else None,
+        "ultimoResultado": result,
     }
 
 
@@ -107,6 +130,152 @@ class Repository:
             self.audit(session, actor, action, code, cid)
 
     @staticmethod
+    def result(
+        session: Session,
+        owner: str,
+        operation: str,
+        digest: str,
+        action: str,
+        status: int,
+        code: str,
+        cid: str,
+        created: str | None = None,
+    ) -> dict[str, Any]:
+        record = Audit(
+            id=str(uuid4()),
+            actor=owner,
+            action=action,
+            result=code,
+            correlation=cid,
+            created=created or now(),
+            operation=operation,
+            fingerprint=digest,
+            http_status=status,
+        )
+        session.add(record)
+        session.flush()
+        return audit_receipt(record)
+
+    @staticmethod
+    def replay_failure(
+        session: Session, owner: str, operation: str, digest: str, action: str
+    ) -> None:
+        original = session.scalar(
+            select(Audit)
+            .where(
+                Audit.actor == owner,
+                Audit.action == action,
+                Audit.operation == operation,
+                Audit.http_status >= 400,
+                Audit.http_status < 500,
+                Audit.result != "idempotencia_conflictiva",
+            )
+            .order_by(Audit.created, Audit.id)
+        )
+        if original is not None:
+            if original.fingerprint != digest:
+                raise Problem(409, "idempotencia_conflictiva")
+            error = Problem(original.http_status or 400, original.result)
+            error.result = audit_receipt(original)
+            raise error
+
+    @contextmanager
+    def operation_write(
+        self, owner: str, operation: str, digest: str, action: str, cid: str
+    ) -> Iterator[Session]:
+        rejection: Problem | None = None
+        with self.write() as session:
+            try:
+                yield session
+            except Problem as error:
+                if (
+                    error.status >= 500
+                    or error.status in {401, 403}
+                    or error.code in {"siniestro_no_encontrado", "carga_no_encontrada"}
+                ):
+                    raise
+                if error.result is None:
+                    previous = session.scalar(
+                        select(Audit)
+                        .where(
+                            Audit.actor == owner,
+                            Audit.action == action,
+                            Audit.operation == operation,
+                            Audit.fingerprint == digest,
+                            Audit.http_status == error.status,
+                            Audit.result == error.code,
+                        )
+                        .order_by(Audit.created, Audit.id)
+                    )
+                    error.result = (
+                        audit_receipt(previous)
+                        if previous is not None
+                        else self.result(
+                            session, owner, operation, digest, action, error.status, error.code, cid
+                        )
+                    )
+                rejection = error
+        # A rejection must commit before it can be returned as a durable result.
+        if rejection is not None:
+            raise rejection
+
+    @contextmanager
+    def upload_write(
+        self, owner: str, claim_id: str, upload_id: str, action: str, cid: str
+    ) -> Iterator[tuple[Session, Upload]]:
+        rejection: Problem | None = None
+        with self.write() as session:
+            upload = self.upload(session, owner, claim_id, upload_id, lock=True)
+            try:
+                yield session, upload
+            except Problem as error:
+                if error.status >= 500 or error.status in {401, 403}:
+                    raise
+                error.result = self.result(
+                    session,
+                    owner,
+                    upload.operation,
+                    upload.fingerprint,
+                    action,
+                    error.status,
+                    error.code,
+                    cid,
+                )
+                rejection = error
+        if rejection is not None:
+            raise rejection
+
+    @staticmethod
+    def upload_result(session: Session, upload: Upload) -> dict[str, Any]:
+        if upload.status == "confirmada":
+            result = receipt(upload.operation, upload.confirmed, 200) if upload.confirmed else None
+        else:
+            latest = session.scalar(
+                select(Audit)
+                .where(
+                    Audit.actor == upload.owner,
+                    Audit.operation == upload.operation,
+                    Audit.fingerprint == upload.fingerprint,
+                    Audit.action.in_(
+                        ("iniciar_carga", "cargar_fragmento", "confirmar_carga", "cancelar_carga")
+                    ),
+                    Audit.http_status.is_not(None),
+                    Audit.result != "idempotencia_conflictiva",
+                )
+                .order_by(Audit.created.desc(), Audit.id.desc())
+            )
+            result = (
+                audit_receipt(latest)
+                if latest is not None
+                else (
+                    receipt(upload.operation, upload.created, 201)
+                    if upload.status == "pendiente"
+                    else None
+                )
+            )
+        return upload_record(upload, result)
+
+    @staticmethod
     def claim(session: Session, owner: str, claim_id: str, lock: bool = False) -> Claim:
         query = select(Claim).where(Claim.id == claim_id, Claim.owner == owner)
         claim = session.scalar(query.with_for_update() if lock else query)
@@ -134,7 +303,7 @@ class Repository:
     ) -> tuple[dict[str, Any], int]:
         payload = data.model_dump(mode="json")
         digest = fingerprint(payload)
-        with self.write() as session:
+        with self.operation_write(owner, operation, digest, "registrar_siniestro", cid) as session:
             existing = session.scalar(
                 select(Claim).where(Claim.owner == owner, Claim.operation == operation)
             )
@@ -142,6 +311,7 @@ class Repository:
                 if existing.fingerprint != digest:
                     raise Problem(409, "idempotencia_conflictiva")
                 return claim_record(existing), 200
+            self.replay_failure(session, owner, operation, digest, "registrar_siniestro")
             selected = next(
                 (p for p in policies(self.config, owner, cid) if p["id"] == str(data.polizaId)),
                 None,
@@ -166,7 +336,17 @@ class Repository:
                 actualizado_en=datetime.fromisoformat(created),
             )
             session.add(claim)
-            self.audit(session, owner, "registrar_siniestro", "registrado", cid)
+            self.result(
+                session,
+                owner,
+                operation,
+                digest,
+                "registrar_siniestro",
+                201,
+                "registrado",
+                cid,
+                created,
+            )
             session.flush()
             session.add(
                 CambioEstadoModel(
@@ -184,15 +364,17 @@ class Repository:
     ) -> tuple[dict[str, Any], int]:
         payload = data.model_dump(mode="json")
         digest = fingerprint({"siniestroId": claim_id, **payload})
-        with self.write() as session:
-            self.claim(session, owner, claim_id, lock=True)
+        with self.operation_write(owner, operation, digest, "iniciar_carga", cid) as session:
+            claim = self.claim(session, owner, claim_id, lock=True)
             existing = session.scalar(
                 select(Upload).where(Upload.owner == owner, Upload.operation == operation)
             )
             if existing is not None:
                 if existing.fingerprint != digest:
                     raise Problem(409, "idempotencia_conflictiva")
-                return upload_record(existing), 200
+                return self.upload_result(session, existing), 200
+            self.replay_failure(session, owner, operation, digest, "iniciar_carga")
+            validar(session, claim)
             if data.mimeType not in self.config.formats:
                 raise Problem(415, "formato_no_permitido")
             if data.tamanoBytes > self.config.formats[data.mimeType]:
@@ -225,9 +407,19 @@ class Repository:
                 status="pendiente",
             )
             session.add(upload)
-            self.audit(session, owner, "iniciar_carga", "pendiente", cid)
+            self.result(
+                session,
+                owner,
+                operation,
+                digest,
+                "iniciar_carga",
+                201,
+                "pendiente",
+                cid,
+                upload.created,
+            )
             session.flush()
-            return upload_record(upload), 201
+            return self.upload_result(session, upload), 201
 
     def upload(
         self, session: Session, owner: str, claim_id: str, upload_id: str, lock: bool = False
@@ -251,7 +443,7 @@ class Repository:
             ):
                 upload.offset = 0
                 self.audit(session, owner, "recuperar_carga", "reinicio_requerido", str(uuid4()))
-            return upload_record(upload)
+            return self.upload_result(session, upload)
 
     def path(self, upload: Upload) -> Path:
         path = self.config.storage_root / upload.id
@@ -275,10 +467,13 @@ class Repository:
         stream: IO[bytes],
         cid: str,
     ) -> dict[str, Any]:
-        with self.write() as session:
-            upload = self.upload(session, owner, claim_id, upload_id, lock=True)
+        with self.upload_write(owner, claim_id, upload_id, "cargar_fragmento", cid) as (
+            session,
+            upload,
+        ):
             if upload.status != "pendiente":
                 raise Problem(409, f"carga_{upload.status}")
+            validar(session, self.claim(session, owner, claim_id))
             self.check_policy(upload)
             if length <= 0 or length > self.config.max_chunk or offset + length > upload.size:
                 raise Problem(413, "limite_tamano")
@@ -308,17 +503,28 @@ class Repository:
                 finally:
                     os.close(directory_fd)
             upload.offset += length
-            self.audit(session, owner, "cargar_fragmento", "persistido", cid)
-            return upload_record(upload)
+            self.result(
+                session,
+                owner,
+                upload.operation,
+                upload.fingerprint,
+                "cargar_fragmento",
+                200,
+                "persistido",
+                cid,
+            )
+            return self.upload_result(session, upload)
 
     def confirm(self, owner: str, claim_id: str, upload_id: str, cid: str) -> dict[str, Any]:
-        rejection: Problem | None = None
-        with self.write() as session:
-            upload = self.upload(session, owner, claim_id, upload_id, lock=True)
+        with self.upload_write(owner, claim_id, upload_id, "confirmar_carga", cid) as (
+            session,
+            upload,
+        ):
             if upload.status == "confirmada":
-                return upload_record(upload)
+                return self.upload_result(session, upload)
             if upload.status == "cancelada":
                 raise Problem(409, "carga_cancelada")
+            validar(session, self.claim(session, owner, claim_id))
             self.check_policy(upload)
             if upload.offset != upload.size:
                 raise Problem(409, "carga_incompleta")
@@ -333,26 +539,45 @@ class Repository:
                 # Invalid/unauthorized bytes are removed, not retained as hidden evidence.
                 path.unlink(missing_ok=True)
                 upload.offset = 0
-                rejection = error
-                self.audit(session, owner, "confirmar_carga", error.code, cid)
+                raise error
             else:
                 upload.status = "confirmada"
                 upload.confirmed = now()
-                self.audit(session, owner, "confirmar_carga", "confirmada", cid)
-            result = upload_record(upload)
-        if rejection is not None:
-            raise rejection
-        return result
+                self.result(
+                    session,
+                    owner,
+                    upload.operation,
+                    upload.fingerprint,
+                    "confirmar_carga",
+                    200,
+                    "confirmada",
+                    cid,
+                    upload.confirmed,
+                )
+            return self.upload_result(session, upload)
 
     def cancel(self, owner: str, claim_id: str, upload_id: str, cid: str) -> None:
-        with self.write() as session:
-            upload = self.upload(session, owner, claim_id, upload_id, lock=True)
+        with self.upload_write(owner, claim_id, upload_id, "cancelar_carga", cid) as (
+            session,
+            upload,
+        ):
             if upload.status == "confirmada":
                 raise Problem(409, "carga_confirmada")
+            if upload.status == "cancelada":
+                return
             upload.status = "cancelada"
             upload.offset = 0
             self.path(upload).unlink(missing_ok=True)
-            self.audit(session, owner, "cancelar_carga", "cancelada", cid)
+            self.result(
+                session,
+                owner,
+                upload.operation,
+                upload.fingerprint,
+                "cancelar_carga",
+                204,
+                "cancelada",
+                cid,
+            )
 
     def list_evidence(self, owner: str, claim_id: str) -> list[dict[str, Any]]:
         with self.sessions() as session:

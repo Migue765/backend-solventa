@@ -27,6 +27,16 @@ paths:
         default: {$ref: "#/components/responses/Problema"}
     post:
       operationId: registrarSiniestro
+      description: >
+        Persistir UUID y cuerpo antes de enviar. Misma clave, cliente y cuerpo recuperan
+        el registro original (200), incluso tras perder el acuse; una nueva operacion
+        devuelve 201. Otro cuerpo valido con esa clave produce 409 idempotencia_conflictiva
+        sin modificar el original ni su historial. El acuse registrado no es el estado
+        vigente: consultarlo en /siniestros/{siniestroId}/estado.
+        Un rechazo de negocio con UUID y cuerpo validos fija el resultado de esa clave.
+        Repetirlo conserva code, httpStatus y fecha de ultimoResultado; cambiar el cuerpo
+        requiere una operacion nueva decidida por el usuario, no una renovacion automatica.
+        Autorizacion y fallos 503 no fijan rechazos de negocio.
       parameters:
         - {$ref: "#/components/parameters/IdempotencyKey"}
       requestBody:
@@ -113,7 +123,17 @@ paths:
       - {$ref: "#/components/parameters/SiniestroId"}
     post:
       operationId: iniciarCargaEvidencia
-      description: La clave es durable por cliente. Misma clave y cuerpo devuelve misma carga; otro cuerpo o siniestro produce conflicto.
+      description: >
+        La clave es durable por cliente y tipo de operacion. Misma clave y cuerpo
+        recuperan la misma carga y su estado actual, incluso si una politica MIME
+        posterior impide nuevas cargas. Otro cuerpo valido o siniestro autorizado
+        con esa clave produce 409 idempotencia_conflictiva sin sobrescribir.
+        No generar otra clave automaticamente ante conflicto. Una carga pendiente
+        sigue sujeta a la politica vigente al enviar o confirmar bytes.
+        Un rechazo de negocio con UUID, cuerpo y siniestro autorizado conserva su
+        resultado para el replay, aunque cambie la cuota o politica. Nuevas escrituras
+        requieren integridad del estado e historial central; incoherencia devuelve
+        503 siniestro_no_integro sin fijar rechazo final.
       parameters:
         - {$ref: "#/components/parameters/IdempotencyKey"}
       requestBody:
@@ -131,7 +151,13 @@ paths:
       - {$ref: "#/components/parameters/CargaId"}
     get:
       operationId: reconciliarCargaEvidencia
-      description: Consultar tras interrupcion, reinicio o respuesta perdida. offset es el unico punto confirmado; puede volver a cero si falta el archivo pendiente.
+      description: >
+        Consultar tras interrupcion, reinicio o respuesta perdida. offset es el unico
+        punto confirmado; puede volver a cero si falta el archivo pendiente.
+        ultimoResultado recupera el ultimo rechazo o exito de fase y su fecha original.
+        Un rechazo de fase no congela los reintentos de fragmento/confirmacion.
+        Una carga confirmada conserva su resultado de confirmacion aunque un intento
+        posterior de modificarla sea rechazado.
       responses:
         "200": {$ref: "#/components/responses/Carga"}
         default: {$ref: "#/components/responses/Problema"}
@@ -219,6 +245,10 @@ components:
       name: Idempotency-Key
       in: header
       required: true
+      description: >
+        UUID estable de la operacion local, conservado junto con su cuerpo y usuario.
+        No es el identificador de correlacion de un intento HTTP. Se deduplica por
+        cliente y tipo (registro o inicio de carga); no ordena la cola del dispositivo.
       schema: {type: string, format: uuid}
     SiniestroId:
       name: siniestroId
@@ -244,6 +274,7 @@ components:
               status: {type: integer}
               code: {type: string}
               correlationId: {type: string, format: uuid}
+              ultimoResultado: {$ref: "#/components/schemas/ResultadoOperacion"}
     Siniestro:
       description: Registro durable del siniestro
       content:
@@ -255,6 +286,25 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Carga"}
   schemas:
+    ResultadoOperacion:
+      type: object
+      additionalProperties: false
+      required: [operacionId, fecha, httpStatus, code]
+      description: >
+        Resultado persistido de la operacion del cliente. fecha no cambia por replay
+        y no es fecha de evento/captura. httpStatus corresponde al resultado original:
+        puede ser 201 en un replay HTTP 200. code es null en exito.
+        Un conflicto de huella lleva su propio 409 y fecha, sin reemplazar el resultado
+        del cuerpo original. Fallos de transporte/SQL y autorizacion no acreditan un
+        resultado durable y no incluyen este objeto.
+      properties:
+        operacionId: {type: string, format: uuid}
+        fecha: {type: string, format: date-time}
+        httpStatus: {type: integer, minimum: 200, maximum: 499}
+        code:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
     Mime:
       type: string
       enum: [image/jpeg, image/png, application/pdf, video/mp4]
@@ -280,6 +330,7 @@ components:
         descripcion: {type: string}
         lugar: {type: string}
         registradoEn: {type: string, format: date-time}
+        ultimoResultado: {$ref: "#/components/schemas/ResultadoOperacion"}
     Ubicacion:
       type: object
       additionalProperties: false
@@ -319,6 +370,11 @@ components:
         evidenciaId:
           anyOf:
             - {type: string, format: uuid}
+            - {type: "null"}
+        ultimoResultado:
+          description: Null solo para cargas canceladas legadas sin fecha atribuible; no se inventa una fecha.
+          anyOf:
+            - {$ref: "#/components/schemas/ResultadoOperacion"}
             - {type: "null"}
     Evidencia:
       type: object
