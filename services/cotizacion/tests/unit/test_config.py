@@ -14,6 +14,8 @@ VARIABLES = (
     "COTIZACION_PERFIL_SCORE_SIMULADO",
     "PAGO_SIMULADO_RESULTADO",
     "COTIZACION_CONCILIACION_EMISION_HABILITADA",
+    "NOTIFICACIONES_SERVICE_URL",
+    "INTERNAL_API_TOKEN",
 )
 
 
@@ -78,3 +80,13 @@ def test_conciliacion_opt_in_requiere_integracion_polizas(monkeypatch):
         Config.desde_entorno()
     monkeypatch.setenv("INTERNAL_API_TOKEN", "solo-pruebas-locales")
     assert Config.desde_entorno().conciliacion_emision_habilitada is True
+
+
+def test_notificaciones_requiere_credencial_interna(monkeypatch):
+    monkeypatch.setenv("NOTIFICACIONES_SERVICE_URL", "http://127.0.0.1:5006/")
+    monkeypatch.delenv("INTERNAL_API_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="INTERNAL_API_TOKEN"):
+        Config.desde_entorno()
+
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "solo-pruebas-locales")
+    assert Config.desde_entorno().notificaciones_url == "http://127.0.0.1:5006"

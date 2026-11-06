@@ -11,6 +11,7 @@ class Config:
     identity_timeout_seconds: float = 5
     biometric_login_enabled: bool = False
     claims_service_url: str = ""
+    notifications_service_url: str = ""
     internal_api_token: str = ""
 
     def __post_init__(self) -> None:
@@ -32,6 +33,9 @@ class Config:
             raise ValueError("BIOMETRIC_LOGIN_ENABLED solo admite true o false.")
         return cls(
             claims_service_url=os.getenv("SINIESTROS_SERVICE_URL", "").strip().rstrip("/"),
+            notifications_service_url=os.getenv("NOTIFICACIONES_SERVICE_URL", "")
+            .strip()
+            .rstrip("/"),
             internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             biometric_login_enabled=biometric == "true",
             identity_url=_required("IDENTIDAD_URL").rstrip("/"),

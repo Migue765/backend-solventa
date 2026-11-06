@@ -28,6 +28,9 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `POST`   | `/movil/v1/sesiones/renovar`   | No     | Rota el refresh token y emite nuevos tokens        |
 | `GET`    | `/movil/v1/sesiones/actual`    | Bearer | Usuario y vencimiento tomados del JWT              |
 | `DELETE` | `/movil/v1/sesiones/actual`    | Bearer | Cierra sesión; revoca el `refreshToken` si se envía |
+| `GET`    | `/movil/v1/notificaciones`     | Sí     | Lista las notificaciones entregadas del cliente    |
+| `GET`    | `/movil/v1/notificaciones/preferencias` | Sí | Consulta preferencias por tipo y canal       |
+| `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |
 
 El access token dura 1 hora y el refresh token es opaco, de un solo uso y rota en cada
@@ -55,6 +58,13 @@ del JWT y no del cuerpo. Fragmentos de hasta 1 MiB se transmiten por streaming.
 Ver `contracts/openapi/siniestros-v1.yaml` y `services/siniestros/README.md` desde
 la raiz para configuracion, limites, errores y reconciliacion.
 
+## Notificaciones
+
+Las rutas `/movil/v1/notificaciones` delegan al servicio de Notificaciones. El BFF
+deriva `X-Cliente-ID` del JWT y nunca acepta un cliente indicado por la aplicación.
+Requieren `NOTIFICACIONES_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración o
+ante una respuesta interna no válida devuelven `503` sin inventar una lista vacía.
+
 ## Configuración de identidad
 
 | Variable                    | Default                                    | Descripción                    |
@@ -64,6 +74,8 @@ la raiz para configuracion, limites, errores y reconciliacion.
 | `JWT_AUDIENCE`              | `solventa-api`                             | `aud` esperado                 |
 | `JWKS_URL`                  | `IDENTIDAD_URL` + `/.well-known/jwks.json` | Origen de las claves públicas  |
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                                        | Timeout hacia identidad y JWKS |
+| `NOTIFICACIONES_SERVICE_URL` | vacía                                      | URL interna de Notificaciones  |
+| `INTERNAL_API_TOKEN`         | vacía                                      | Credencial entre servicios     |
 
 ## Ejecución
 

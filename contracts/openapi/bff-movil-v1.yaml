@@ -8,7 +8,12 @@ servers:
 tags:
   - name: Usuarios
   - name: Sesiones
+  - name: Notificaciones
 paths:
+  /v1/notificaciones:
+    $ref: "./notificaciones-v1.yaml#/paths/~1notificaciones"
+  /v1/notificaciones/preferencias:
+    $ref: "./notificaciones-v1.yaml#/paths/~1notificaciones~1preferencias"
   /v1/siniestros:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
   /v1/siniestros/polizas:
