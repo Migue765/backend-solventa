@@ -144,9 +144,10 @@ def test_phase_rejection_lost_ack_recovers_by_get_without_freezing_retry(runtime
             assert (status, problem["code"]) == (409, "carga_confirmada")
             assert problem["ultimoResultado"]["httpStatus"] == status
             assert problem["ultimoResultado"]["code"] == problem["code"]
-            assert problem["ultimoResultado"]["operacionId"] == initial["ultimoResultado"][
-                "operacionId"
-            ]
+            assert (
+                problem["ultimoResultado"]["operacionId"]
+                == initial["ultimoResultado"]["operacionId"]
+            )
         assert call(url, token=user["token"])[1] == confirmed[1]
         assert call(url + "/confirmacion", "POST", token=user["token"]) == confirmed
     finally:
