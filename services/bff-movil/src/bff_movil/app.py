@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_movil.api import biometrics, claims, health, sessions, users
+from bff_movil.api import biometrics, claims, health, notifications, sessions, users
 from bff_movil.application.biometric_ports import BiometricGateway
 from bff_movil.application.ports import IdentityGateway, TokenVerifier
 from bff_movil.config import Config
@@ -47,6 +47,7 @@ def create_app(
     app.register_blueprint(sessions.bp)
     app.register_blueprint(biometrics.bp)
     app.register_blueprint(claims.bp)
+    app.register_blueprint(notifications.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
