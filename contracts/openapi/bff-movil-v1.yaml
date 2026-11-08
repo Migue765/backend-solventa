@@ -9,7 +9,12 @@ tags:
   - name: Usuarios
   - name: Sesiones
   - name: Notificaciones
+  - name: Asistencias
 paths:
+  /v1/prestadores/consulta:
+    $ref: "./asistencias-v1.yaml#/paths/~1prestadores~1consulta"
+  /v1/asistencias:
+    $ref: "./asistencias-v1.yaml#/paths/~1asistencias"
   /v1/notificaciones:
     $ref: "./notificaciones-v1.yaml#/paths/~1notificaciones"
   /v1/notificaciones/preferencias:

@@ -104,6 +104,7 @@ cd backend-solventa
 | `polizas` | Suscripción, emisión y ciclo de vida | Producto y Suscripción / Pólizas | Implementado, con [README](services/polizas/README.md) |
 | `siniestros` | Siniestros | Siniestros | Registro, estado, historial, evidencia y procesamiento durable de eventos parametricos; [validacion local](services/siniestros/README.md), sin despliegue |
 | `notificaciones` | Notificaciones | Comunicaciones | Eventos, preferencias, avisos programados, reintentos y trazabilidad; [README](services/notificaciones/README.md) |
+| `asistencias` | Asistencias | Asistencias | Prestadores cercanos, solicitudes idempotentes y auditoría de ubicación; [README](services/asistencias/README.md) |
 | `pagos` | Cobros, pagos y recaudo | Pagos y Recaudo | Estructura inicial |
 | `cumplimiento` | Fraude, analítica y auditoría | Cumplimiento y Auditoría | Estructura inicial |
 | `integraciones` | Adaptadores externos | Integraciones | Estructura inicial |

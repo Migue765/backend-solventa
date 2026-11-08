@@ -12,6 +12,7 @@ class Config:
     biometric_login_enabled: bool = False
     claims_service_url: str = ""
     notifications_service_url: str = ""
+    assistance_service_url: str = ""
     internal_api_token: str = ""
 
     def __post_init__(self) -> None:
@@ -36,6 +37,7 @@ class Config:
             notifications_service_url=os.getenv("NOTIFICACIONES_SERVICE_URL", "")
             .strip()
             .rstrip("/"),
+            assistance_service_url=os.getenv("ASISTENCIAS_SERVICE_URL", "").strip().rstrip("/"),
             internal_api_token=os.getenv("INTERNAL_API_TOKEN", "").strip(),
             biometric_login_enabled=biometric == "true",
             identity_url=_required("IDENTIDAD_URL").rstrip("/"),
