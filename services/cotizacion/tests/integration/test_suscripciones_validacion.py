@@ -12,14 +12,20 @@ from cotizacion.infrastructure.persistence.models import (
     SeleccionOfertaModel,
     SuscripcionModel,
 )
+from flask.testing import FlaskClient
 from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.orm import Session
+from werkzeug.test import TestResponse
 
 from .test_solicitudes_api import nueva_solicitud
 
 
-def aceptar(client, producto="automotive", cliente_id=None):
+def aceptar(
+    client: FlaskClient, producto: str = "automotive", cliente_id: str | None = None
+) -> tuple[str, dict[str, str], datetime]:
     payload = nueva_solicitud(producto_id=producto, cliente_id=cliente_id)
+    cliente = payload["clienteId"]
+    assert isinstance(cliente, str)
     creada = client.post(
         "/v1/solicitudes-cotizacion",
         json=payload,
@@ -27,7 +33,7 @@ def aceptar(client, producto="automotive", cliente_id=None):
     )
     assert creada.status_code == 201
     base = f"/v1/solicitudes-cotizacion/{creada.get_json()['id']}"
-    query = {"clienteId": payload["clienteId"]}
+    query = {"clienteId": cliente}
     ofertas = client.get(base + "/ofertas", query_string=query).get_json()
     oferta = ofertas["ofertas"][0]
     seleccion = client.put(
@@ -40,7 +46,9 @@ def aceptar(client, producto="automotive", cliente_id=None):
     return base, query, datetime.fromisoformat(ofertas["vigenteHasta"].replace("Z", "+00:00"))
 
 
-def suscribir(client, base, query, clave=None):
+def suscribir(
+    client: FlaskClient, base: str, query: dict[str, str], clave: str | None = None
+) -> TestResponse:
     return client.post(
         base + "/suscripcion",
         query_string=query,
@@ -48,7 +56,7 @@ def suscribir(client, base, query, clave=None):
     )
 
 
-def sin_efectos(database_url):
+def sin_efectos(database_url: str) -> None:
     with Session(create_engine(database_url)) as session:
         for modelo in (SuscripcionModel, DecisionSuscripcionModel, SagaEmisionModel):
             assert session.scalar(select(func.count()).select_from(modelo)) == 0
@@ -64,7 +72,13 @@ def sin_efectos(database_url):
 
 @pytest.mark.parametrize("producto", ["automotive", "parametric-weather"])
 @pytest.mark.parametrize("segundos", [0, 1])
-def test_no_suscribe_oferta_vencida(client, database_url, monkeypatch, producto, segundos):
+def test_no_suscribe_oferta_vencida(
+    client: FlaskClient,
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    producto: str,
+    segundos: int,
+) -> None:
     base, query, vencimiento = aceptar(client, producto)
     monkeypatch.setattr(
         client.application.extensions["procesar_suscripcion"],
@@ -93,7 +107,12 @@ def test_no_suscribe_oferta_vencida(client, database_url, monkeypatch, producto,
         (InstantaneaDecisionModel, {"perfil_modelo_version": "otra-version"}),
     ],
 )
-def test_no_suscribe_seleccion_o_decision_inconsistente(client, database_url, modelo, valores):
+def test_no_suscribe_seleccion_o_decision_inconsistente(
+    client: FlaskClient,
+    database_url: str,
+    modelo: type[SeleccionOfertaModel] | type[InstantaneaDecisionModel],
+    valores: dict[str, object],
+) -> None:
     base, query, _ = aceptar(client)
     with Session(create_engine(database_url)) as session, session.begin():
         session.execute(update(modelo).values(**valores))
@@ -103,7 +122,9 @@ def test_no_suscribe_seleccion_o_decision_inconsistente(client, database_url, mo
     sin_efectos(database_url)
 
 
-def test_revalida_vigencia_despues_de_consultar_ofertas(client, database_url, monkeypatch):
+def test_revalida_vigencia_despues_de_consultar_ofertas(
+    client: FlaskClient, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base, query, vencimiento = aceptar(client)
     tiempos = iter((vencimiento - timedelta(seconds=1), vencimiento))
     monkeypatch.setattr(
@@ -115,7 +136,9 @@ def test_revalida_vigencia_despues_de_consultar_ofertas(client, database_url, mo
     sin_efectos(database_url)
 
 
-def test_replay_no_revalida_vigencia_ni_perfil(client, database_url, monkeypatch):
+def test_replay_no_revalida_vigencia_ni_perfil(
+    client: FlaskClient, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base, query, vencimiento = aceptar(client)
     clave = str(uuid4())
     original = suscribir(client, base, query, clave)
@@ -124,7 +147,7 @@ def test_replay_no_revalida_vigencia_ni_perfil(client, database_url, monkeypatch
     proceso = reiniciado.application.extensions["procesar_suscripcion"]
     monkeypatch.setattr(proceso, "_reloj", lambda: vencimiento + timedelta(seconds=1))
 
-    def no_revalidar(*args):
+    def no_revalidar(*args: object) -> None:
         raise AssertionError("Un replay no debe consultar el perfil ni recalcular ofertas.")
 
     monkeypatch.setattr("cotizacion.application.ofertas.validar_perfil", no_revalidar)
@@ -146,7 +169,7 @@ def test_replay_no_revalida_vigencia_ni_perfil(client, database_url, monkeypatch
         )
 
 
-def test_idempotencia_no_se_reutiliza_en_otra_solicitud(client):
+def test_idempotencia_no_se_reutiliza_en_otra_solicitud(client: FlaskClient) -> None:
     cliente_id = str(uuid4())
     base, query, _ = aceptar(client, cliente_id=cliente_id)
     otra_base, _, _ = aceptar(client, cliente_id=cliente_id)
