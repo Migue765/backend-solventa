@@ -248,6 +248,12 @@ El proveedor integrado `SimuladorPago` usa exclusivamente
 Un valor distinto falla al crear la configuracion; no se admite elegir escenario
 en el body, query o cabeceras del navegador. No se agrega un servicio externo.
 
+Con `NOTIFICACIONES_SERVICE_URL` configurada, el conciliador publica cada outbox
+`PagoSimuladoConfirmado` al servicio de Notificaciones usando `evento_id` como clave
+idempotente. El mensaje solo contiene cliente, fecha y `pagoId`; no reenvía importe,
+moneda ni referencia interna. Un fallo HTTP conserva `publicado_en=null` y el siguiente
+ciclo reintenta el mismo evento. `INTERNAL_API_TOKEN` es obligatorio para habilitarlo.
+
 Con `rechazado`, POST responde **200** con `estado: rechazado`, `rechazadaEn`,
 `motivo: rechazo_simulado` y sin `confirmadaEn`. Conserva los IDs, importe,
 periodicidad y referencia interna; `id` identifica el intento rechazado, no un

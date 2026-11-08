@@ -19,6 +19,7 @@ from cotizacion.infrastructure.persistence.models import (
     IntentoPagoSimuladoModel,
 )
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
+from cotizacion.infrastructure.publicador_notificaciones import PaymentNotificationPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ConciliadorEmision:
         resultado_pago: str,
         *,
         conciliar_emision: bool = True,
+        publicador_notificaciones: PaymentNotificationPublisher | None = None,
     ) -> None:
         self._sesiones = crear_sesiones(
             database_url, pool_size=1, max_overflow=0, limitar_esperas=True
@@ -50,6 +52,7 @@ class ConciliadorEmision:
         self.pagos = ProcesarPagoSimulado(self.repositorio, self.proveedor)
         self._polizas = polizas
         self._conciliar_emision = conciliar_emision
+        self._publicador_notificaciones = publicador_notificaciones
         self._detener = Event()
         self._hilo = Thread(
             target=self._ejecutar, name="conciliacion-emision-academica", daemon=True
@@ -84,6 +87,13 @@ class ConciliadorEmision:
         atexit.unregister(self.cerrar)
 
     def conciliar_uno(self) -> bool:
+        try:
+            return self._conciliar_pago()
+        finally:
+            if self._publicador_notificaciones is not None:
+                self._publicador_notificaciones.publish_one(datetime.now(UTC))
+
+    def _conciliar_pago(self) -> bool:
         resultado = self.pagos.conciliar_uno()
         if isinstance(resultado, PagoSimulado) and self._polizas is not None:
             try:

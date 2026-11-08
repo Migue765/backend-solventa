@@ -15,6 +15,7 @@ class Config:
     internal_api_token: str = ""
     perfilamiento_habilitado: bool = False
     polizas_url: str = ""
+    notificaciones_url: str = ""
     pago_simulado_resultado: str = "confirmado"
     conciliacion_emision_habilitada: bool = False
     socios_cuota_por_minuto: int = 60
@@ -31,6 +32,8 @@ class Config:
             raise ValueError("Las cuotas y concurrencia de socios deben ser positivas.")
         if self.polizas_url and not self.internal_api_token.strip():
             raise ValueError("Polizas requiere INTERNAL_API_TOKEN.")
+        if self.notificaciones_url and not self.internal_api_token.strip():
+            raise ValueError("Notificaciones requiere INTERNAL_API_TOKEN.")
         if self.perfilamiento_habilitado and (
             not self.internal_api_token.strip() or not self.perfilamiento_url.strip()
         ):
@@ -53,6 +56,7 @@ class Config:
             socios_cuota_por_minuto=int(os.getenv("SOCIOS_CUOTA_POR_MINUTO", "60")),
             socios_max_concurrentes=int(os.getenv("SOCIOS_MAX_CONCURRENTES", "2")),
             polizas_url=os.getenv("POLIZAS_SERVICE_URL", "").strip().rstrip("/"),
+            notificaciones_url=os.getenv("NOTIFICACIONES_SERVICE_URL", "").strip().rstrip("/"),
             pago_simulado_resultado=os.getenv("PAGO_SIMULADO_RESULTADO", "confirmado"),
             perfilamiento_habilitado=habilitado == "true",
             perfilamiento_url=os.getenv("PERFILAMIENTO_SERVICE_URL", cls.perfilamiento_url),
