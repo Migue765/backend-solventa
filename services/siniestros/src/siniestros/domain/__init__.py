@@ -1,5 +1,7 @@
+import json
 import os
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -80,6 +82,10 @@ class Config:
     video_bytes: int = 100 * 1024 * 1024
     video_seconds: int = 120
     allowed_mimes: tuple[str, ...] = ("image/jpeg", "image/png", "application/pdf", "video/mp4")
+    parametric_sources: dict[str, str] = dataclass_field(default_factory=dict)
+    parametric_queue_capacity: int = 1_100_000
+    parametric_batch_size: int = 5_000
+    parametric_max_body_bytes: int = 16 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if not self.internal_token.strip() or not self.database_url.strip():
@@ -113,6 +119,24 @@ class Config:
             raise ValueError("Evidence MIME types must be a nonempty distinct allowlist.")
         if set(self.allowed_mimes) - {"image/jpeg", "image/png", "application/pdf", "video/mp4"}:
             raise ValueError("An evidence MIME type has no installed validator.")
+        if any(
+            value <= 0
+            for value in (
+                self.parametric_queue_capacity,
+                self.parametric_batch_size,
+                self.parametric_max_body_bytes,
+            )
+        ):
+            raise ValueError("Parametric event limits must be positive.")
+        if self.parametric_batch_size > 5_000:
+            raise ValueError("Parametric batches cannot contain more than 5,000 events.")
+        if not isinstance(self.parametric_sources, dict):
+            raise ValueError("FUENTES_PARAMETRICAS_JSON must be a JSON object.")
+        if any(
+            not source.strip() or not token.strip()
+            for source, token in self.parametric_sources.items()
+        ):
+            raise ValueError("Parametric sources and credentials must be nonempty.")
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -132,6 +156,12 @@ class Config:
                 for item in os.getenv(
                     "EVIDENCIA_MIME_PERMITIDOS", "image/jpeg,image/png,application/pdf,video/mp4"
                 ).split(",")
+            ),
+            parametric_sources=json.loads(os.getenv("FUENTES_PARAMETRICAS_JSON", "{}")),
+            parametric_queue_capacity=int(os.getenv("EVENTOS_PARAMETRICOS_CAPACIDAD", "1100000")),
+            parametric_batch_size=int(os.getenv("EVENTOS_PARAMETRICOS_LOTE", "5000")),
+            parametric_max_body_bytes=int(
+                os.getenv("EVENTOS_PARAMETRICOS_MAX_BODY_BYTES", str(16 * 1024 * 1024))
             ),
         )
 

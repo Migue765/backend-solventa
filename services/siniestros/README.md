@@ -250,19 +250,69 @@ Photoshop, claves GPS/location de PNG/XMP/MP4/PDF y GeoPDF sin consentimiento.
 El cliente debe quitar metadata geografica antes de calcular el hash cuando no
 tiene permiso. No se recomprime ni cambia el hash silenciosamente.
 
+## HU30: eventos parametricos
+
+HU30 es una capacidad exclusivamente backend; no agrega portal ni pantalla web. El
+contrato interno esta en
+`contracts/openapi/eventos-parametricos-internal-v1.yaml`.
+
+La recepcion acepta lotes de hasta 5.000 eventos en
+`POST /internal/v1/eventos-parametricos/recepcion`. Cada fuente debe estar en el objeto
+JSON `FUENTES_PARAMETRICAS_JSON` y presentar su `X-Fuente-ID` y Bearer propio. Se valida
+el lote completo antes de escribir. La identidad durable es fuente + `eventoId`; repetir
+la misma huella cuenta como duplicado y otra huella responde `409 evento_conflictivo`.
+
+`estado_cola_parametrica` conserva el numero exacto de pendientes dentro de la misma
+transaccion que inserta o procesa eventos. Si aceptar el lote superaria
+`EVENTOS_PARAMETRICOS_CAPACIDAD` (1.100.000 por defecto), responde `429 backpressure`
+con `Retry-After` y no acepta parcialmente. Los eventos ya aceptados permanecen en SQL.
+
+Las reglas son versiones inmutables y se registran por
+`POST /internal/v1/reglas-parametricas`. Para cada evento se elige la version numerica
+mas alta vigente de cada regla compatible con fuente, tipo, metrica, unidad y ubicacion.
+La decision durable es `valido`, `no_valido` o `sin_regla_vigente`; conserva evento,
+fuente, regla/version cuando aplica y fecha del servidor.
+
+Un resultado valido crea, en la misma transaccion, un siniestro parametrico aprobado y
+un caso estable en `casos_pago_automatico`. HU31 consulta la outbox mediante
+`POST /internal/v1/casos-pago-automatico/pendientes` y confirma por UUID. Repetir una
+consulta o confirmacion no crea otro siniestro ni caso. Un caso pendiente significa
+**entrega durable para HU31**, no pago ejecutado.
+
+El trabajador continuo se inicia por separado:
+
+```powershell
+python -m siniestros.parametric_worker --limit 5000
+```
+
+El criterio de 1.000.000 de eventos en diez minutos queda pendiente de una prueba de
+capacidad por HTTP contra los pods y PostgreSQL del ambiente AWS, con limites reales de
+CPU/memoria, productores concurrentes, replicas del trabajador y metricas de
+backpressure. No se sustituye esa evidencia con una extrapolacion o benchmark SQLite
+local. Siniestros sigue bloqueado para despliegue hasta resolver el almacenamiento
+durable descrito al inicio de este README.
+
+Variables:
+
+- `FUENTES_PARAMETRICAS_JSON`: objeto fuente -> secreto; no se registra ni se devuelve.
+- `EVENTOS_PARAMETRICOS_CAPACIDAD`: maximo de aceptados pendientes.
+- `EVENTOS_PARAMETRICOS_LOTE`: lote del trabajador, maximo 5.000.
+- `EVENTOS_PARAMETRICOS_MAX_BODY_BYTES`: limite del cuerpo de recepcion.
+
 ## Errores
 
 | HTTP | `code` |
 |---|---|
 | 400 | `solicitud_invalida`, `carga_interrumpida` |
-| 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno) |
+| 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno), `fuente_no_autorizada` |
 | 403 | `alcance_insuficiente` |
 | 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada` |
-| 409 | `idempotencia_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
+| 409 | `idempotencia_conflictiva`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
 | 411 | `longitud_requerida` |
 | 413 | `limite_tamano` |
 | 415 | `formato_no_permitido` |
-| 422 | `integridad_invalida`, `formato_invalido`, `ubicacion_no_autorizada`, `video_fuera_limite`, `fecha_evento_invalida` |
+| 422 | `integridad_invalida`, `formato_invalido`, `ubicacion_no_autorizada`, `video_fuera_limite`, `fecha_evento_invalida`, `vigencia_invalida`, `fecha_entrega_invalida` |
+| 429 | `backpressure` |
 | 503 | `servicio_no_disponible` |
 
 Errores usan `application/problem+json` y `correlationId`. La auditoria SQL guarda
