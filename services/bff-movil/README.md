@@ -31,6 +31,8 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `GET`    | `/movil/v1/notificaciones`     | Sí     | Lista las notificaciones entregadas del cliente    |
 | `GET`    | `/movil/v1/notificaciones/preferencias` | Sí | Consulta preferencias por tipo y canal       |
 | `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
+| `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
+| `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |
 
 El access token dura 1 hora y el refresh token es opaco, de un solo uso y rota en cada
@@ -65,6 +67,13 @@ deriva `X-Cliente-ID` del JWT y nunca acepta un cliente indicado por la aplicaci
 Requieren `NOTIFICACIONES_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración o
 ante una respuesta interna no válida devuelven `503` sin inventar una lista vacía.
 
+## Asistencias
+
+Las rutas `/movil/v1/prestadores/consulta` y `/movil/v1/asistencias` delegan al
+servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
+`Idempotency-Key` al registrar. Requieren `ASISTENCIAS_SERVICE_URL` e
+`INTERNAL_API_TOKEN`; una caída interna devuelve 503 y no simula un registro.
+
 ## Configuración de identidad
 
 | Variable                    | Default                                    | Descripción                    |
@@ -75,6 +84,7 @@ ante una respuesta interna no válida devuelven `503` sin inventar una lista vac
 | `JWKS_URL`                  | `IDENTIDAD_URL` + `/.well-known/jwks.json` | Origen de las claves públicas  |
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                                        | Timeout hacia identidad y JWKS |
 | `NOTIFICACIONES_SERVICE_URL` | vacía                                      | URL interna de Notificaciones  |
+| `ASISTENCIAS_SERVICE_URL`     | vacía                                      | URL interna de Asistencias     |
 | `INTERNAL_API_TOKEN`         | vacía                                      | Credencial entre servicios     |
 
 ## Ejecución
