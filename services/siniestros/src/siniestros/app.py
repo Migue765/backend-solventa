@@ -11,6 +11,13 @@ from werkzeug.exceptions import HTTPException
 
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
 from siniestros.domain.estado import SiniestroNoIntegro
+from siniestros.domain.parametricos import (
+    ConfirmacionCaso,
+    LimiteProcesamiento,
+    LoteEventosParametricos,
+    ReglaParametrica,
+)
+from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
 from siniestros.policies import policies
 from siniestros.repository import Repository
@@ -21,11 +28,15 @@ logger = logging.getLogger(__name__)
 def create_app(config: Config | None = None) -> Flask:
     config = config or Config.from_environment()
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = max(16 * 1024, config.max_chunk)
+    app.config["MAX_CONTENT_LENGTH"] = max(
+        16 * 1024, config.max_chunk, config.parametric_max_body_bytes
+    )
     repo = Repository(config)
     app.extensions["siniestros_repository"] = repo
     app.extensions["siniestros_engine"] = repo.engine
     estados = RepositorioSiniestros(repo.sessions)
+    parametricos = RepositorioEventosParametricos(repo, config)
+    app.extensions["eventos_parametricos_repository"] = parametricos
 
     @app.before_request
     def authorize() -> None:
@@ -34,7 +45,29 @@ def create_app(config: Config | None = None) -> Flask:
         except ValueError:
             g.correlation_id = str(uuid4())
         g.owner = None
+        g.source = None
         if request.path == "/health":
+            return
+        if request.path == "/internal/v1/eventos-parametricos/recepcion":
+            fuente = request.headers.get("X-Fuente-ID", "")
+            token = config.parametric_sources.get(fuente)
+            if token is None or not hmac.compare_digest(
+                request.headers.get("Authorization", "").encode(),
+                f"Bearer {token}".encode(),
+            ):
+                raise Problem(401, "fuente_no_autorizada")
+            g.source = fuente
+            if request.args:
+                raise Problem(400, "solicitud_invalida")
+            return
+        if request.path.startswith("/internal/v1/"):
+            if not hmac.compare_digest(
+                request.headers.get("Authorization", "").encode(),
+                "******".encode(),
+            ):
+                raise Problem(401, "no_autorizado")
+            if request.args:
+                raise Problem(400, "solicitud_invalida")
             return
         if not hmac.compare_digest(
             request.headers.get("Authorization", "").encode(),
@@ -55,8 +88,8 @@ def create_app(config: Config | None = None) -> Flask:
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
-    def body() -> Any:
-        if request.content_length is None or request.content_length > 16 * 1024:
+    def body(max_bytes: int = 16 * 1024) -> Any:
+        if request.content_length is None or request.content_length > max_bytes:
             raise Problem(413, "limite_tamano")
         return request.get_json()
 
@@ -73,6 +106,31 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/health")
     def health() -> Response:
         return jsonify(status="ok")
+
+    @app.post("/internal/v1/reglas-parametricas")
+    def registrar_regla_parametrica() -> tuple[Response, int]:
+        registro, status = parametricos.registrar_regla(ReglaParametrica.model_validate(body()))
+        return jsonify(registro), status
+
+    @app.post("/internal/v1/eventos-parametricos/recepcion")
+    def recibir_eventos_parametricos() -> tuple[Response, int]:
+        lote = LoteEventosParametricos.model_validate(body(config.parametric_max_body_bytes))
+        return jsonify(parametricos.recibir(g.source, lote.eventos)), 202
+
+    @app.post("/internal/v1/eventos-parametricos/procesamiento")
+    def procesar_eventos_parametricos() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(parametricos.procesar(entrada.limite))
+
+    @app.post("/internal/v1/casos-pago-automatico/pendientes")
+    def listar_casos_pago_automatico() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(parametricos.casos_pendientes(entrada.limite))
+
+    @app.put("/internal/v1/casos-pago-automatico/<uuid:caso_id>/confirmacion")
+    def confirmar_caso_pago_automatico(caso_id: UUID) -> Response:
+        entrada = ConfirmacionCaso.model_validate(body())
+        return jsonify(parametricos.confirmar_caso(caso_id, entrada.entregadoEn))
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:
@@ -220,7 +278,7 @@ def create_app(config: Config | None = None) -> Flask:
         )
         response.status_code = error.status
         response.content_type = "application/problem+json"
-        if error.status == 503:
+        if error.status in {429, 503}:
             response.headers["Retry-After"] = "5"
         return response
 
