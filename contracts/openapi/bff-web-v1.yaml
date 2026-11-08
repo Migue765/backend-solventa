@@ -1193,6 +1193,13 @@ paths:
     post:
       tags: [Suscripciones]
       summary: Procesa la suscripción de una oferta aceptada
+      description: >
+        Antes de crear valida la vigencia de la cotizacion y la correspondencia de la
+        seleccion con la oferta, su version, prima, periodicidad y decision integra.
+        Una oferta vencida o inconsistente devuelve 422 oferta_no_disponible sin
+        crear suscripcion, decision, saga ni evento. Una suscripcion ya persistida
+        se recupera antes de revalidar vigencia y perfil, tambien con otra clave.
+        Reutilizar una clave en otra solicitud devuelve 409 sin modificar el resultado.
       operationId: iniciarSuscripcion
       parameters:
         - $ref: "#/components/parameters/SolicitudId"
@@ -1212,6 +1219,8 @@ paths:
           $ref: "#/components/responses/NoEncontrado"
         "409":
           $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/solicitudes-cotizacion/{solicitudId}/pago-simulado:

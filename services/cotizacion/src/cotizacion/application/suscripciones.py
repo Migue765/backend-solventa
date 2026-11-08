@@ -4,19 +4,22 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from cotizacion.application.perfilamiento import validar_perfil
+from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.ports import (
-    ProveedorPerfil,
     SeleccionOfertaRepository,
     SolicitudCotizacionRepository,
     SuscripcionRepository,
 )
+from cotizacion.domain.cotizacion import EstadoCotizacion
+from cotizacion.domain.decision import contenido_integro
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
+    OfertaNoDisponibleError,
     SeleccionNoEncontradaError,
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
+from cotizacion.domain.ofertas import EstadoOferta
 from cotizacion.domain.suscripcion import (
     DecisionSuscripcion,
     EstadoSagaEmision,
@@ -34,14 +37,14 @@ class ProcesarSuscripcion:
         solicitudes: SolicitudCotizacionRepository,
         selecciones: SeleccionOfertaRepository,
         suscripciones: SuscripcionRepository,
+        ofertas: GestionarOfertas,
         reloj: Callable[[], datetime] = lambda: datetime.now(UTC),
-        perfiles: ProveedorPerfil | None = None,
     ) -> None:
         self._solicitudes = solicitudes
         self._selecciones = selecciones
         self._suscripciones = suscripciones
+        self._ofertas = ofertas
         self._reloj = reloj
-        self._perfiles = perfiles
 
     def iniciar(
         self,
@@ -52,8 +55,6 @@ class ProcesarSuscripcion:
         solicitud = self._solicitudes.obtener_solicitud(solicitud_id, cliente_id)
         if solicitud is None:
             raise SolicitudNoEncontradaError()
-        if self._perfiles is not None:
-            validar_perfil(solicitud, self._perfiles)
         seleccion = self._selecciones.obtener_seleccion(solicitud_id)
         if seleccion is None:
             raise SeleccionNoEncontradaError()
@@ -74,6 +75,47 @@ class ProcesarSuscripcion:
             return existente
 
         ahora = self._reloj()
+        cotizacion = solicitud.cotizacion
+        instantanea = cotizacion.instantanea
+        regla = instantanea.contenido.get("regla") if instantanea else None
+        perfil = instantanea.contenido.get("perfil") if instantanea else None
+        if (
+            cotizacion.estado is not EstadoCotizacion.CALCULADA
+            or cotizacion.valida_hasta is None
+            or cotizacion.valida_hasta <= ahora
+            or seleccion.solicitud_id != solicitud_id
+            or seleccion.cotizacion_id != cotizacion.cotizacion_id
+            or instantanea is None
+            or instantanea.cotizacion_id != cotizacion.cotizacion_id
+            or not contenido_integro(instantanea)
+            or instantanea.contenido.get("cotizacionId") != str(cotizacion.cotizacion_id)
+            or instantanea.contenido.get("clienteId") != str(cliente_id)
+            or instantanea.contenido.get("productoId") != str(cotizacion.producto_id)
+            or not isinstance(regla, dict)
+            or regla.get("version") != instantanea.regla_version
+            or regla.get("reglaId") != str(instantanea.regla_id)
+            or not isinstance(perfil, dict)
+            or perfil.get("perfilId") != instantanea.perfil_id
+            or perfil.get("modeloVersion") != instantanea.perfil_modelo_version
+        ):
+            raise OfertaNoDisponibleError()
+        oferta = next(
+            (
+                item
+                for item in self._ofertas.listar(solicitud_id, cliente_id).ofertas
+                if item.oferta_id == seleccion.oferta_id and item.version == seleccion.version
+            ),
+            None,
+        )
+        ahora = self._reloj()
+        if (
+            oferta is None
+            or oferta.estado is not EstadoOferta.ACEPTADA
+            or oferta.vigente_hasta <= ahora
+            or oferta.prima_mensual != seleccion.prima_mensual
+            or oferta.periodicidad != seleccion.periodicidad
+        ):
+            raise OfertaNoDisponibleError()
         suscripcion_id = uuid4()
         datos_evaluados = {
             "solicitudId": solicitud_id,

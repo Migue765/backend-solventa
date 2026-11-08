@@ -143,14 +143,15 @@ def create_app(config: Config | None = None) -> Flask:
         admision=admision,
     )
     app.extensions["proveedor_perfil"] = perfil_http
-    app.extensions["gestionar_ofertas"] = GestionarOfertas(
+    gestionar_ofertas = GestionarOfertas(
         repositorio, repositorio, perfiles_riesgo, perfiles=perfil_http
     )
+    app.extensions["gestionar_ofertas"] = gestionar_ofertas
     app.extensions["procesar_suscripcion"] = ProcesarSuscripcion(
         repositorio,
         repositorio,
         repositorio,
-        perfiles=perfil_http,
+        gestionar_ofertas,
     )
 
     app.register_blueprint(health.bp)

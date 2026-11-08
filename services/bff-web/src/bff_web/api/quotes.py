@@ -413,6 +413,13 @@ def start_subscription(request_id: str) -> tuple[Response, int] | Response:
         )
     try:
         subscription = _gateway().start_subscription(user_id, request_id, idempotency_key)
+    except OfferUnavailableError:
+        return problem_response(
+            422,
+            "oferta_no_disponible",
+            "Oferta no disponible",
+            "La oferta vencio o cambio. Solicita una nueva cotizacion.",
+        )
     except QuoteRequestNotFoundError:
         return _not_found()
     except QuoteRequestConflictError:
