@@ -30,6 +30,8 @@ from perfilamiento.app import Config as ProfileConfig
 from perfilamiento.app import create_app as profile_app
 from perfilamiento.persistence import RepositorioPerfiles
 from polizas.app import create_app as policy_app
+from siniestros.app import create_app as claims_app
+from siniestros.domain import Config as ClaimsConfig
 from werkzeug.serving import BaseWSGIServer, WSGIRequestHandler, make_server
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,9 +114,9 @@ class LocalStack:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.databases = {
             name: f"sqlite:///{(self.directory / (name + '.db')).as_posix()}"
-            for name in ("identidad", "cotizacion", "polizas", "perfilamiento")
+            for name in ("identidad", "cotizacion", "polizas", "perfilamiento", "siniestros")
         }
-        for name in ("identidad", "cotizacion", "polizas"):
+        for name in ("identidad", "cotizacion", "polizas", "siniestros"):
             config = MigrationConfig(str(ROOT / "services" / name / "alembic.ini"))
             config.set_main_option("sqlalchemy.url", self.databases[name])
             command.upgrade(config, "head")
@@ -153,6 +155,18 @@ class LocalStack:
             policies = self.start(
                 "policies", policy_app(self.databases["polizas"], self.internal_token)
             )
+            # Evidence bytes live in the disposable stack directory, never in the checkout.
+            claims = self.start(
+                "claims",
+                claims_app(
+                    ClaimsConfig(
+                        database_url=self.databases["siniestros"],
+                        storage_root=(self.directory / "evidencias").resolve(),
+                        internal_token=self.internal_token,
+                        policies_url=policies,
+                    )
+                ),
+            )
             quotes = self.start(
                 "quotes",
                 quote_app(
@@ -174,6 +188,7 @@ class LocalStack:
                         jwt_issuer=issuer,
                         quote_service_url=quotes,
                         profiling_service_url=profile,
+                        claims_service_url=claims,
                         internal_api_token=self.internal_token,
                         encrypted_login_enabled=self.encrypted_login_enabled,
                     )

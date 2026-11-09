@@ -1,14 +1,23 @@
 """Generate native JMeter HTTP samplers and assertions (no third-party plugins)."""
 
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from pathlib import Path
 
+from PIL import Image
+
 REQUESTS = "/v1/solicitudes-cotizacion"
 BASE = REQUESTS + "/${requestId}"
 CONSENT = "/v1/consentimientos/perfilamiento"
 DASHBOARD = "/v1/clientes/me/dashboard"
+CLAIMS = "/v1/siniestros"
+CLAIM = CLAIMS + "/${claimId}"
+UPLOAD = CLAIM + "/cargas/${uploadId}"
+CLAIM_STATUS = "/v1/clientes/me/siniestros/${claimId}"
+# Synthetic PNG without EXIF/location, written next to each plan (JMeter resolves it there).
+EVIDENCE = "evidencia-sintetica.png"
 PRODUCTS = (
     "automotive",
     "life",
@@ -66,6 +75,13 @@ def product_data() -> dict[str, dict[str, str]]:
             "insuredAmount": "10000000",
         },
     }
+
+
+def evidence_file(directory: Path) -> tuple[int, str]:
+    path = directory / EVIDENCE
+    Image.new("RGB", (32, 32), (24, 96, 160)).save(path, format="PNG")
+    content = path.read_bytes()
+    return len(content), hashlib.sha256(content).hexdigest()
 
 
 def prop(parent: ET.Element, name: str, value: str | int | bool) -> ET.Element:
@@ -132,6 +148,9 @@ class Plan:
         token: str | None = "token",
         key: str | None = None,
         service: str = "web",
+        file: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+        binary: bool = False,
     ) -> None:
         sampler, children = component(self.tree, "HTTPSamplerProxy", label)
         for name, value in {
@@ -148,7 +167,17 @@ class Plan:
             prop(sampler, "HTTPSampler." + name, value)
         prop(sampler, "HTTPSampler.follow_redirects", False)
         prop(sampler, "HTTPSampler.use_keepalive", True)
-        prop(sampler, "HTTPSampler.postBodyRaw", True)
+        prop(sampler, "HTTPSampler.postBodyRaw", file is None)
+        if file is not None:
+            # A single file without parameter name is sent as the raw request body.
+            files = ET.SubElement(
+                sampler, "elementProp", name="HTTPsampler.Files", elementType="HTTPFileArgs"
+            )
+            collection = ET.SubElement(files, "collectionProp", name="HTTPFileArgs.files")
+            upload = ET.SubElement(collection, "elementProp", name=file, elementType="HTTPFileArg")
+            prop(upload, "File.path", file)
+            prop(upload, "File.paramname", "")
+            prop(upload, "File.mimetype", "application/octet-stream")
         arguments = ET.SubElement(
             sampler, "elementProp", name="HTTPsampler.Arguments", elementType="Arguments"
         )
@@ -165,6 +194,7 @@ class Plan:
             values["Authorization"] = "Bearer ${" + token + "}"
         if key is not None:
             values["Idempotency-Key"] = "${" + key + "}"
+        values.update(extra_headers or {})
         for name, value in values.items():
             header = ET.SubElement(collection, "elementProp", name=name, elementType="Header")
             prop(header, "Header.name", name)
@@ -176,8 +206,12 @@ class Plan:
         script = (
             "try {\n"
             f"assert prev.getResponseCode() == '{status}'\n"
-            "def data = prev.getResponseData().length == 0 ? [:] : "
-            "new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())\n"
+            + (
+                "def data = [:]\n"
+                if binary
+                else "def data = prev.getResponseData().length == 0 ? [:] : "
+                "new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())\n"
+            )
             + check
             + "\nprev.setSuccessful(true)\n"
             "} catch (Exception | AssertionError failure) {\n"
@@ -378,6 +412,187 @@ class Plan:
                 check="assert data.ofertaId == vars.get('offerId')",
             )
 
+    def claim(self, size: int, digest: str, extended: bool = False) -> None:
+        """HU24/HU25 Web: report on an emitted policy, store evidence and query its status."""
+        self.script(
+            "new.claim",
+            "vars.put('claimKey', UUID.randomUUID().toString()); "
+            "vars.put('uploadKey', UUID.randomUUID().toString()); "
+            "vars.put('claimDate', java.time.Instant.now().minusSeconds(1).toString())",
+        )
+        self.request(
+            "claim.policies",
+            "GET",
+            CLAIMS + "/polizas",
+            check="assert data.polizas.size() > 0; "
+            "assert data.polizas.every { it.estado == 'vigente' }; "
+            "vars.put('policyId', data.polizas[0].id)",
+        )
+        report: dict[str, object] = {
+            "polizaId": "${policyId}",
+            "fechaEvento": "${claimDate}",
+            "tipoEvento": "Choque simple",
+            "descripcion": "Descripcion sintetica del evento para JMeter.",
+            "lugar": "Ubicacion sintetica",
+        }
+        self.request(
+            "claim.report",
+            "POST",
+            CLAIMS,
+            201,
+            report,
+            "assert data.id; assert data.polizaId == vars.get('policyId'); "
+            "vars.put('claimId', data.id)",
+            key="claimKey",
+        )
+        if extended:
+            self.request(
+                "claim.report.retry",
+                "POST",
+                CLAIMS,
+                body=report,
+                check="assert data.id == vars.get('claimId')",
+                key="claimKey",
+            )
+            self.request(
+                "claim.report.conflict",
+                "POST",
+                CLAIMS,
+                409,
+                {**report, "descripcion": "Otra descripcion con la misma clave."},
+                "assert data.code == 'idempotencia_conflictiva'",
+                key="claimKey",
+            )
+        tree = self.transaction("journey.claim.status")
+        self.request(
+            "claim.status",
+            "GET",
+            CLAIM_STATUS,
+            check="assert data.id == vars.get('claimId'); assert data.estado == 'reportado'; "
+            "assert data.polizaId == vars.get('policyId'); assert data.historial.size() >= 1; "
+            "assert data.historial[-1].estado == data.estado",
+        )
+        self.tree = tree
+        if extended:
+            self.request("claim.status.missing.token", "GET", CLAIM_STATUS, 401, token=None)
+            self.request(
+                "claim.status.ownership",
+                "GET",
+                CLAIM_STATUS,
+                404,
+                check="assert data.code == 'siniestro_no_encontrado'",
+                token="otherToken",
+            )
+            self.request(
+                "claim.status.unknown",
+                "GET",
+                "/v1/clientes/me/siniestros/${__UUID()}",
+                404,
+                check="assert data.code == 'siniestro_no_encontrado'",
+            )
+            self.request(
+                "claim.status.invalid", "GET", "/v1/clientes/me/siniestros/no-es-uuid", 400
+            )
+        self.request(
+            "evidence.configuration",
+            "GET",
+            CLAIMS + "/configuracion-evidencias",
+            check="assert data.formatos.any { it.mimeType == 'image/png' }",
+        )
+        if extended:
+            self.script(
+                "evidence.format.key", "vars.put('formatKey', UUID.randomUUID().toString())"
+            )
+            self.request(
+                "evidence.format.rejected",
+                "POST",
+                CLAIM + "/cargas",
+                415,
+                {"mimeType": "text/plain", "tamanoBytes": size, "sha256": digest},
+                "assert data.code == 'formato_no_permitido'",
+                key="formatKey",
+            )
+        upload: dict[str, object] = {"mimeType": "image/png", "tamanoBytes": size, "sha256": digest}
+        self.request(
+            "evidence.start",
+            "POST",
+            CLAIM + "/cargas",
+            201,
+            upload,
+            "assert data.estado == 'pendiente'; assert data.offset == 0; "
+            "vars.put('uploadId', data.id)",
+            key="uploadKey",
+        )
+        if extended:
+            self.request(
+                "evidence.confirm.incomplete",
+                "POST",
+                UPLOAD + "/confirmacion",
+                409,
+                check="assert data.code == 'carga_incompleta'",
+            )
+        self.request(
+            "evidence.content",
+            "PUT",
+            UPLOAD + "/contenido",
+            file=EVIDENCE,
+            extra_headers={"Content-Type": "application/octet-stream", "Upload-Offset": "0"},
+            check=f"assert data.offset == {size}",
+        )
+        self.request(
+            "evidence.confirm",
+            "POST",
+            UPLOAD + "/confirmacion",
+            check="assert data.estado == 'confirmada'; "
+            "assert data.evidenciaId == vars.get('uploadId')",
+        )
+        if extended:
+            self.request(
+                "evidence.confirm.retry",
+                "POST",
+                UPLOAD + "/confirmacion",
+                check="assert data.estado == 'confirmada'",
+            )
+            self.request(
+                "evidence.start.retry",
+                "POST",
+                CLAIM + "/cargas",
+                body=upload,
+                check="assert data.id == vars.get('uploadId'); assert data.estado == 'confirmada'",
+                key="uploadKey",
+            )
+            self.request(
+                "evidence.cancel.confirmed",
+                "DELETE",
+                UPLOAD,
+                409,
+                check="assert data.code == 'carga_confirmada'",
+            )
+        self.request(
+            "evidence.list",
+            "GET",
+            CLAIM + "/evidencias",
+            check=f"assert data.evidencias.size() == 1; "
+            f"assert data.evidencias[0].sha256 == '{digest}'; "
+            "assert data.evidencias[0].autorId; assert data.evidencias[0].creadaEn",
+        )
+        self.request(
+            "evidence.download",
+            "GET",
+            CLAIM + "/evidencias/${uploadId}/contenido",
+            check=f"assert prev.getResponseData().length == {size}",
+            binary=True,
+        )
+        if extended:
+            for suffix in ("evidencias", "evidencias/${uploadId}/contenido"):
+                self.request(
+                    "evidence.ownership." + suffix.split("/")[-1],
+                    "GET",
+                    CLAIM + "/" + suffix,
+                    404,
+                    token="otherToken",
+                )
+
     def save(self, path: Path) -> None:
         ET.indent(self.root)
         ET.ElementTree(self.root).write(path, encoding="utf-8", xml_declaration=True)
@@ -462,6 +677,7 @@ def main_plan(path: Path, threads: int = 1, loops: int = 1, smoke: bool = True) 
         "assert data.polizas.every { it.simulada }; "
         "assert data.notificaciones.disponibilidad == 'no_implementado'",
     )
+    plan.claim(*evidence_file(path.parent), extended=smoke)
     if smoke:
         plan.request(
             "ownership.dashboard",
