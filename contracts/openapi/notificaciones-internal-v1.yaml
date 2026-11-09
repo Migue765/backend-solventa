@@ -1,0 +1,181 @@
+openapi: 3.1.0
+info:
+  title: Solventa Notificaciones Interna
+  version: 1.0.0
+  description: Contrato interno para eventos autorizados y ejecución de entregas pendientes.
+paths:
+  /v1/eventos:
+    post:
+      summary: Registra un evento origen de manera idempotente
+      operationId: registrarEventoNotificacion
+      security:
+        - internalToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Evento"
+      responses:
+        "201":
+          description: Evento registrado y notificaciones generadas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoEvento"
+        "200":
+          description: Repetición idéntica del evento ya registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoEvento"
+        "401":
+          $ref: "#/components/responses/Problema"
+        "409":
+          $ref: "#/components/responses/Problema"
+        "422":
+          $ref: "#/components/responses/Problema"
+  /v1/despachos:
+    post:
+      summary: Procesa notificaciones programadas o pendientes
+      operationId: despacharNotificaciones
+      security:
+        - internalToken: []
+      responses:
+        "200":
+          description: Lote procesado
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [entregasConfirmadas]
+                properties:
+                  entregasConfirmadas:
+                    type: integer
+                    minimum: 0
+        "401":
+          $ref: "#/components/responses/Problema"
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  schemas:
+    Evento:
+      oneOf:
+        - $ref: "#/components/schemas/EventoPagoEjecutado"
+        - $ref: "#/components/schemas/EventoPagoConfirmado"
+        - $ref: "#/components/schemas/EventoSiniestro"
+        - $ref: "#/components/schemas/EventoPoliza"
+      discriminator:
+        propertyName: tipo
+    EventoBase:
+      type: object
+      required: [eventoId, tipo, clienteId, ocurridoEn, recurso]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        clienteId:
+          type: string
+          format: uuid
+        ocurridoEn:
+          type: string
+          format: date-time
+        recurso:
+          $ref: "#/components/schemas/Recurso"
+    EventoPagoEjecutado:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/EventoBase"
+        - type: object
+          properties:
+            tipo:
+              const: pago_parametrico_ejecutado
+    EventoPagoConfirmado:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/EventoBase"
+        - type: object
+          properties:
+            tipo:
+              const: pago_confirmado
+    EventoSiniestro:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/EventoBase"
+        - type: object
+          required: [estado]
+          properties:
+            tipo:
+              const: siniestro_estado_cambiado
+            estado:
+              type: string
+              enum: [en_evaluacion, en_revision, en_inspeccion, aprobado, rechazado, pagado, cerrado]
+    EventoPoliza:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/EventoBase"
+        - type: object
+          required: [fechaFin]
+          properties:
+            tipo:
+              const: poliza_emitida
+            fechaFin:
+              type: string
+              format: date
+    Recurso:
+      type: object
+      additionalProperties: false
+      required: [tipo, id]
+      properties:
+        tipo:
+          type: string
+          enum: [pago, siniestro, poliza]
+        id:
+          type: string
+          format: uuid
+    ResultadoEvento:
+      type: object
+      additionalProperties: false
+      required: [eventoId, duplicado, notificacionesGeneradas, entregasConfirmadas]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+        duplicado:
+          type: boolean
+        notificacionesGeneradas:
+          type: integer
+          minimum: 0
+        entregasConfirmadas:
+          type: integer
+          minimum: 0
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string
+          format: uuid
+  responses:
+    Problema:
+      description: La operación fue rechazada
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"

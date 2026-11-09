@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: Notificaciones para cliente
+  version: 1.0.0
+  description: Lectura y preferencias de notificaciones autorizadas del cliente autenticado.
+paths:
+  /notificaciones:
+    get:
+      tags: [Notificaciones]
+      summary: Lista las notificaciones entregadas
+      operationId: listarNotificaciones
+      responses:
+        "200":
+          description: Hasta 50 notificaciones recientes del cliente
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [notificaciones]
+                properties:
+                  notificaciones:
+                    type: array
+                    maxItems: 50
+                    items:
+                      $ref: "#/components/schemas/Notificacion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/Prohibido"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+  /notificaciones/preferencias:
+    get:
+      tags: [Notificaciones]
+      summary: Consulta las preferencias de notificación
+      operationId: consultarPreferenciasNotificacion
+      responses:
+        "200":
+          description: Preferencias efectivas por tipo y canal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferencias"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/Prohibido"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+    put:
+      tags: [Notificaciones]
+      summary: Actualiza preferencias de notificación
+      operationId: actualizarPreferenciasNotificacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Preferencias"
+      responses:
+        "200":
+          description: Preferencias efectivas actualizadas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferencias"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/Prohibido"
+        "422":
+          $ref: "#/components/responses/Invalido"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+components:
+  schemas:
+    Notificacion:
+      type: object
+      additionalProperties: false
+      required: [notificacionId, tipo, titulo, contenido, recurso, entregadaEn]
+      properties:
+        notificacionId:
+          type: string
+          format: uuid
+        tipo:
+          $ref: "#/components/schemas/TipoNotificacion"
+        titulo:
+          type: string
+          maxLength: 80
+        contenido:
+          type: string
+          maxLength: 240
+        recurso:
+          $ref: "#/components/schemas/Recurso"
+        entregadaEn:
+          type: string
+          format: date-time
+    TipoNotificacion:
+      type: string
+      enum: [pagos, siniestros, vencimientos, renovaciones]
+    Canal:
+      type: string
+      enum: [in_app, email, push]
+    Recurso:
+      type: object
+      additionalProperties: false
+      required: [tipo, id]
+      properties:
+        tipo:
+          type: string
+          enum: [pago, siniestro, poliza]
+        id:
+          type: string
+          format: uuid
+    Preferencia:
+      type: object
+      additionalProperties: false
+      required: [tipo, canal, habilitada]
+      properties:
+        tipo:
+          $ref: "#/components/schemas/TipoNotificacion"
+        canal:
+          $ref: "#/components/schemas/Canal"
+        habilitada:
+          type: boolean
+    Preferencias:
+      type: object
+      additionalProperties: false
+      required: [preferencias]
+      properties:
+        preferencias:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/Preferencia"
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string
+          format: uuid
+  responses:
+    NoAutorizado:
+      description: La sesión no es válida
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    Prohibido:
+      description: La sesión no corresponde a un cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    Invalido:
+      description: Las preferencias no cumplen el contrato
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoDisponible:
+      description: El servicio no está disponible
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"

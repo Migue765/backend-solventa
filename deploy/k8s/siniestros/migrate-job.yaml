@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: siniestros-migrate-${MIGRATION_ID}
+  namespace: siniestros
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ${IMAGE}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: SINIESTROS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: siniestros-runtime
+                  key: SINIESTROS_DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

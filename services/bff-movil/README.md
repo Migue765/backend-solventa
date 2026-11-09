@@ -28,6 +28,11 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `POST`   | `/movil/v1/sesiones/renovar`   | No     | Rota el refresh token y emite nuevos tokens        |
 | `GET`    | `/movil/v1/sesiones/actual`    | Bearer | Usuario y vencimiento tomados del JWT              |
 | `DELETE` | `/movil/v1/sesiones/actual`    | Bearer | Cierra sesión; revoca el `refreshToken` si se envía |
+| `GET`    | `/movil/v1/notificaciones`     | Sí     | Lista las notificaciones entregadas del cliente    |
+| `GET`    | `/movil/v1/notificaciones/preferencias` | Sí | Consulta preferencias por tipo y canal       |
+| `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
+| `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
+| `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |
 
 El access token dura 1 hora y el refresh token es opaco, de un solo uso y rota en cada
@@ -46,7 +51,30 @@ no un booleano local. El formato de sesion, refresh y logout no cambia.
 No se certifican hardware, identidad civil, selfie ni prueba de vida.
 Ver [contrato y limites](../../docs/acceso-biometrico.md).
 
-## Configuración
+## Siniestros y evidencia
+
+Las rutas `/movil/v1/siniestros` usan el servicio compartido, sin almacenamiento
+en el BFF. Requieren JWT del canal movil, rol/scope cliente, `SINIESTROS_SERVICE_URL`
+e `INTERNAL_API_TOKEN`; sin configuracion responden 503. El cliente/autor se obtiene
+del JWT y no del cuerpo. Fragmentos de hasta 1 MiB se transmiten por streaming.
+Ver `contracts/openapi/siniestros-v1.yaml` y `services/siniestros/README.md` desde
+la raiz para configuracion, limites, errores y reconciliacion.
+
+## Notificaciones
+
+Las rutas `/movil/v1/notificaciones` delegan al servicio de Notificaciones. El BFF
+deriva `X-Cliente-ID` del JWT y nunca acepta un cliente indicado por la aplicación.
+Requieren `NOTIFICACIONES_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración o
+ante una respuesta interna no válida devuelven `503` sin inventar una lista vacía.
+
+## Asistencias
+
+Las rutas `/movil/v1/prestadores/consulta` y `/movil/v1/asistencias` delegan al
+servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
+`Idempotency-Key` al registrar. Requieren `ASISTENCIAS_SERVICE_URL` e
+`INTERNAL_API_TOKEN`; una caída interna devuelve 503 y no simula un registro.
+
+## Configuración de identidad
 
 | Variable                    | Default                                    | Descripción                    |
 | --------------------------- | ------------------------------------------ | ------------------------------ |
@@ -55,6 +83,9 @@ Ver [contrato y limites](../../docs/acceso-biometrico.md).
 | `JWT_AUDIENCE`              | `solventa-api`                             | `aud` esperado                 |
 | `JWKS_URL`                  | `IDENTIDAD_URL` + `/.well-known/jwks.json` | Origen de las claves públicas  |
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                                        | Timeout hacia identidad y JWKS |
+| `NOTIFICACIONES_SERVICE_URL` | vacía                                      | URL interna de Notificaciones  |
+| `ASISTENCIAS_SERVICE_URL`     | vacía                                      | URL interna de Asistencias     |
+| `INTERNAL_API_TOKEN`         | vacía                                      | Credencial entre servicios     |
 
 ## Ejecución
 

@@ -1,0 +1,269 @@
+openapi: 3.1.0
+info:
+  title: Solventa eventos parametricos internos
+  version: 1.0.0
+  description: >
+    Recepcion durable y deduplicada de eventos externos, reglas versionadas y outbox
+    de casos validos para HU31. Un caso pendiente no representa un pago ejecutado.
+servers:
+  - url: /internal/v1
+paths:
+  /reglas-parametricas:
+    post:
+      operationId: registrarVersionReglaParametrica
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Regla"}
+      responses:
+        "201": {$ref: "#/components/responses/ReglaRegistrada"}
+        "200": {$ref: "#/components/responses/ReglaRegistrada"}
+        default: {$ref: "#/components/responses/Problema"}
+  /eventos-parametricos/recepcion:
+    post:
+      operationId: recibirEventosParametricos
+      description: >
+        Valida el lote completo. Un identificador repetido con la misma huella se informa
+        como duplicado; con otra huella responde 409. Si el lote rebasa la capacidad
+        disponible responde 429 y no acepta parcialmente.
+      security: [{sourceToken: []}]
+      parameters:
+        - name: X-Fuente-ID
+          in: header
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 100}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [eventos]
+              properties:
+                eventos:
+                  type: array
+                  minItems: 1
+                  maxItems: 5000
+                  items: {$ref: "#/components/schemas/Evento"}
+      responses:
+        "202":
+          description: Eventos nuevos persistidos antes del acuse
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [aceptados, duplicados, pendientes]
+                properties:
+                  aceptados: {type: integer, minimum: 0}
+                  duplicados: {type: integer, minimum: 0}
+                  pendientes: {type: integer, minimum: 0}
+        "429":
+          description: Backpressure; el lote no fue aceptado
+          headers:
+            Retry-After: {schema: {type: integer, minimum: 1}}
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+  /eventos-parametricos/procesamiento:
+    post:
+      operationId: procesarEventosParametricos
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200":
+          description: Resultado del lote procesado transaccionalmente
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [procesados, casosValidos]
+                properties:
+                  procesados: {type: integer, minimum: 0}
+                  casosValidos: {type: integer, minimum: 0}
+        default: {$ref: "#/components/responses/Problema"}
+  /casos-pago-automatico/pendientes:
+    post:
+      operationId: obtenerCasosPendientesHu31
+      description: >
+        HU31 puede consultar repetidamente. Cada caso conserva un UUID estable y permanece
+        pendiente hasta recibir confirmacion.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200":
+          description: Casos validos aun no confirmados por HU31
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [casos]
+                properties:
+                  casos:
+                    type: array
+                    items: {$ref: "#/components/schemas/CasoHu31"}
+        default: {$ref: "#/components/responses/Problema"}
+  /casos-pago-automatico/{casoId}/confirmacion:
+    put:
+      operationId: confirmarCasoRecibidoPorHu31
+      security: [{internalToken: []}]
+      parameters:
+        - name: casoId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [entregadoEn]
+              properties:
+                entregadoEn: {type: string, format: date-time}
+      responses:
+        "200":
+          description: Confirmacion idempotente
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [casoId, estado, entregadoEn]
+                properties:
+                  casoId: {type: string, format: uuid}
+                  estado: {const: entregado}
+                  entregadoEn: {type: string, format: date-time}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+    sourceToken:
+      type: http
+      scheme: bearer
+  schemas:
+    Evento:
+      type: object
+      additionalProperties: false
+      required: [eventoId, ocurridoEn, tipoEvento, ubicacionCodigo, metrica]
+      properties:
+        eventoId: {type: string, format: uuid}
+        ocurridoEn: {type: string, format: date-time}
+        tipoEvento: {type: string, minLength: 1, maxLength: 100}
+        ubicacionCodigo: {type: string, minLength: 1, maxLength: 100}
+        metrica:
+          type: object
+          additionalProperties: false
+          required: [nombre, valor, unidad]
+          properties:
+            nombre: {type: string, minLength: 1, maxLength: 100}
+            valor: {type: number}
+            unidad: {type: string, minLength: 1, maxLength: 30}
+    Regla:
+      type: object
+      additionalProperties: false
+      required:
+        - reglaId
+        - version
+        - fuente
+        - tipoEvento
+        - metrica
+        - operador
+        - umbral
+        - unidad
+        - clienteId
+        - polizaId
+        - vigenteDesde
+      properties:
+        reglaId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        fuente: {type: string, minLength: 1, maxLength: 100}
+        tipoEvento: {type: string, minLength: 1, maxLength: 100}
+        metrica: {type: string, minLength: 1, maxLength: 100}
+        operador: {enum: [gt, gte, lt, lte, eq]}
+        umbral: {type: number}
+        unidad: {type: string, minLength: 1, maxLength: 30}
+        ubicacionCodigo:
+          oneOf:
+            - {type: string, minLength: 1, maxLength: 100}
+            - {type: "null"}
+        clienteId: {type: string, format: uuid}
+        polizaId: {type: string, format: uuid}
+        vigenteDesde: {type: string, format: date-time}
+        vigenteHasta:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    Limite:
+      type: object
+      additionalProperties: false
+      properties:
+        limite: {type: integer, minimum: 1, maximum: 5000, default: 5000}
+    CasoHu31:
+      type: object
+      additionalProperties: false
+      required:
+        - casoId
+        - siniestroId
+        - clienteId
+        - polizaId
+        - fuente
+        - eventoId
+        - reglaId
+        - reglaVersion
+        - decididoEn
+      properties:
+        casoId: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        clienteId: {type: string, format: uuid}
+        polizaId: {type: string, format: uuid}
+        fuente: {type: string}
+        eventoId: {type: string, format: uuid}
+        reglaId: {type: string, format: uuid}
+        reglaVersion: {type: integer, minimum: 1}
+        decididoEn: {type: string, format: date-time}
+    Problema:
+      type: object
+      required: [type, title, status, code, correlationId]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}
+  responses:
+    ReglaRegistrada:
+      description: Version de regla durable
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [reglaId, version, fuente, creadaEn]
+            properties:
+              reglaId: {type: string, format: uuid}
+              version: {type: integer, minimum: 1}
+              fuente: {type: string}
+              creadaEn: {type: string, format: date-time}
+    Problema:
+      description: Rechazo seguro
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}

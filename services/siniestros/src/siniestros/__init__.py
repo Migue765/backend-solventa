@@ -1,0 +1,1 @@
+"""Siniestros compartidos entre canales."""
