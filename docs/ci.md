@@ -3,9 +3,10 @@
 ## Suite adicional Apache JMeter
 
 El workflow `JMeter local integrado` se ejecuta solo mediante `workflow_dispatch`, no
-en PR ni push. Por defecto valida una muestra pequena de escenarios HTTP contra los seis servicios
+en PR ni push. Por defecto valida una muestra pequena de escenarios HTTP contra los siete servicios
 reales, JWT/JWKS y SQLite temporal, con perfilamiento y pólizas habilitados. Incluye los
-ocho productos, ownership, revocación, idempotencia, persistencia y recuperación tras
+ocho productos, el registro, las evidencias y el estado de siniestros Web, ownership,
+revocación, idempotencia, persistencia y recuperación tras
 detener/reiniciar Pólizas. No reemplaza pytest/Jenkins ni el load test k6 existente.
 El rendimiento con presupuestos de los documentos rectores requiere activar expresamente
 la opcion `performance` del dispatch; queda desactivado por defecto.

@@ -40,11 +40,12 @@ Cada ejecucion necesita un `--output` nuevo (por defecto `reports/jmeter`): no c
 JTL de ejecuciones distintas ni borra evidencia anterior.
 
 El runner crea bases SQLite temporales, aplica las migraciones reales de Identidad,
-Cotizacion y Polizas e inicializa el esquema real de Perfilamiento. Arranca las seis
+Cotizacion, Polizas y Siniestros e inicializa el esquema real de Perfilamiento. Arranca las siete
 aplicaciones Flask existentes en loopback y puertos efimeros. Usa JWT RSA/JWKS real,
 tokens internos aleatorios y el hashing de contrasenas normal de Identidad. No reemplaza
 gateways, no usa Flask test_client ni mocks de servicios propios. Las llamadas entre
-BFF, Identidad, Perfilamiento, Cotizacion y Polizas viajan por HTTP.
+BFF, Identidad, Perfilamiento, Cotizacion, Polizas y Siniestros viajan por HTTP. Las
+evidencias de Siniestros se guardan en el directorio temporal del stack, nunca en el checkout.
 El BFF recibe tambien el puerto efimero del Perfilamiento de su propia
 instancia para consultas de informacion del cliente; no usa el default
 `localhost:5003` de una aplicacion ajena.
@@ -74,6 +75,7 @@ al cerrar normalmente. No usarlo como servidor de produccion.
 | Productos | Automotive, life, device-protection, payment-protection, mortgage-life, travel, parametric y parametric-weather; cada uno recorre oferta, seleccion, suscripcion, pago simulado y poliza academica |
 | Ownership | Otro JWT real no accede a solicitud/ofertas/pago, ni paga una solicitud ajena; dashboard vacio y rechazo de clienteId por query |
 | Persistencia e idempotencia | Una cotizacion, saga, pago y poliza por operacion; importe de pago igual a seleccion; reintentos conservan referencia; consulta dashboard |
+| Siniestros Web (HU24/HU25) | Sobre una poliza emitida en el mismo recorrido: aviso, replay con la misma clave y conflicto; estado e historial propio, sin JWT, de otro cliente, inexistente y no UUID; configuracion, formato no permitido, confirmacion incompleta, carga del PNG sintetico con sha256, confirmacion y reintentos idempotentes, cancelacion de confirmada, listado, descarga byte a byte y ownership de evidencias |
 | Recuperacion real | Reiniciar aplicacion Polizas con la misma DB; detener su servidor antes de un pago nuevo, exigir503, conservar pago sin poliza, reiniciar y reintentar dos veces para emitir exactamente una |
 
 El smoke ejecuta ocho contrataciones y una novena durante la falla controlada.
@@ -119,9 +121,12 @@ ejecución falla si la capacidad es menor de 20.000 perfilamientos/ofertas por h
 | `journey.quote.mortgage-life` | Mismo flujo, vida hipotecaria con perfil y precio | 400 / 800 ms |
 | `journey.emission.*` | Aceptar oferta + suscripcion + pago/emision + GET de saga emitida | 1500 / 3000 ms |
 | `journey.dashboard` | Consulta BFF que agrega cotizaciones, pagos, suscripciones y polizas | 150 / 300 ms |
+| `journey.claim.status` | BFF -> Siniestros: estado vigente e historial permitido de un siniestro propio | 150 / 300 ms |
 
 Los gates toman presupuestos del Enunciado p11; dashboard es una consulta agregada real
-con polizas, **no** evidencia de un endpoint de siniestros inexistente. La cotizacion via
+con polizas; `journey.claim.status` usa el presupuesto de consulta de estado de
+Arquitectura v7 (p95 <= 150 ms, p99 <= 300 ms). Registro y carga de evidencia se validan
+funcionalmente y por conteo durable (un siniestro, un historial y una evidencia por recorrido). La cotizacion via
 BFF tampoco certifica el ingreso embebido de socios aun no implementado. Un fallo de
 presupuesto produce salida1 y conserva medidas: nunca se eleva el umbral para dejar verde.
 
@@ -225,7 +230,7 @@ Para CI de otros repos, fijar el SHA que contiene este bootstrap, no un develop 
 Prevalecen Arquitectura v7 y Enunciado sobre estrategias de pruebas previas.
 Esta ejecucion usa SQLite/Werkzeug local, **no PostgreSQL ni un despliegue escalado**.
 Open Finance/Open Data son las fuentes mock del producto; pago y poliza son academicos.
-No hay firma/cobro real, canal socios completo, estado de siniestros ni notificaciones.
+No hay firma/cobro real, canal socios completo, evaluacion de siniestros ni notificaciones.
 
 No se certifican: presupuesto externo120ms/timeout700ms ni fallback/circuit breaker;
 ASR-FIN/EMI convergencia automatica60s, conciliacion externa/ledger/firma; PRV propagacion
