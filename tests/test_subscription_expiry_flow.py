@@ -1,14 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from cotizacion.infrastructure.persistence.models import (
-    CotizacionModel,
-    DecisionSuscripcionModel,
-    OutboxEventoModel,
-    SagaEmisionModel,
-    SuscripcionModel,
-)
-from sqlalchemy import create_engine, func, select, update
+from sqlalchemy import MetaData, Table, create_engine, func, select, update
 from sqlalchemy.orm import Session
 
 from tests.test_profiling_flow import REQUESTS, Flow, flow
@@ -33,8 +26,9 @@ def aceptar(flow: Flow) -> str:
 
 def vencer(flow: Flow) -> None:
     with Session(create_engine(flow.quote_database)) as session, session.begin():
+        cotizaciones = Table("cotizaciones", MetaData(), autoload_with=session.connection())
         session.execute(
-            update(CotizacionModel).values(valida_hasta=datetime.now(UTC) - timedelta(seconds=1))
+            update(cotizaciones).values(valida_hasta=datetime.now(UTC) - timedelta(seconds=1))
         )
 
 
@@ -49,13 +43,16 @@ def test_bff_rechaza_suscripcion_vencida_sin_efectos(flow: Flow) -> None:
     assert respuesta.get_json()["code"] == "oferta_no_disponible"
     assert flow.client.get(base + "/suscripcion", headers=flow.headers).status_code == 404
     with Session(create_engine(flow.quote_database)) as session:
-        for modelo in (SuscripcionModel, DecisionSuscripcionModel, SagaEmisionModel):
-            assert session.scalar(select(func.count()).select_from(modelo)) == 0
+        metadata = MetaData()
+        for nombre in ("suscripciones", "decisiones_suscripcion", "sagas_emision"):
+            tabla = Table(nombre, metadata, autoload_with=session.connection())
+            assert session.scalar(select(func.count()).select_from(tabla)) == 0
+        outbox = Table("outbox_eventos", metadata, autoload_with=session.connection())
         assert (
             session.scalar(
                 select(func.count())
-                .select_from(OutboxEventoModel)
-                .where(OutboxEventoModel.tipo == "SuscripcionAprobada")
+                .select_from(outbox)
+                .where(outbox.c.tipo == "SuscripcionAprobada")
             )
             == 0
         )
