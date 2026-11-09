@@ -87,6 +87,31 @@ def counts(stack: LocalStack) -> dict[str, int]:
     return result
 
 
+def claim_counts(stack: LocalStack) -> dict[str, int]:
+    from siniestros.infrastructure.models import CambioEstadoModel
+    from siniestros.models import Claim, Upload
+
+    engine = create_engine(stack.databases["siniestros"])
+    try:
+        with Session(engine) as session:
+            return {
+                "claims": int(session.scalar(select(func.count()).select_from(Claim)) or 0),
+                "claim_history": int(
+                    session.scalar(select(func.count()).select_from(CambioEstadoModel)) or 0
+                ),
+                "confirmed_evidence": int(
+                    session.scalar(
+                        select(func.count())
+                        .select_from(Upload)
+                        .where(Upload.status == "confirmada")
+                    )
+                    or 0
+                ),
+            }
+    finally:
+        engine.dispose()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jmeter-home", required=True, type=Path)
@@ -137,6 +162,13 @@ def main() -> None:
             if any(value != expected for value in persisted.values()):
                 summary["passed"] = False
                 summary["persistence_error"] = f"Expected exactly {expected} of every entity."
+            claims = claim_counts(stack)
+            summary["persisted_claims"] = claims
+            if any(value != args.threads * args.iterations for value in claims.values()):
+                summary["passed"] = False
+                summary["claims_persistence_error"] = (
+                    "Retries must keep one claim, one history entry and one evidence per journey."
+                )
             if summary["passed"] and args.mode == "smoke":
                 stack.restart_policy()
                 plan = args.output / "restart.jmx"
