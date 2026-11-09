@@ -66,6 +66,10 @@ from cotizacion.infrastructure.persistence.repositorio_reglas import (
     RepositorioReglasSqlAlchemy,
 )
 from cotizacion.infrastructure.polizas_http import PolizasHttp
+from cotizacion.infrastructure.publicador_notificaciones import (
+    NotificationHttpSender,
+    PaymentNotificationPublisher,
+)
 from cotizacion.infrastructure.tarificador_por_regla import TarificadorPorRegla
 
 logger = logging.getLogger(__name__)
@@ -108,6 +112,14 @@ def create_app(config: Config | None = None) -> Flask:
         polizas_gateway,
         config.pago_simulado_resultado,
         conciliar_emision=config.conciliacion_emision_habilitada,
+        publicador_notificaciones=(
+            PaymentNotificationPublisher(
+                sesiones,
+                NotificationHttpSender(config.notificaciones_url, config.internal_api_token),
+            )
+            if config.notificaciones_url
+            else None
+        ),
     )
     app.extensions["procesar_pago_simulado"] = ProcesarPagoSimulado(
         pagos, SimuladorPago(sesiones, config.pago_simulado_resultado)

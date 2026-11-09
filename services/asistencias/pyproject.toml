@@ -1,0 +1,28 @@
+[project]
+name = "asistencias"
+version = "0.1.0"
+description = "Prestadores cercanos y solicitudes de asistencia de Solventa"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.1,<4",
+    "pydantic>=2.9,<3",
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.14,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+server = ["gunicorn>=23,<24"]
+postgres = ["psycopg[binary]>=3.2,<4"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
