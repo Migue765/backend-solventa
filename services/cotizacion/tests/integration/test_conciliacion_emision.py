@@ -305,9 +305,11 @@ def test_salida_del_proceso_invoca_cierre_registrado(database_url):
     import subprocess
     import sys
 
+    # Solo fija las fuentes del checkout: el stack local completo requiere las
+    # dependencias de todos los servicios y CodeBuild instala solo cotizacion.
     script = """
 import atexit, json, os
-import tests.jmeter.local_stack
+import tests.jmeter
 from cotizacion.app import create_app
 from cotizacion.config import Config
 worker = None
