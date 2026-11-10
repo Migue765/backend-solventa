@@ -1,3 +1,4 @@
+# Variables: IMAGE (ej. <siniestros_ecr_repository_url>:<tag>), AWS_REGION
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +20,8 @@ spec:
       labels:
         app.kubernetes.io/name: siniestros
     spec:
+      serviceAccountName: siniestros
+      # IRSA monta su propio token proyectado; el pod no necesita el de la API de Kubernetes.
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -43,6 +46,12 @@ spec:
                   key: SINIESTROS_DATABASE_URL
             - name: POLIZAS_SERVICE_URL
               value: http://polizas.polizas.svc.cluster.local:8080
+            - name: AWS_REGION
+              value: ${AWS_REGION}
+            # terraform output siniestros_evidence_bucket. Sin bucket la evidencia
+            # confirmada quedaria en el emptyDir y se perderia al reiniciar el pod.
+            - name: SINIESTROS_EVIDENCIAS_BUCKET
+              value: solventa-prod-siniestros-evidencias-976083331509
             - name: SINIESTROS_STORAGE_ROOT
               value: /var/lib/solventa/evidencias
           volumeMounts:
@@ -68,6 +77,7 @@ spec:
             capabilities:
               drop: ["ALL"]
       volumes:
+        # Solo fragmentos de cargas en curso y temporales de descarga.
         - name: evidencias
-          persistentVolumeClaim:
-            claimName: siniestros-evidencias
+          emptyDir:
+            sizeLimit: 2Gi

@@ -3,6 +3,8 @@
 # SERVICE_NAME (default cotizacion) elige Deployment, Job de migracion y manifiestos:
 # deploy/k8s para cotizacion y deploy/k8s/<servicio> para el resto.
 # MIGRATE=false (default true) omite el Job de migraciones, para servicios sin base de datos propia (ej. los BFF).
+# Polizas, siniestros, notificaciones y asistencias aplican su Service y Deployment completos.
+# Siniestros exige que su ServiceAccount ya tenga el rol IRSA del bucket de evidencias.
 set -euo pipefail
 
 MIGRATE="${MIGRATE:-true}"
@@ -32,16 +34,33 @@ if [ "$SERVICE_NAME" = "polizas" ] && [ "$NAMESPACE" != "polizas" ]; then
   echo "Polizas solo se despliega en el namespace productivo polizas." >&2
   exit 1
 fi
-if [ "$SERVICE_NAME" = "siniestros" ]; then
-  echo "Despliegue de Siniestros bloqueado: falta definir y validar almacenamiento persistente para evidencias." >&2
-  exit 1
-fi
+case "$SERVICE_NAME" in
+  siniestros | notificaciones | asistencias)
+    if [ "$NAMESPACE" != "$SERVICE_NAME" ]; then
+      echo "El servicio ${SERVICE_NAME} solo se despliega en el namespace productivo ${SERVICE_NAME}." >&2
+      exit 1
+    fi
+    ;;
+esac
 
+export AWS_REGION
 export IMAGE="${ECR_REPOSITORY_URL}:${IMAGE_TAG}"
 # Los nombres de Job deben ser DNS-1123: minusculas, digitos y guiones.
 export MIGRATION_ID="$(printf '%s' "$IMAGE_TAG" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
 
 aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  # Sin el rol IRSA los pods no se crean o no pueden guardar evidencias en S3.
+  irsa_role="$(kubectl -n "$NAMESPACE" get serviceaccount siniestros -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null || true)"
+  case "$irsa_role" in
+    arn:aws:iam::*:role/*) ;;
+    *)
+      echo "Falta el ServiceAccount siniestros con un rol IAM en eks.amazonaws.com/role-arn; aplicar deploy/k8s/siniestros/serviceaccount.yaml con envsubst antes de desplegar." >&2
+      exit 1
+      ;;
+  esac
+fi
 
 previous="$(kubectl -n "$NAMESPACE" get deployment "$SERVICE_NAME" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
 echo "Version actual: ${previous:-ninguna} -> nueva: $IMAGE"
@@ -85,7 +104,11 @@ fi
 if [ -f "${K8S_DIR}/hpa.yaml" ]; then
   kubectl apply -f "${K8S_DIR}/hpa.yaml"
 fi
-if [ "$SERVICE_NAME" = "polizas" ] || [ "$SERVICE_NAME" = "siniestros" ]; then
+case "$SERVICE_NAME" in
+  polizas | siniestros | notificaciones | asistencias) full_manifest=true ;;
+  *) full_manifest=false ;;
+esac
+if [ "$full_manifest" = "true" ]; then
   kubectl apply -f "${K8S_DIR}/service.yaml"
   envsubst < "${K8S_DIR}/deployment.yaml" | kubectl apply -f -
 else
@@ -117,6 +140,9 @@ fi
 
 if [ "$SERVICE_NAME" = "identidad" ]; then
   envsubst < "${K8S_DIR}/consent-outbox-cronjob.yaml" | kubectl apply -f -
+fi
+if [ "$SERVICE_NAME" = "notificaciones" ]; then
+  envsubst < "${K8S_DIR}/despachos-cronjob.yaml" | kubectl apply -f -
 fi
 
 echo "Despliegue de ${IMAGE} completado."

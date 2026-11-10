@@ -36,3 +36,35 @@ output "siniestros_ecr_repository_url" {
 output "siniestros_pipeline_name" {
   value = module.cicd_siniestros.pipeline_name
 }
+
+# Evidencias confirmadas. El pod solo guarda en disco los fragmentos de cargas en curso;
+# el nombre lo repite deploy/k8s/siniestros/deployment.yaml (SINIESTROS_EVIDENCIAS_BUCKET).
+module "s3_siniestros_evidencias" {
+  source = "../../../modules/s3-private-bucket"
+
+  bucket_name = "${var.name_prefix}-siniestros-evidencias-${var.account_id}"
+  kms_key_arn = module.kms.key_arn
+  tags        = local.tags
+}
+
+module "iam_irsa_siniestros" {
+  source = "../../../modules/irsa-service"
+
+  name                 = "${var.name_prefix}-siniestros"
+  oidc_provider_arn    = module.eks.oidc_provider_arn
+  oidc_issuer_url      = module.eks.oidc_issuer_url
+  service_namespace    = "siniestros"
+  service_account_name = "siniestros"
+  s3_object_arns       = ["${module.s3_siniestros_evidencias.bucket_arn}/evidencias/*"]
+  kms_key_arn          = module.kms.key_arn
+  tags                 = local.tags
+}
+
+output "siniestros_evidence_bucket" {
+  value = module.s3_siniestros_evidencias.bucket_name
+}
+
+output "siniestros_role_arn" {
+  description = "Anotacion eks.amazonaws.com/role-arn del ServiceAccount siniestros."
+  value       = module.iam_irsa_siniestros.role_arn
+}
