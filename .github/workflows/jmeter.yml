@@ -41,7 +41,7 @@ jobs:
           python -m tests.jmeter.install
       - name: Validar generador y evaluador
         run: python -m pytest tests/test_jmeter.py --junitxml=reports/jmeter-unit.xml
-      - name: JMeter funcional sobre seis servicios reales
+      - name: JMeter funcional sobre siete servicios reales
         run: python -m tests.jmeter.run --jmeter-home reports/tools/apache-jmeter-5.6.3
       - name: Rendimiento local opt-in (no certifica ASR)
         if: github.event_name == 'workflow_dispatch' && inputs.performance

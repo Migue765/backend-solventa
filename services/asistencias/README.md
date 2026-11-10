@@ -51,6 +51,7 @@ El prestador debe seguir disponible, ofrecer el tipo solicitado y estar a máxim
 
 ```powershell
 python -m pip install -e ".\services\asistencias[dev]"
+$env:ASISTENCIAS_DATABASE_URL = "sqlite:///asistencias.db"
 python -m alembic -c services\asistencias\alembic.ini upgrade head
 python -m flask --app asistencias.app run --port 15006
 python -m pytest services\asistencias\tests

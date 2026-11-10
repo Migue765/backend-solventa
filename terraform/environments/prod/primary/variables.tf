@@ -66,19 +66,19 @@ variable "node_instance_types" {
 variable "node_min_size" {
   description = "Minimo de nodos."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "node_desired_size" {
   description = "Nodos deseados."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "node_max_size" {
   description = "Maximo de nodos del entorno academico sin trafico real."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "db_name" {

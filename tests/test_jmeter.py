@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
@@ -10,7 +11,15 @@ import yaml
 from identidad.domain.consent import ConsentScope  # type: ignore[import-untyped]
 
 from tests.jmeter.local_stack import LocalStack
-from tests.jmeter.plans import CONSENT, PRODUCTS, REQUESTS, main_plan, outage_plan, persistence_plan
+from tests.jmeter.plans import (
+    CONSENT,
+    EVIDENCE,
+    PRODUCTS,
+    REQUESTS,
+    main_plan,
+    outage_plan,
+    persistence_plan,
+)
 from tests.jmeter.results import evaluate, percentile
 from tests.test_encrypted_local_stack import call
 
@@ -36,6 +45,7 @@ def journeys(count: int = 1, elapsed: int = 10) -> list[tuple[str, str, int]]:
         *(f"journey.quote.{product}" for product in PRODUCTS),
         *(f"journey.emission.{product}" for product in PRODUCTS),
         "journey.dashboard",
+        "journey.claim.status",
     ]
     return [(label, "true", elapsed) for label in labels for _ in range(count)]
 
@@ -51,12 +61,44 @@ def test_generated_plans_use_real_http_and_safe_assertions(tmp_path: Path) -> No
         children = list(group)
         assert len(children) % 2 == 0
         assert all(child.tag == "hashTree" for child in children[1::2])
-    assert len(root.findall(".//TransactionController")) == 16
+    assert len(root.findall(".//TransactionController")) == 17
     assert "getResponseDataAsString" in main.read_text()
     assert "failure.getMessage" not in main.read_text()
     recovery = tmp_path / "restart.jmx"
     persistence_plan(recovery)
     assert len(ET.parse(recovery).findall(".//HTTPSamplerProxy")) == 3
+
+
+def test_generated_claim_journey_uploads_the_hashed_synthetic_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "main.jmx"
+    main_plan(path)
+    evidence = (tmp_path / EVIDENCE).read_bytes()
+    root = ET.parse(path).getroot()
+    samplers = {sampler.get("testname"): sampler for sampler in root.findall(".//HTTPSamplerProxy")}
+    start = samplers["evidence.start"].findtext(".//stringProp[@name='Argument.value']")
+    assert start is not None
+    assert json.loads(start) == {
+        "mimeType": "image/png",
+        "tamanoBytes": len(evidence),
+        "sha256": hashlib.sha256(evidence).hexdigest(),
+    }
+    content = samplers["evidence.content"]
+    assert content.findtext(".//stringProp[@name='File.path']") == EVIDENCE
+    assert content.findtext("boolProp[@name='HTTPSampler.postBodyRaw']") == "false"
+    for label in (
+        "claim.report.retry",
+        "claim.status.ownership",
+        "evidence.confirm.incomplete",
+        "evidence.cancel.confirmed",
+        "evidence.ownership.contenido",
+    ):
+        assert label in samplers
+    performance = tmp_path / "performance" / "main.jmx"
+    performance.parent.mkdir()
+    main_plan(performance, smoke=False)
+    labels = {node.get("testname") for node in ET.parse(performance).iter("HTTPSamplerProxy")}
+    assert {"claim.report", "claim.status", "evidence.download"} <= labels
+    assert "claim.status.ownership" not in labels
 
 
 def test_generated_consents_have_current_scope_and_runtime_expiry(tmp_path: Path) -> None:
@@ -198,6 +240,7 @@ def test_mortgage_capacity_uses_bounded_concurrency(tmp_path: Path) -> None:
         ("journey.quote.mortgage-life", 400, 800),
         ("journey.emission.life", 1500, 3000),
         ("journey.dashboard", 150, 300),
+        ("journey.claim.status", 150, 300),
     ],
 )
 def test_each_budget_is_enforced(tmp_path: Path, label: str, p95: int, p99: int) -> None:

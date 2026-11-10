@@ -95,7 +95,8 @@ def test_hu44_producer_decision_application_and_requester_over_http(
             record_property("owned_directory", directory)
             assert not {4200, 4300}.intersection(ports)
             assert all(
-                call(url + ("/health" if name in {"profile", "policies"} else "/ping"))[0] == 200
+                call(url + ("/health" if name in {"profile", "policies", "claims"} else "/ping"))[0]
+                == 200
                 for name, url in stack.urls.items()
             )
             assert (

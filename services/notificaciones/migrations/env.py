@@ -3,18 +3,19 @@ from logging.config import fileConfig
 
 from alembic import context
 from notificaciones.models import Base
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", os.environ["NOTIFICACIONES_DATABASE_URL"])
 target_metadata = Base.metadata
+# Sin set_main_option: configparser rechaza el % de una contraseña codificada en la URL.
+database_url = config.get_main_option("sqlalchemy.url") or os.environ["NOTIFICACIONES_DATABASE_URL"]
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -24,11 +25,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

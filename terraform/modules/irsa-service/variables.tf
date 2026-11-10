@@ -29,8 +29,19 @@ variable "secret_arns" {
   default     = []
 }
 
+variable "s3_object_arns" {
+  description = "ARNs de objetos S3 (bucket/prefijo/*) que el servicio puede leer, escribir y borrar."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.s3_object_arns : can(regex("^arn:aws:s3:::[^/]+/.+$", arn))])
+    error_message = "Cada ARN debe apuntar a objetos (arn:aws:s3:::bucket/prefijo/*), no al bucket completo."
+  }
+}
+
 variable "kms_key_arn" {
-  description = "CMK que protege los secretos."
+  description = "CMK que protege los secretos y los objetos S3 del servicio."
   type        = string
 }
 

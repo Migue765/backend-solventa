@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, BinaryIO
 from uuid import uuid4
 
 from sqlalchemy import Engine, create_engine, event, func, select
@@ -17,6 +17,7 @@ from siniestros.infrastructure.models import CambioEstadoModel
 from siniestros.infrastructure.repositorio import validar
 from siniestros.models import Audit, Claim, Upload
 from siniestros.policies import policies
+from siniestros.storage import EvidenceStore, evidence_store
 
 
 def make_engine(url: str) -> Engine:
@@ -99,6 +100,7 @@ class Repository:
         config.storage_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if config.storage_root.is_symlink():
             raise ValueError("Private storage cannot be a symbolic link.")
+        self.evidence: EvidenceStore = evidence_store(config)
 
     @contextmanager
     def write(self) -> Iterator[Session]:
@@ -451,6 +453,10 @@ class Repository:
             raise OSError("Unexpected symbolic link in private storage.")
         return path
 
+    @staticmethod
+    def evidence_name(upload: Upload) -> str:
+        return f"{upload.claim_id}/{upload.id}"
+
     def check_policy(self, upload: Upload) -> None:
         if upload.mime not in self.config.formats:
             raise Problem(415, "formato_no_permitido")
@@ -537,10 +543,12 @@ class Repository:
                 media.validate(path, upload.mime, upload.location is not None, self.config)
             except Problem as error:
                 # Invalid/unauthorized bytes are removed, not retained as hidden evidence.
-                path.unlink(missing_ok=True)
+                self.evidence.discard(self.evidence_name(upload), path)
                 upload.offset = 0
                 raise error
             else:
+                # The durable copy must exist before the confirmation commits.
+                self.evidence.publish(self.evidence_name(upload), path, digest)
                 upload.status = "confirmada"
                 upload.confirmed = now()
                 self.result(
@@ -554,7 +562,9 @@ class Repository:
                     cid,
                     upload.confirmed,
                 )
-            return self.upload_result(session, upload)
+            result = self.upload_result(session, upload)
+        self.evidence.release(path)
+        return result
 
     def cancel(self, owner: str, claim_id: str, upload_id: str, cid: str) -> None:
         with self.upload_write(owner, claim_id, upload_id, "cancelar_carga", cid) as (
@@ -567,7 +577,7 @@ class Repository:
                 return
             upload.status = "cancelada"
             upload.offset = 0
-            self.path(upload).unlink(missing_ok=True)
+            self.evidence.discard(self.evidence_name(upload), self.path(upload))
             self.result(
                 session,
                 owner,
@@ -591,20 +601,32 @@ class Repository:
                 )
             ]
 
-    def content(self, owner: str, claim_id: str, upload_id: str, cid: str) -> tuple[Path, str, int]:
-        with self.write() as session:
+    def content(
+        self, owner: str, claim_id: str, upload_id: str, cid: str
+    ) -> tuple[BinaryIO, str, int]:
+        with self.sessions() as session:
             try:
                 upload = self.upload(session, owner, claim_id, upload_id)
             except Problem as error:
                 if error.code == "carga_no_encontrada":
                     raise Problem(404, "evidencia_no_encontrada") from error
                 raise
-            if upload.status != "confirmada":
-                raise Problem(404, "evidencia_no_encontrada")
-            path = self.path(upload)
-            with path.open("rb") as content:
-                digest = hashlib.file_digest(content, "sha256").hexdigest()
-            if path.stat().st_size != upload.size or digest != upload.digest:
+        if upload.status != "confirmada":
+            raise Problem(404, "evidencia_no_encontrada")
+        # Confirmed evidence is immutable, so it is fetched and verified outside the write lock.
+        stream = self.evidence.open(self.evidence_name(upload), self.path(upload))
+        try:
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+            if size != upload.size or digest.hexdigest() != upload.digest:
                 raise Problem(503, "servicio_no_disponible")
-            self.audit(session, owner, "consultar_contenido", "autorizado", cid)
-            return path, upload.mime, upload.size
+            stream.seek(0)
+            with self.write() as session:
+                self.audit(session, owner, "consultar_contenido", "autorizado", cid)
+        except BaseException:
+            stream.close()
+            raise
+        return stream, upload.mime, upload.size

@@ -238,9 +238,9 @@ def create_app(config: Config | None = None) -> Flask:
     @app.get("/v1/siniestros/<uuid:claim_id>/evidencias/<uuid:upload_id>/contenido")
     def content(claim_id: UUID, upload_id: UUID) -> Response:
         empty()
-        path, mime, size = repo.content(g.owner, str(claim_id), str(upload_id), g.correlation_id)
+        stream, mime, size = repo.content(g.owner, str(claim_id), str(upload_id), g.correlation_id)
         response = send_file(
-            path,
+            stream,
             mimetype=mime,
             as_attachment=True,
             download_name=str(upload_id),

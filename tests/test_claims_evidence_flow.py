@@ -593,8 +593,8 @@ def _process_read_confirmed(args: tuple[Config, str, str, str]) -> tuple[str, st
     repo = Repository(config)
     try:
         record = repo.get_upload(owner, claim_id, upload_id)
-        path, _, _ = repo.content(owner, claim_id, upload_id, str(uuid4()))
-        with path.open("rb") as stream:
+        stream, _, _ = repo.content(owner, claim_id, upload_id, str(uuid4()))
+        with stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         return record["estado"], digest
     finally:

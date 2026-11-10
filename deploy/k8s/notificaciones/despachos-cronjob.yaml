@@ -1,0 +1,61 @@
+# Variable: IMAGE. deploy.sh lo aplica solo tras un rollout correcto de notificaciones.
+# Programador de POST /v1/despachos (entregas programadas y reintentos). Sin signo de
+# dolar en el script: envsubst sustituiria cualquier referencia a variable.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: notificaciones-despachos
+  namespace: notificaciones
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: despachos
+              image: ${IMAGE}
+              command:
+                - python
+                - -c
+                - |
+                  import os
+                  import urllib.request
+
+                  token = os.environ["INTERNAL_API_TOKEN"].strip()
+                  solicitud = urllib.request.Request(
+                      "http://notificaciones.notificaciones.svc.cluster.local:8080/v1/despachos",
+                      data=b"",
+                      headers={"Authorization": "Bearer " + token},
+                  )
+                  with urllib.request.urlopen(solicitud, timeout=60) as respuesta:
+                      print(respuesta.status, respuesta.read().decode())
+              env:
+                - name: INTERNAL_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: notificaciones-runtime
+                      key: INTERNAL_API_TOKEN
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]

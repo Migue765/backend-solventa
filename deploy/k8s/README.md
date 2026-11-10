@@ -2,19 +2,21 @@
 
 ## Perfil academico de bajo consumo
 
-Las seis APIs (`bff-movil`, `bff-web`, `cotizacion`, `identidad`, `perfilamiento` y
-`polizas`) mantienen **una replica por servicio**. Los cuatro HPA existentes tienen
-minimo y maximo en 1. El despliegue reaplica ese limite antes de actualizar la imagen
-y fija una replica; Polizas aplica su Deployment con `replicas: 1`, incluso en su primer
+Las nueve APIs (`bff-movil`, `bff-web`, `cotizacion`, `identidad`, `perfilamiento`,
+`polizas`, `siniestros`, `notificaciones` y `asistencias`) mantienen **una replica por
+servicio**. Los cuatro HPA existentes tienen minimo y maximo en 1. El despliegue reaplica
+ese limite antes de actualizar la imagen y fija una replica; Polizas, Siniestros,
+Notificaciones y Asistencias aplican su Deployment con `replicas: 1`, incluso en su primer
 despliegue. La espera del rollout comprueba el resultado despues de ajustar la escala.
 `maxSurge: 1` permite un segundo pod transitorio durante un rollout, no una segunda
 replica permanente. Los PDB existentes conservan `minAvailable: 1`: bloquean desalojos
 voluntarios de la unica replica, pero no garantizan disponibilidad ante fallos.
 
-El grupo EKS usa dos `t3.small` (minimo, deseado y maximo en 2). Cada nodo admite
-11 pods y tiene 1466644 Ki de memoria asignable en el inventario observado. Un solo
-nodo no deja capacidad suficiente para las seis APIs, DNS, controladores, DaemonSets
-y Jobs de migracion o tareas programadas, ademas del margen para rollouts.
+El grupo EKS usa tres `t3.small` (minimo, deseado y maximo en 3). Cada nodo admite
+11 pods y tiene 1466644 Ki de memoria asignable en el inventario observado; los tres
+suman 33 pods. Dos nodos no dejan capacidad suficiente para las nueve APIs, DNS,
+controladores, DaemonSets y Jobs de migracion o tareas programadas, ademas del margen
+para rollouts.
 No se reducen requests ni limites de memoria/CPU sin medir el consumo.
 RDS `db.t4g.micro` de 20 GB single-AZ y Redis `cache.t4g.micro` de un nodo ya son
 las clases minimas configuradas; se conservan datos, red, autenticacion y balanceador
@@ -29,6 +31,15 @@ Las regresiones locales de manifiestos y despliegue se ejecutan con
 `python -m pytest tests/test_academic_infrastructure.py`; las llamadas a AWS/Kubernetes
 se sustituyen por dobles de prueba, sin modificar el cluster. No sustituyen la
 validacion autenticada del flujo principal con persistencia.
+
+### Servicios internos sin ruta publica
+
+Siniestros, Notificaciones y Asistencias solo exponen un Service `ClusterIP`, sin HPA,
+PDB ni TargetGroupBinding; los consumen los BFF y otros servicios. Sus runbooks estan
+en [siniestros](siniestros/README.md), [notificaciones](notificaciones/README.md) y
+[asistencias](asistencias/README.md). `deploy/codebuild/deploy.sh` exige que el
+ServiceAccount de Siniestros tenga su rol IRSA antes de migrar y aplica el CronJob de
+despachos de Notificaciones despues de un rollout correcto.
 
 ### Actualizacion acotada de BFF Web
 
@@ -46,7 +57,7 @@ el rollback existente revierte conjuntamente imagen y dependencia, no una
 revision intermedia con solo uno de esos cambios. Tanto el fallo de rollback
 como su confirmacion se informan explicitamente; un rollout fallido nunca
 termina como despliegue exitoso. El comportamiento de imagen, migraciones y
-capacidad de los otros cinco servicios se conserva.
+capacidad de los demas servicios se conserva.
 
 El harness usa AWS/Kubernetes simulados; solo el renderizado y el merge de patches
 usan `kubectl --local`, sin acceder al cluster. Requiere `bash` y `kubectl` locales
