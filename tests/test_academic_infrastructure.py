@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 from copy import deepcopy
@@ -10,17 +11,23 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 K8S = ROOT / "deploy" / "k8s"
+PRIMARY = ROOT / "terraform" / "environments" / "prod" / "primary"
 SERVICES = (
+    "asistencias",
     "bff-movil",
     "bff-web",
     "cotizacion",
     "identidad",
+    "notificaciones",
     "perfilamiento",
     "polizas",
     "siniestros",
 )
+NEW_SERVICES = ("siniestros", "notificaciones", "asistencias")
+FULL_MANIFEST_SERVICES = {"asistencias", "notificaciones", "polizas", "siniestros"}
 HPA_SERVICES = {"bff-movil", "bff-web", "cotizacion", "identidad"}
 BFF_PATCH_PREFIX = "kubectl|-n bff-web patch deployment/bff-web --type=strategic -p "
+IRSA_ROLE = "arn:aws:iam::123456789012:role/solventa-prod-siniestros"
 
 
 def service_directory(service: str) -> Path:
@@ -76,7 +83,14 @@ def local_kubectl() -> str:
 
 
 def run_deploy(
-    service: str, failure: str = "", *, root: Path = ROOT, previous: str = "registry/previous:1"
+    service: str,
+    failure: str = "",
+    *,
+    root: Path = ROOT,
+    previous: str = "registry/previous:1",
+    namespace: str | None = None,
+    migrate: bool = False,
+    service_account_role: str = IRSA_ROLE,
 ) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     if bash is None:
@@ -111,7 +125,8 @@ kubectl() {
       if [ "$FAIL_COMMAND" = "rollback" ]; then return 23; fi
       rolled_back=true ;;
     *" get deployment "*) printf '%s\\n' "$PREVIOUS_IMAGE" ;;
-    "apply -f -") cat >/dev/null ;;
+    *" get serviceaccount "*) printf '%s\\n' "$SERVICE_ACCOUNT_ROLE" ;;
+    "apply -f -") sed -n 's/^kind: /applied|/p' >&2 ;;
   esac
   return 0
 }
@@ -124,15 +139,16 @@ source "$1"
         env={
             **os.environ,
             "CLUSTER_NAME": "test",
-            "NAMESPACE": service,
+            "NAMESPACE": namespace or service,
             "SERVICE_NAME": service,
             "ECR_REPOSITORY_URL": "registry/test",
             "IMAGE_TAG": "test",
             "AWS_REGION": "us-east-2",
-            "MIGRATE": "false",
+            "MIGRATE": "true" if migrate else "false",
             "FAIL_COMMAND": failure,
             "KUBECTL_LOCAL": kubectl,
             "PREVIOUS_IMAGE": previous,
+            "SERVICE_ACCOUNT_ROLE": service_account_role,
         },
         text=True,
         capture_output=True,
@@ -339,16 +355,42 @@ def test_bff_rollout_failure_reverts_the_single_template_change(failure: str, me
     assert "completado." not in result.stdout
 
 
-def test_claims_deployment_is_blocked_before_external_calls() -> None:
-    result = run_deploy("siniestros")
+@pytest.mark.parametrize(
+    "role", ["", "${IRSA_ROLE_ARN}", "arn:aws:iam::123456789012:user/operador"]
+)
+def test_claims_deploy_requires_irsa_service_account_before_any_change(role: str) -> None:
+    result = run_deploy("siniestros", migrate=True, service_account_role=role)
     assert result.returncode != 0
-    assert "almacenamiento persistente" in result.stderr
-    assert "aws|" not in result.stderr
-    assert "kubectl|" not in result.stderr
+    assert "Falta el ServiceAccount siniestros" in result.stderr
+    assert "aws|eks update-kubeconfig" in result.stderr
+    assert not any(
+        command in result.stderr for command in ("apply -f", " wait ", " rollout ", " scale ")
+    )
     assert "completado." not in result.stdout
 
 
-@pytest.mark.parametrize("service", [service for service in SERVICES if service != "siniestros"])
+@pytest.mark.parametrize("service", NEW_SERVICES)
+def test_new_services_only_deploy_to_their_production_namespace(service: str) -> None:
+    result = run_deploy(service, namespace="default")
+    assert result.returncode != 0
+    assert f"{service} solo se despliega en el namespace productivo {service}." in result.stderr
+    assert "aws|" not in result.stderr
+    assert "kubectl|" not in result.stderr
+
+
+@pytest.mark.parametrize("service", NEW_SERVICES)
+def test_new_services_migrate_before_applying_their_manifests(service: str) -> None:
+    result = run_deploy(service, migrate=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = result.stderr.splitlines()
+    wait = calls.index(
+        f"kubectl|-n {service} wait --for=condition=complete job/{service}-migrate-test"
+        " --timeout=300s"
+    )
+    assert calls.index("applied|Job") < wait < calls.index("applied|Deployment")
+
+
+@pytest.mark.parametrize("service", SERVICES)
 def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -> None:
     result = run_deploy(service)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -356,8 +398,9 @@ def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -
     rollout = calls.index(
         f"kubectl|-n {service} rollout status deployment/{service} --timeout=300s"
     )
-    if service in {"polizas", "siniestros"}:
-        assert calls.index("kubectl|apply -f -") < rollout
+    if service in FULL_MANIFEST_SERVICES:
+        service_manifest = f"kubectl|apply -f deploy/k8s/{service}/service.yaml"
+        assert calls.index(service_manifest) < calls.index("applied|Deployment") < rollout
         assert not any(" scale " in call for call in calls)
     else:
         scale = calls.index(f"kubectl|-n {service} scale deployment/{service} --replicas=1")
@@ -377,7 +420,24 @@ def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -
         assert not any("hpa.yaml" in call for call in calls)
     if service != "bff-web":
         assert not any(" patch " in call or "--local" in call for call in calls)
+    if service not in {"identidad", "notificaciones"}:
+        assert "applied|CronJob" not in calls
     assert "completado." in result.stdout
+
+
+def test_notification_scheduler_starts_only_after_successful_rollout() -> None:
+    result = run_deploy("notificaciones")
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = result.stderr.splitlines()
+    rollout = calls.index(
+        "kubectl|-n notificaciones rollout status deployment/notificaciones --timeout=300s"
+    )
+    assert calls.index("applied|Deployment") < rollout < calls.index("applied|CronJob")
+    failed = run_deploy("notificaciones", "rollout")
+    assert failed.returncode != 0
+    assert "Rollback de notificaciones confirmado." in failed.stderr
+    assert "applied|CronJob" not in failed.stderr
+    assert "completado." not in failed.stdout
 
 
 @pytest.mark.parametrize(
@@ -435,7 +495,120 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
     storage = next(item for item in environment if item["name"] == "SINIESTROS_STORAGE_ROOT")
     assert storage["value"] == "/var/lib/solventa/evidencias"
     assert container["volumeMounts"] == [{"name": "evidencias", "mountPath": "/var/lib/solventa"}]
-    assert pod["volumes"] == [
-        {"name": "evidencias", "persistentVolumeClaim": {"claimName": "siniestros-evidencias"}}
-    ]
+    assert pod["volumes"] == [{"name": "evidencias", "emptyDir": {"sizeLimit": "2Gi"}}]
     assert pod["securityContext"]["fsGroup"] == 10001
+
+
+def terraform_default(name: str) -> str:
+    variables = (PRIMARY / "variables.tf").read_text(encoding="utf-8")
+    block = variables.split(f'variable "{name}" {{', 1)[1].split("\n}", 1)[0]
+    match = re.search(r'default\s*=\s*"([^"]+)"', block)
+    assert match is not None, name
+    return match.group(1)
+
+
+def test_claims_evidence_bucket_and_irsa_role_match_terraform() -> None:
+    claims = re.sub(r"\s+", " ", (PRIMARY / "siniestros.tf").read_text(encoding="utf-8"))
+    assert 'bucket_name = "${var.name_prefix}-siniestros-evidencias-${var.account_id}"' in claims
+    assert (
+        's3_object_arns = ["${module.s3_siniestros_evidencias.bucket_arn}/evidencias/*"]' in claims
+    )
+    assert 'service_namespace = "siniestros" service_account_name = "siniestros"' in claims
+    storage = (ROOT / "services" / "siniestros" / "src" / "siniestros" / "storage.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'PREFIX = "evidencias/"' in storage
+    deployment = yaml.safe_load(
+        (K8S / "siniestros" / "deployment.yaml").read_text(encoding="utf-8")
+    )
+    pod = deployment["spec"]["template"]["spec"]
+    environment = {item["name"]: item.get("value") for item in pod["containers"][0]["env"]}
+    bucket = f"{terraform_default('name_prefix')}-siniestros-evidencias-"
+    assert environment["SINIESTROS_EVIDENCIAS_BUCKET"] == bucket + terraform_default("account_id")
+    assert environment["AWS_REGION"] == "${AWS_REGION}"
+    account = yaml.safe_load(
+        (K8S / "siniestros" / "serviceaccount.yaml").read_text(encoding="utf-8")
+    )
+    assert pod["serviceAccountName"] == account["metadata"]["name"] == "siniestros"
+    assert account["metadata"]["namespace"] == deployment["metadata"]["namespace"]
+    assert account["metadata"]["annotations"] == {"eks.amazonaws.com/role-arn": "${IRSA_ROLE_ARN}"}
+
+
+def test_internal_urls_point_to_declared_services() -> None:
+    declared: dict[tuple[str, str], set[int]] = {}
+    for path in K8S.rglob("service.yaml"):
+        service = yaml.safe_load(path.read_text(encoding="utf-8"))
+        key = (service["metadata"]["name"], service["metadata"]["namespace"])
+        declared[key] = {port["port"] for port in service["spec"]["ports"]}
+    pattern = re.compile(r"http://([a-z0-9-]+)\.([a-z0-9-]+)\.svc\.cluster\.local:(\d+)")
+    references = 0
+    for path in K8S.rglob("*.yaml"):
+        for name, namespace, port in pattern.findall(path.read_text(encoding="utf-8")):
+            references += 1
+            assert int(port) in declared.get((name, namespace), set()), (path, name, namespace)
+    assert references > 0
+
+
+def test_mobile_bff_reaches_new_services_with_shared_internal_token() -> None:
+    deployment = yaml.safe_load((K8S / "bff-movil" / "deployment.yaml").read_text(encoding="utf-8"))
+    environment = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    for service in NEW_SERVICES:
+        url = environment[f"{service.upper()}_SERVICE_URL"]["value"]
+        assert url == f"http://{service}.{service}.svc.cluster.local:8080"
+    assert environment["INTERNAL_API_TOKEN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "profiling-internal",
+        "key": "INTERNAL_API_TOKEN",
+    }
+
+
+@pytest.mark.parametrize("service", ["notificaciones", "asistencias"])
+def test_new_services_read_runtime_secret_and_migrate_with_same_url(service: str) -> None:
+    variable = f"{service.upper()}_DATABASE_URL"
+    reference = {"secretKeyRef": {"name": f"{service}-runtime", "key": variable}}
+    deployment = yaml.safe_load((K8S / service / "deployment.yaml").read_text(encoding="utf-8"))
+    job = yaml.safe_load((K8S / service / "migrate-job.yaml").read_text(encoding="utf-8"))
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    environment = {item["name"]: item for item in container["env"]}
+    assert environment[variable]["valueFrom"] == reference
+    assert environment["INTERNAL_API_TOKEN"]["valueFrom"] == {
+        "secretKeyRef": {"name": f"{service}-runtime", "key": "INTERNAL_API_TOKEN"}
+    }
+    migration = job["spec"]["template"]["spec"]["containers"][0]
+    assert migration["command"] == ["alembic", "upgrade", "head"]
+    assert migration["env"] == [{"name": variable, "valueFrom": reference}]
+    assert job["metadata"]["name"] == f"{service}-migrate-${{MIGRATION_ID}}"
+    migrations = (ROOT / "services" / service / "migrations" / "env.py").read_text(encoding="utf-8")
+    assert f'os.environ["{variable}"]' in migrations
+    assert "config.set_main_option(" not in migrations
+    assert "sqlalchemy.url" not in (ROOT / "services" / service / "alembic.ini").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_notification_scheduler_calls_internal_dispatch_with_service_token() -> None:
+    text = (K8S / "notificaciones" / "despachos-cronjob.yaml").read_text(encoding="utf-8")
+    # envsubst reemplazaria cualquier otra referencia y alteraria el script.
+    assert "$" not in text.replace("${IMAGE}", "")
+    cronjob = yaml.safe_load(text)
+    assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
+    pod = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    script = container["command"][-1]
+    compile(script, "despachos", "exec")
+    assert "http://notificaciones.notificaciones.svc.cluster.local:8080/v1/despachos" in script
+    app = (ROOT / "services" / "notificaciones" / "src" / "notificaciones" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert '@app.post("/v1/despachos")' in app
+    deployment = yaml.safe_load(
+        (K8S / "notificaciones" / "deployment.yaml").read_text(encoding="utf-8")
+    )
+    token = next(
+        item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        if item["name"] == "INTERNAL_API_TOKEN"
+    )
+    assert container["env"] == [token]

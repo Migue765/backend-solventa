@@ -30,8 +30,9 @@ Helm usa esa identidad para entrar al cluster.
 ## Pausa temporal de CodePipeline
 
 `cicd_automatic_triggers_enabled = false` (valor predeterminado en este ambiente)
-desactiva los disparadores por tags de los cinco pipelines: cotizacion, bff-web,
-bff-movil, identidad y polizas. `DetectChanges = "false"` se conserva para que
+desactiva los disparadores por tags de todos los pipelines: cotizacion, bff-web,
+bff-movil, identidad, polizas, perfilamiento, siniestros, notificaciones y
+asistencias. `DetectChanges = "false"` se conserva para que
 los cambios de rama tampoco inicien ejecuciones. No se eliminan pipelines,
 proyectos de CodeBuild ni recursos de la aplicacion desplegada.
 
@@ -51,15 +52,37 @@ Los patrones de tags originales se conservan.
 | Recurso | Tamaño | USD/mes |
 |---|---|---|
 | Control plane de EKS | 1 cluster | ~73 |
-| Nodos | 2 x t3.small | ~30 |
+| Nodos | 3 x t3.small | ~45 |
 | RDS PostgreSQL | db.t4g.micro, 20 GB, una zona | 0 en capa gratuita, ~15 después |
 | NAT Gateway | 1 (no es HA entre zonas) | ~36 + tráfico |
 | ALB interno | 1 | ~17 |
 | KMS, Secrets Manager, ECR, S3, SNS/SQS | uso mínimo | ~2 |
 
-Total orientativo: **~160 USD/mes** (~5 USD/día). El control plane de EKS, la NAT y el ALB **no**
+Total orientativo: **~175 USD/mes** (~6 USD/día). El control plane de EKS, la NAT y el ALB **no**
 están cubiertos por la capa gratuita. `t3.micro` no sirve como nodo: admite 4 pods y los pods de
-sistema ya ocupan ese cupo.
+sistema ya ocupan ese cupo. Cada `t3.small` admite 11 pods: con nueve APIs, los pods de sistema,
+los CronJobs y el pod extra de cada rollout, dos nodos no dejan margen.
+
+El node group ignora cambios de `desired_size`. Para pasar de 2 a 3 nodos, primero subir el
+tamaño con la CLI (mismo perfil y región que `kubeconfig_command`) y después aplicar el mismo
+valor en `terraform.tfvars`:
+
+```bash
+cluster="$(terraform output -raw cluster_name)"
+aws eks update-nodegroup-config --cluster-name "$cluster" \
+  --nodegroup-name "${cluster}-default" \
+  --scaling-config minSize=3,maxSize=3,desiredSize=3
+```
+
+## Evidencias de siniestros
+
+`siniestros.tf` crea el bucket `solventa-prod-siniestros-evidencias-<cuenta>` (SSE-KMS con la
+CMK, solo TLS, sin acceso público, versionado, sin Object Lock) y el rol IRSA
+`solventa-prod-siniestros`. El rol solo puede leer, escribir y borrar objetos bajo
+`evidencias/` de un bucket de esta cuenta; no puede borrar versiones. Un borrado deja un
+marcador y la versión previa se elimina definitivamente a los 7 días
+(`noncurrent_version_retention_days`). El output `siniestros_role_arn` es la anotación del
+ServiceAccount `siniestros/siniestros`.
 
 ## Antes del lanzamiento
 
@@ -75,4 +98,5 @@ terraform destroy
 
 El bucket de evidencias tiene Object Lock en GOVERNANCE con 1 día de retención: el `destroy` falla
 mientras existan versiones retenidas; espera a que expire o borra con
-`--bypass-governance-retention`. La base se destruye sin snapshot final.
+`--bypass-governance-retention`. El bucket de evidencias de siniestros no se vacía solo: el
+`destroy` falla mientras tenga objetos o versiones. La base se destruye sin snapshot final.

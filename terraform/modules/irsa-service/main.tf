@@ -1,5 +1,9 @@
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 locals {
   oidc_host = replace(var.oidc_issuer_url, "https://", "")
+  accede_s3 = length(var.s3_object_arns) > 0
 }
 
 data "aws_iam_policy_document" "assume" {
@@ -47,6 +51,41 @@ data "aws_iam_policy_document" "this" {
     sid       = "UsarCmk"
     actions   = ["kms:Decrypt", "kms:DescribeKey"]
     resources = [var.kms_key_arn]
+  }
+
+  # Sin s3:DeleteObjectVersion: un borrado deja un marcador y la version previa expira
+  # por el ciclo de vida del bucket. s3:ResourceAccount evita escribir en buckets ajenos
+  # con el mismo nombre.
+  dynamic "statement" {
+    for_each = local.accede_s3 ? [1] : []
+
+    content {
+      sid       = "ObjetosS3"
+      actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+      resources = var.s3_object_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "s3:ResourceAccount"
+        values   = [data.aws_caller_identity.current.account_id]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.accede_s3 ? [1] : []
+
+    content {
+      sid       = "CifrarObjetosS3"
+      actions   = ["kms:GenerateDataKey"]
+      resources = [var.kms_key_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["s3.${data.aws_region.current.name}.amazonaws.com"]
+      }
+    }
   }
 }
 

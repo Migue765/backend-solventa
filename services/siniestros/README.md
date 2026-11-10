@@ -1,17 +1,18 @@
 # Siniestros
 
-## Despliegue pendiente de infraestructura
+## Despliegue en AWS
 
-La preparacion de infraestructura de SOL-313/SOL-315 se conserva sin activarla.
-`deploy/codebuild/deploy.sh` rechaza `SERVICE_NAME=siniestros` antes de llamar a
-AWS, ejecutar migraciones o aplicar manifiestos. El servicio ya puede guardar la
-evidencia confirmada en S3 (ver [Persistencia y acceso](#persistencia-y-acceso));
-retirar el bloqueo requiere la entrega que provisione bucket, permisos IRSA y
-manifiestos, y validar PostgreSQL. El Deployment actual propone el PVC
-`siniestros-evidencias`, pero no lo provisiona ni acredita su durabilidad; no
-aplicarlo manualmente. El despliegue de BFF Web conserva su URL de Siniestros
-actual y no la redirige al servicio bloqueado. Sin bucket, no usar `emptyDir` ni
-el filesystem del contenedor como almacen de evidencias.
+El procedimiento esta en el [runbook de despliegue](../../deploy/k8s/siniestros/README.md).
+`terraform/environments/prod/primary/siniestros.tf` crea el bucket privado de evidencias
+y el rol IRSA del ServiceAccount `siniestros`. El servicio sube la evidencia confirmada
+con el SDK de AWS (ver [Persistencia y acceso](#persistencia-y-acceso)); el bucket no se
+monta como disco. El Deployment siempre configura `SINIESTROS_EVIDENCIAS_BUCKET` y usa
+un `emptyDir` de 2 GiB solo como staging de cargas en curso.
+`deploy/codebuild/deploy.sh` aplica Service y Deployment completos y se detiene antes de
+migrar si el ServiceAccount no tiene la anotacion `eks.amazonaws.com/role-arn`. El
+despliegue de BFF Web no cambia su `SINIESTROS_SERVICE_URL`: la activacion de los BFF
+es explicita y figura en el runbook. Sin bucket, no usar `emptyDir` ni el filesystem
+del contenedor como almacen de evidencias.
 
 La integracion usa `0002_estado_historial` del PR84, sin el historial JSON
 alternativo de la rama del PR85. Si se aplico esa migracion alternativa en una
@@ -199,7 +200,8 @@ El almacen durable de la evidencia confirmada depende de `SINIESTROS_EVIDENCIAS_
   si el bucket cifra con una CMK.
 - El bucket debe ser privado (bloqueo de acceso publico, propietario forzado y solo
   TLS), cifrado y versionado; el versionado recupera sobrescrituras o borrados
-  accidentales. No usar Object Lock: impediria borrar evidencia cancelada, rechazada
+  accidentales. En AWS, las versiones previas se eliminan definitivamente a los 7
+  dias. No usar Object Lock: impediria borrar evidencia cancelada, rechazada
   o cuya supresion se solicite por habeas data.
 - El staging es local al pod. Si el pod se reinicia, o una carga cambia de pod
   durante un despliegue, se pierden los fragmentos recibidos: el siguiente fragmento
@@ -214,7 +216,8 @@ validacion de formato; el cliente S3 usa 3 s de conexion, 10 s de lectura y 2
 intentos para responder 503 antes del timeout de 30 s del worker. Esta
 eleccion es explicita; la validacion local usa SQLite real y un cliente S3 simulado.
 No se ha certificado PostgreSQL, S3 real, failover, rendimiento, volumen distribuido
-ni durabilidad ante corte electrico en Windows. No se cambia infraestructura productiva.
+ni durabilidad ante corte electrico en Windows. PostgreSQL y S3 real quedan
+pendientes de la aceptacion del runbook de despliegue.
 
 ## Protocolo de carga
 
@@ -321,8 +324,8 @@ El criterio de 1.000.000 de eventos en diez minutos queda pendiente de una prueb
 capacidad por HTTP contra los pods y PostgreSQL del ambiente AWS, con limites reales de
 CPU/memoria, productores concurrentes, replicas del trabajador y metricas de
 backpressure. No se sustituye esa evidencia con una extrapolacion o benchmark SQLite
-local. Siniestros sigue bloqueado para despliegue hasta resolver el almacenamiento
-durable descrito al inicio de este README.
+local. El despliegue en AWS no incluye el trabajador ni fuentes parametricas
+configuradas, y no acredita este criterio.
 
 Variables:
 
