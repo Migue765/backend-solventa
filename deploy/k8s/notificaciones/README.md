@@ -27,8 +27,19 @@ como `proveedor_no_configurado` hasta que exista un adaptador.
    con `NOTIFICACIONES_DATABASE_URL` (driver `postgresql+psycopg`) y el mismo
    `INTERNAL_API_TOKEN` de Polizas, copiado byte a byte. El pipeline no crea ni
    obtiene secretos.
-4. Publicar un tag `notificaciones-v<version>` del release y seguir build, migracion
-   y rollout. El pipeline aplica `service.yaml`, `deployment.yaml` y el CronJob.
+4. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
+   estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
+   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   rollout. El pipeline aplica `service.yaml`, `deployment.yaml` y el CronJob.
+
+```bash
+aws codepipeline start-pipeline-execution \
+  --name solventa-prod-notificaciones --region us-east-2 \
+  --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
+```
+
+Al crearse, el pipeline puede lanzar una ejecucion sobre `main`. Mientras `main` no
+incluya este despliegue, esa ejecucion falla sin cambiar el cluster; no reintentarla.
 
 Verificacion: `kubectl -n notificaciones get pods,svc,cronjob`. Despues de 5 minutos,
 `kubectl -n notificaciones get jobs` debe mostrar una ejecucion completada de

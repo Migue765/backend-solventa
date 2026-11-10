@@ -51,9 +51,20 @@ cd ../../../../deploy/k8s/siniestros
 envsubst < serviceaccount.yaml | kubectl apply -f -
 ```
 
-5. Publicar un tag `siniestros-v<version>` del release y seguir build, migracion y
+5. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
+   estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
+   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml` y `deployment.yaml` y soporta el primer
    Deployment inexistente.
+
+```bash
+aws codepipeline start-pipeline-execution \
+  --name solventa-prod-siniestros --region us-east-2 \
+  --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
+```
+
+Al crearse, el pipeline puede lanzar una ejecucion sobre `main`. Mientras `main` no
+incluya este despliegue, esa ejecucion falla sin cambiar el cluster; no reintentarla.
 
 Verificacion: `kubectl -n siniestros get pods,svc` y, sin mostrar valores, que el pod
 recibio la identidad IRSA:

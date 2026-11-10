@@ -22,8 +22,19 @@ Medellin, solo para pruebas. No representan empresas reales.
    con `ASISTENCIAS_DATABASE_URL` (driver `postgresql+psycopg`) y el mismo
    `INTERNAL_API_TOKEN` de Polizas, copiado byte a byte y sin salto de linea final:
    Asistencias no recorta el valor. El pipeline no crea ni obtiene secretos.
-4. Publicar un tag `asistencias-v<version>` del release y seguir build, migracion y
+4. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
+   estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
+   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml` y `deployment.yaml`.
+
+```bash
+aws codepipeline start-pipeline-execution \
+  --name solventa-prod-asistencias --region us-east-2 \
+  --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
+```
+
+Al crearse, el pipeline puede lanzar una ejecucion sobre `main`. Mientras `main` no
+incluya este despliegue, esa ejecucion falla sin cambiar el cluster; no reintentarla.
 
 Verificacion: `kubectl -n asistencias get pods,svc`.
 
