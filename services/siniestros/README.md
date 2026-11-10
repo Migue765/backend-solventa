@@ -1,16 +1,17 @@
 # Siniestros
 
-## Despliegue pendiente de almacenamiento
+## Despliegue pendiente de infraestructura
 
 La preparacion de infraestructura de SOL-313/SOL-315 se conserva sin activarla.
 `deploy/codebuild/deploy.sh` rechaza `SERVICE_NAME=siniestros` antes de llamar a
-AWS, ejecutar migraciones o aplicar manifiestos. El Deployment propone el PVC
+AWS, ejecutar migraciones o aplicar manifiestos. El servicio ya puede guardar la
+evidencia confirmada en S3 (ver [Persistencia y acceso](#persistencia-y-acceso));
+retirar el bloqueo requiere la entrega que provisione bucket, permisos IRSA y
+manifiestos, y validar PostgreSQL. El Deployment actual propone el PVC
 `siniestros-evidencias`, pero no lo provisiona ni acredita su durabilidad; no
 aplicarlo manualmente. El despliegue de BFF Web conserva su URL de Siniestros
-actual y no la redirige al servicio bloqueado. No usar `emptyDir` ni el
-filesystem del contenedor como sustituto. Retirar el
-bloqueo requiere una entrega que defina persistencia, permisos, respaldo y
-recuperacion de evidencias y que valide PostgreSQL. Este PR no despliega recursos.
+actual y no la redirige al servicio bloqueado. Sin bucket, no usar `emptyDir` ni
+el filesystem del contenedor como almacen de evidencias.
 
 La integracion usa `0002_estado_historial` del PR84, sin el historial JSON
 alternativo de la rama del PR85. Si se aplico esa migracion alternativa en una
@@ -171,18 +172,49 @@ PostgreSQL; no hay base en memoria ni fallback automatico. El arranque no crea
 tablas: ejecutar la migracion antes de servir.
 
 `SINIESTROS_STORAGE_ROOT` es un directorio absoluto privado, fuera de las raices
-HTTP. Los archivos usan UUID del servidor, nunca nombres del cliente. El proceso
-debe ser su unico escritor. En POSIX se crean directorio/archivos con modos
-700/600; en Windows el operador debe restringir la ACL al usuario del servicio.
-Todos los workers deben compartir la misma base y el mismo volumen durable.
-No usar almacenamiento efimero de contenedor ni compartir el directorio por HTTP.
+HTTP, donde se reciben los fragmentos. Los archivos usan UUID del servidor, nunca
+nombres del cliente. El proceso debe ser su unico escritor. En POSIX se crean
+directorio/archivos con modos 700/600; en Windows el operador debe restringir la
+ACL al usuario del servicio. Todos los workers deben compartir la misma base y el
+mismo directorio. No compartir el directorio por HTTP.
+
+El almacen durable de la evidencia confirmada depende de `SINIESTROS_EVIDENCIAS_BUCKET`:
+
+- Sin bucket (por defecto), el directorio conserva la evidencia confirmada y debe
+  ser un volumen durable. No usar almacenamiento efimero de contenedor.
+- Con bucket, la confirmacion sube el archivo validado a
+  `evidencias/{siniestroId}/{cargaId}` con `x-amz-checksum-sha256` del SHA256
+  declarado, antes del commit: S3 rechaza bytes distintos y la carga solo queda
+  `confirmada` si existe la copia remota. Despues del commit se borra la copia
+  local y el directorio queda como staging (admite `emptyDir`). La descarga copia
+  el objeto a un temporal anonimo del directorio, verifica longitud y SHA256 y lo
+  borra al cerrar la respuesta. Cancelar o rechazar bytes borra primero el objeto
+  y despues el archivo local.
+- Un fallo de S3 responde 503 con `Retry-After`; la carga sigue `pendiente` con su
+  offset y el cliente reintenta la misma operacion. Si S3 acepto la copia y fallo
+  el commit, el reintento sobrescribe el mismo objeto y la cancelacion lo elimina.
+- Credenciales: cadena estandar del SDK de AWS (IRSA en EKS); `AWS_REGION` fija la
+  region. Permisos minimos: `s3:PutObject`, `s3:GetObject` y `s3:DeleteObject` sobre
+  `arn:aws:s3:::<bucket>/evidencias/*`, mas `kms:GenerateDataKey` y `kms:Decrypt`
+  si el bucket cifra con una CMK.
+- El bucket debe ser privado (bloqueo de acceso publico, propietario forzado y solo
+  TLS), cifrado y versionado; el versionado recupera sobrescrituras o borrados
+  accidentales. No usar Object Lock: impediria borrar evidencia cancelada, rechazada
+  o cuya supresion se solicite por habeas data.
+- El staging es local al pod. Si el pod se reinicia, o una carga cambia de pod
+  durante un despliegue, se pierden los fragmentos recibidos: el siguiente fragmento
+  o la confirmacion responden 503 y `GET .../cargas/{cargaId}` reinicia el offset a
+  cero (`reinicio_requerido`). Mantener una sola replica.
 
 La implementacion inicial serializa escrituras: `BEGIN IMMEDIATE` en SQLite y
 advisory lock transaccional en PostgreSQL. Cuota, clave idempotente y archivo quedan
-protegidos entre procesos, a cambio de limitar el paralelismo de cargas. Esta
-eleccion es explicita; la validacion local usa SQLite real. No se ha certificado
-PostgreSQL, failover, rendimiento, volumen distribuido ni durabilidad ante corte
-electrico en Windows. No se cambia infraestructura productiva.
+protegidos entre procesos, a cambio de limitar el paralelismo de cargas. Con bucket,
+la confirmacion tambien sube a S3 dentro de esa seccion, como ya ocurre con la
+validacion de formato; el cliente S3 usa 3 s de conexion, 10 s de lectura y 2
+intentos para responder 503 antes del timeout de 30 s del worker. Esta
+eleccion es explicita; la validacion local usa SQLite real y un cliente S3 simulado.
+No se ha certificado PostgreSQL, S3 real, failover, rendimiento, volumen distribuido
+ni durabilidad ante corte electrico en Windows. No se cambia infraestructura productiva.
 
 ## Protocolo de carga
 
@@ -325,7 +357,8 @@ parametros SQL ni datos del cuerpo.
 
 Instalar este proyecto junto con Identidad, Polizas y ambos BFF en un entorno
 virtual propio. Configurar `SINIESTROS_DATABASE_URL`, `SINIESTROS_STORAGE_ROOT`,
-`INTERNAL_API_TOKEN` y `POLIZAS_SERVICE_URL`. Luego:
+`INTERNAL_API_TOKEN` y `POLIZAS_SERVICE_URL`. `SINIESTROS_EVIDENCIAS_BUCKET` es
+opcional; sin el, la evidencia confirmada queda en el disco local. Luego:
 
 ```powershell
 python -m alembic -c services\siniestros\alembic.ini upgrade head

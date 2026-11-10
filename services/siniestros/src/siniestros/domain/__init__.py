@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
@@ -86,6 +87,7 @@ class Config:
     parametric_queue_capacity: int = 1_100_000
     parametric_batch_size: int = 5_000
     parametric_max_body_bytes: int = 16 * 1024 * 1024
+    evidence_bucket: str | None = None
 
     def __post_init__(self) -> None:
         if not self.internal_token.strip() or not self.database_url.strip():
@@ -99,6 +101,11 @@ class Config:
             raise ValueError("Evidence operations require a durable database.")
         if not self.storage_root.is_absolute():
             raise ValueError("SINIESTROS_STORAGE_ROOT must be an absolute private directory.")
+        if self.evidence_bucket is not None and (
+            not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", self.evidence_bucket)
+            or ".." in self.evidence_bucket
+        ):
+            raise ValueError("SINIESTROS_EVIDENCIAS_BUCKET must be a valid S3 bucket name.")
         if not self.policies_url.startswith(("http://", "https://")):
             raise ValueError("POLIZAS_SERVICE_URL must be an HTTP service URL.")
         if any(
@@ -163,6 +170,7 @@ class Config:
             parametric_max_body_bytes=int(
                 os.getenv("EVENTOS_PARAMETRICOS_MAX_BODY_BYTES", str(16 * 1024 * 1024))
             ),
+            evidence_bucket=os.getenv("SINIESTROS_EVIDENCIAS_BUCKET", "").strip() or None,
         )
 
     @property
