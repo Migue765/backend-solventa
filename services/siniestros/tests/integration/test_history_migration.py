@@ -23,7 +23,8 @@ def test_upload_offset_constraint_is_valid_for_postgresql() -> None:
 
     constraint = 'CHECK ("offset" >= 0 AND "offset" <= size)'
     assert constraint in output.getvalue()
-    assert constraint in str(CreateTable(Upload.__table__).compile(dialect=postgresql.dialect()))
+    table = Upload.metadata.tables[Upload.__tablename__]
+    assert constraint in str(CreateTable(table).compile(dialect=postgresql.dialect()))
 
 
 def test_upgrade_preserves_claims_replays_uploads_audit_and_private_bytes(tmp_path: Path) -> None:
