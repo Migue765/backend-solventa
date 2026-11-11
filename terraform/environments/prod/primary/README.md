@@ -27,6 +27,11 @@ terraform apply prod.tfplan
 Quien ejecuta debe ser el usuario IAM `Migue` (o estar en `eks_admin_principal_arns`): el provider de
 Helm usa esa identidad para entrar al cluster.
 
+El modulo EKS conserva los CIDR de `public_access_cidrs` y agrega `152.202.122.240/32`
+en el codigo del ambiente, sin duplicados. Asi, un `terraform.tfvars` anterior no elimina
+ese acceso. Ejecutar siempre desde una revision que incluya este ajuste; una revision
+anterior todavia puede quitarlo. Si cambia la IP publica del equipo, actualizar este CIDR.
+
 ## Pausa temporal de CodePipeline
 
 `cicd_automatic_triggers_enabled = false` (valor predeterminado en este ambiente)
