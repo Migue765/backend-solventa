@@ -63,7 +63,7 @@ def create_app(config: Config | None = None) -> Flask:
         if request.path.startswith("/internal/v1/"):
             if not hmac.compare_digest(
                 request.headers.get("Authorization", "").encode(),
-                "******".encode(),
+                f"Bearer {config.internal_token}".encode(),
             ):
                 raise Problem(401, "no_autorizado")
             if request.args:

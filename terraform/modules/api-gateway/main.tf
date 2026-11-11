@@ -326,7 +326,6 @@ resource "aws_apigatewayv2_api" "this" {
   name          = "${var.name}-api"
   protocol_type = "HTTP"
 
-  # El gateway responde solo los preflight OPTIONS (sin pasar por el authorizer).
   cors_configuration {
     allow_origins     = var.cors_allowed_origins
     allow_methods     = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
@@ -396,6 +395,21 @@ resource "aws_apigatewayv2_route" "movil" {
   target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
+}
+
+# Las rutas OPTIONS evitan que los proxies JWT bloqueen el preflight de CORS.
+resource "aws_apigatewayv2_route" "v1_options" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "OPTIONS /v1/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "movil_options" {
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "OPTIONS /movil/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
 }
 
 # ---- Rutas publicas (mas especificas que el proxy protegido) ----------------------------------

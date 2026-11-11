@@ -59,6 +59,19 @@ El ALB envia las rutas de usuarios, sesiones, productos, solicitudes y clientes 
 prioridad 10 ya contiene el maximo de cinco patrones. No se debe ampliar a `/v1/*`, pues
 eso desviaria tambien las rutas internas de cotizacion.
 
+Una vez integrada esta revision en la rama usada para produccion, si las rutas
+`OPTIONS /v1/{proxy+}` y `OPTIONS /movil/{proxy+}` ya existen fuera del estado de
+Terraform, importarlas antes de aplicar. Identificar sus IDs con
+`aws apigatewayv2 get-routes --api-id <api-id> --region us-east-2`, comprobar que no
+esten en `terraform state list` y ejecutar:
+
+```bash
+terraform import module.api_gateway.aws_apigatewayv2_route.v1_options <api-id>/<id-ruta-web>
+terraform import module.api_gateway.aws_apigatewayv2_route.movil_options <api-id>/<id-ruta-movil>
+```
+
+Revisar el plan despues de importar. Si las rutas no existen, Terraform las crea normalmente.
+
 Una integracion de PR no actualiza los contenedores de AWS. Para una validacion autorizada
 con una revision integrada de `develop`, se puede fijar el commit sin cambiar la rama
 `main` configurada ni los disparadores de los pipelines:

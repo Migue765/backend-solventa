@@ -22,10 +22,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from werkzeug.test import TestResponse
 
-INTERNAL_HEADERS = {"Authorization": "******"}
+CLIENT_HEADERS = {"Authorization": "Bearer siniestros-test-internal"}
+INTERNAL_HEADERS = CLIENT_HEADERS
 SOURCE = "ideam"
 SOURCE_HEADERS = {"Authorization": "Bearer fuente-segura", "X-Fuente-ID": SOURCE}
-CLIENT_HEADERS = {"Authorization": "Bearer siniestros-test-internal"}
 OCCURRED = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
 
 
@@ -49,6 +49,20 @@ def configured_app(tmp_path: Path, capacity: int = 1_100_000) -> Flask:
             parametric_queue_capacity=capacity,
         )
     )
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"Authorization": "*" * 6}, SOURCE_HEADERS],
+    ids=["ausente", "valor-fijo", "credencial-de-fuente"],
+)
+def test_operaciones_internas_exigen_credencial_configurada(
+    app: Flask, headers: dict[str, str]
+) -> None:
+    route = "/internal/v1/eventos-parametricos/procesamiento"
+    client = app.test_client()
+    assert client.post(route, headers=headers, json={"limite": 1}).status_code == 401
+    assert client.post(route, headers=CLIENT_HEADERS, json={"limite": 1}).status_code == 200
 
 
 def rule(

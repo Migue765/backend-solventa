@@ -305,6 +305,8 @@ con `Retry-After` y no acepta parcialmente. Los eventos ya aceptados permanecen 
 Las reglas son versiones inmutables y se registran por
 `POST /internal/v1/reglas-parametricas`. Para cada evento se elige la version numerica
 mas alta vigente de cada regla compatible con fuente, tipo, metrica, unidad y ubicacion.
+Las operaciones de reglas, procesamiento y casos exigen `INTERNAL_API_TOKEN` como Bearer;
+la recepcion usa la credencial propia de cada fuente.
 La decision durable es `valido`, `no_valido` o `sin_regla_vigente`; conserva evento,
 fuente, regla/version cuando aplica y fecha del servidor.
 

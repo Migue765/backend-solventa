@@ -38,7 +38,7 @@ def upgrade() -> None:
         sa.Column("created", sa.String(40), nullable=False),
         sa.Column("confirmed", sa.String(40), nullable=True),
         sa.UniqueConstraint("owner", "operation"),
-        sa.CheckConstraint("offset >= 0 AND offset <= size"),
+        sa.CheckConstraint('"offset" >= 0 AND "offset" <= size'),
         sa.CheckConstraint("status IN ('pendiente', 'confirmada', 'cancelada')"),
     )
     op.create_index("ix_cargas_siniestros_claim_id", "cargas_siniestros", ["claim_id"])
