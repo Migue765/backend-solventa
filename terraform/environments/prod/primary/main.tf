@@ -40,7 +40,7 @@ module "eks" {
   kubernetes_version   = var.kubernetes_version
   vpc_id               = module.network.vpc_id
   private_subnet_ids   = module.network.private_subnet_ids
-  public_access_cidrs  = var.public_access_cidrs
+  public_access_cidrs  = distinct(concat(var.public_access_cidrs, ["152.202.122.240/32"]))
   admin_principal_arns = var.eks_admin_principal_arns
   node_instance_types  = var.node_instance_types
   node_min_size        = var.node_min_size
