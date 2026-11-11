@@ -1,4 +1,5 @@
 import hashlib
+from io import StringIO
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -6,9 +7,23 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from siniestros.domain import ClaimInput, Config
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
-from siniestros.models import Audit
+from siniestros.models import Audit, Upload
 from siniestros.repository import Repository, fingerprint, make_engine
 from sqlalchemy import MetaData, Table, select, text
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateTable
+
+
+def test_upload_offset_constraint_is_valid_for_postgresql() -> None:
+    migration = AlembicConfig(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    output = StringIO()
+    migration.output_buffer = output
+    migration.set_main_option("sqlalchemy.url", "postgresql://localhost/siniestros")
+    command.upgrade(migration, "0001_siniestros", sql=True)
+
+    constraint = 'CHECK ("offset" >= 0 AND "offset" <= size)'
+    assert constraint in output.getvalue()
+    assert constraint in str(CreateTable(Upload.__table__).compile(dialect=postgresql.dialect()))
 
 
 def test_upgrade_preserves_claims_replays_uploads_audit_and_private_bytes(tmp_path: Path) -> None:

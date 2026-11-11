@@ -39,7 +39,7 @@ class Upload(Base):
     __tablename__ = "cargas_siniestros"
     __table_args__ = (
         UniqueConstraint("owner", "operation"),
-        CheckConstraint("offset >= 0 AND offset <= size"),
+        CheckConstraint('"offset" >= 0 AND "offset" <= size'),
         CheckConstraint("status IN ('pendiente', 'confirmada', 'cancelada')"),
     )
 
