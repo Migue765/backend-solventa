@@ -13,6 +13,7 @@ from bff_web.api import (
     mortgage_profiling,
     open_finance_exceptions,
     partner_quotes,
+    policy_renewals,
     quotes,
     sessions,
     users,
@@ -21,6 +22,7 @@ from bff_web.application.claim_ports import ClaimGateway
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.open_finance_exception_ports import OpenFinanceExceptionGateway
+from bff_web.application.policy_renewal_ports import PolicyRenewalGateway
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
@@ -40,6 +42,7 @@ from bff_web.infrastructure.http_open_finance_exception_gateway import (
     HttpOpenFinanceExceptionGateway,
 )
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
+from bff_web.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
@@ -56,6 +59,7 @@ def create_app(
     client_information_gateway: ClientInformationGateway | None = None,
     open_finance_exception_gateway: OpenFinanceExceptionGateway | None = None,
     claim_gateway: ClaimGateway | None = None,
+    policy_renewal_gateway: PolicyRenewalGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -111,6 +115,9 @@ def create_app(
     app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
         active_config.claims_service_url, active_config.internal_api_token
     )
+    app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or HttpPolicyRenewalGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
@@ -124,6 +131,7 @@ def create_app(
     app.register_blueprint(client_information.bp)
     app.register_blueprint(claims.bp)
     app.register_blueprint(claim_status.bp)
+    app.register_blueprint(policy_renewals.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

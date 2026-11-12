@@ -34,6 +34,7 @@ module = [
     "tests.claims_local_stack",
     "tests.test_claims_evidence_flow",
     "tests.test_claims_sync_results",
+    "tests.test_policy_renewal_flow",
 ]
 disable_error_code = ["import-untyped"]
 
