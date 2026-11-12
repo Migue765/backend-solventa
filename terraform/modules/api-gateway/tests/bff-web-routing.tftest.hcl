@@ -33,3 +33,34 @@ run "destinations_reach_bff_web" {
     error_message = "La nueva ruta no debe desplazar la regla web ni exceder sus cinco patrones."
   }
 }
+
+run "evidence_preflight_keeps_gateway_security" {
+  command = plan
+
+  assert {
+    condition = toset(one(aws_apigatewayv2_api.this.cors_configuration).allow_headers) == toset([
+      "authorization", "content-type", "idempotency-key", "x-correlation-id", "api-version", "upload-offset"
+    ])
+    error_message = "El preflight de carga debe permitir Upload-Offset sin ampliar los demas encabezados."
+  }
+
+  assert {
+    condition     = toset(one(aws_apigatewayv2_api.this.cors_configuration).allow_methods) == toset(["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    error_message = "El preflight de carga debe conservar los metodos autorizados."
+  }
+
+  assert {
+    condition     = toset(one(aws_apigatewayv2_api.this.cors_configuration).allow_origins) == toset(["https://jazmincorandes.github.io", "http://localhost:4200"]) && one(aws_apigatewayv2_api.this.cors_configuration).allow_credentials == false
+    error_message = "CORS debe conservar los origenes existentes sin credenciales ni comodines."
+  }
+
+  assert {
+    condition     = toset(one(aws_apigatewayv2_api.this.cors_configuration).expose_headers) == toset(["x-correlation-id", "retry-after", "date", "api-version", "location"])
+    error_message = "La carga no requiere exponer encabezados adicionales de respuesta."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.v1.authorization_type == "JWT" && aws_apigatewayv2_route.movil.authorization_type == "JWT"
+    error_message = "Las rutas web y movil deben seguir protegidas por JWT."
+  }
+}
