@@ -248,7 +248,7 @@ def test_pdf_with_innocent_structured_metadata_is_accepted(runtime: dict, channe
     writer.add_blank_page(width=100, height=100)
     writer.add_metadata(
         {
-            "/ecv-data": '{"location":"Bogota","showLocation":true}',
+            "/ecv-data": '{"location":{"city":"Bogota"},"showLocation":true,"scores":[-74.0,4.6]}',
             "/Title": "GPS and location in a travel document",
         }
     )
@@ -312,6 +312,7 @@ def test_image_with_innocent_text_metadata_is_accepted(runtime: dict, kind: str)
     [
         b"<exif:GPSLatitude>4,30N</exif:GPSLatitude>",
         b'<rdf:Description exif:GPSLongitude="74,00W"/>',
+        b"<exif:Location><exif:coordinates>-74.0,4.6</exif:coordinates></exif:Location>",
     ],
 )
 def test_xmp_coordinates_require_consent(runtime: dict, xmp: bytes) -> None:
@@ -360,6 +361,44 @@ def test_pdf_structured_location_coordinates_require_consent(runtime: dict, loca
     assert put(runtime, url, data)[0] == 200
     status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
     assert (status, problem["code"]) == (422, "ubicacion_no_autorizada")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        '{"location":{"coordinates":[-74.0,4.6]}}',
+        '{"location":{"places":[{"coordinates":[-74.0,4.6]}]}}',
+        '{"location":{"coordinates":"-74.0,4.6"}}',
+    ],
+)
+def test_nested_location_coordinates_require_consent(runtime: dict, metadata: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_metadata({"/ecv-data": metadata})
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    root, url, upload = start_upload(runtime, data, "application/pdf")
+    repo = runtime["app"].extensions["siniestros_repository"]
+    with repo.sessions() as session:
+        assert session.get(Upload, upload["id"]).location is None
+    assert put(runtime, url, data)[0] == 200
+    token = runtime["users"][0]["token"]
+    status, problem = call(url + "/confirmacion", "POST", token=token)
+    assert (status, problem.get("code")) == (422, "ubicacion_no_autorizada")
+    assert all(
+        item["id"] != upload["id"]
+        for item in call(root + "/evidencias", token=token)[1]["evidencias"]
+    )
+    location = {
+        "consentimiento": True,
+        "latitud": 4.6,
+        "longitud": -74,
+        "fecha": datetime.now(UTC).isoformat(),
+    }
+    _, allowed, _ = start_upload(runtime, data, "application/pdf", ubicacion=location)
+    assert put(runtime, allowed, data)[0] == 200
+    assert call(allowed + "/confirmacion", "POST", token=token)[0] == 200
 
 
 @pytest.mark.parametrize("kind", ["pdf", "png"])

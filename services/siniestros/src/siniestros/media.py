@@ -32,37 +32,30 @@ def _geo(value: Any, consent: bool) -> None:
         raise Problem(422, "ubicacion_no_autorizada")
 
 
-def _metadata_geo(value: Any, consent: bool, *, xmp: bool = False) -> None:
+def _metadata_geo(value: Any, consent: bool, *, xmp: bool = False, location: bool = False) -> None:
     if consent:
         return
     if isinstance(value, Mapping):
         for key, item in value.items():
             name = str(key).rsplit("}", 1)[-1]
             lower = name.lower().lstrip("/")
-            coordinate_pair = (
-                isinstance(item, (list, tuple))
-                and len(item) == 2
-                and all(
-                    isinstance(number, (int, float)) and not isinstance(number, bool)
-                    for number in item
-                )
-            )
-            if (
-                GEO_KEY.search(name)
-                or (
-                    lower in {"lat", "lon", "lng", "long"}
-                    and COORDINATE_VALUE.fullmatch(str(item).strip())
-                )
-                or (
-                    "location" in lower
-                    and (coordinate_pair or COORDINATES.fullmatch(str(item).strip()))
-                )
+            if GEO_KEY.search(name) or (
+                lower in {"lat", "lon", "lng", "long"}
+                and COORDINATE_VALUE.fullmatch(str(item).strip())
             ):
                 raise Problem(422, "ubicacion_no_autorizada")
-            _metadata_geo(item, consent, xmp="xmp" in name.lower())
+            _metadata_geo(
+                item, consent, xmp="xmp" in name.lower(), location=location or "location" in lower
+            )
     elif isinstance(value, (list, tuple)):
+        if (
+            location
+            and len(value) == 2
+            and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
+        ):
+            raise Problem(422, "ubicacion_no_autorizada")
         for item in value:
-            _metadata_geo(item, consent)
+            _metadata_geo(item, consent, location=location)
     elif isinstance(value, (str, bytes)):
         if isinstance(value, bytes):
             raw = value.lstrip()
@@ -76,6 +69,8 @@ def _metadata_geo(value: Any, consent: bool, *, xmp: bool = False) -> None:
         else:
             text = value.lstrip()
             raw = text.encode("utf-8")
+        if location and COORDINATES.fullmatch(text.strip()):
+            raise Problem(422, "ubicacion_no_autorizada")
         if text.startswith("<"):
             if b"<!doctype" in raw.replace(b"\x00", b"").lower():
                 raise Problem(422, "formato_invalido")
@@ -86,13 +81,23 @@ def _metadata_geo(value: Any, consent: bool, *, xmp: bool = False) -> None:
                     raise
                 _geo(value, consent)
                 return
-            for element in root.iter():
-                _metadata_geo({element.tag: element.text, **element.attrib}, consent)
+
+            def visit(element: ElementTree.Element, in_location: bool) -> None:
+                in_location = (
+                    in_location or "location" in str(element.tag).rsplit("}", 1)[-1].lower()
+                )
+                _metadata_geo(
+                    {element.tag: element.text, **element.attrib}, consent, location=in_location
+                )
+                for child in element:
+                    visit(child, in_location)
+
+            visit(root, location)
         elif xmp:
             raise Problem(422, "formato_invalido")
         elif text.startswith(("{", "[")):
             try:
-                _metadata_geo(json.loads(text), consent)
+                _metadata_geo(json.loads(text), consent, location=location)
             except json.JSONDecodeError:
                 _geo(value, consent)
         elif GEO_ASSIGNMENT.search(text) or LOCATION_ASSIGNMENT.search(text):
