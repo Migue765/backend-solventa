@@ -384,12 +384,11 @@ def test_nested_location_coordinates_require_consent(runtime: dict, metadata: st
         assert session.get(Upload, upload["id"]).location is None
     assert put(runtime, url, data)[0] == 200
     token = runtime["users"][0]["token"]
+    status, before = call(root + "/evidencias", token=token)
+    assert status == 200
     status, problem = call(url + "/confirmacion", "POST", token=token)
     assert (status, problem.get("code")) == (422, "ubicacion_no_autorizada")
-    assert all(
-        item["id"] != upload["id"]
-        for item in call(root + "/evidencias", token=token)[1]["evidencias"]
-    )
+    assert call(root + "/evidencias", token=token) == (200, before)
     location = {
         "consentimiento": True,
         "latitud": 4.6,
