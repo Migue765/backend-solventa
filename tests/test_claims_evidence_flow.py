@@ -493,6 +493,7 @@ def test_protected_pdf_reject_reconcile_cancel_and_replace(runtime: dict, channe
     first = runtime["users"][0]
     token = first["token"] if channel == "mobile" else first["webToken"]
     root = runtime[channel] + "/siniestros/" + first["claim"]["id"]
+    assert isinstance(root, str)
 
     def create(content: bytes) -> str:
         body = {
@@ -504,7 +505,9 @@ def test_protected_pdf_reject_reconcile_cancel_and_replace(runtime: dict, channe
             root + "/cargas", "POST", body, token, {"Idempotency-Key": str(uuid4())}
         )
         assert status == 201
-        url = root + "/cargas/" + upload["id"]
+        upload_id = upload["id"]
+        assert isinstance(upload_id, str)
+        url = root + "/cargas/" + upload_id
         assert (
             call(
                 url + "/contenido",
