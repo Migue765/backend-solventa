@@ -389,6 +389,24 @@ sin datos del caso. Fallo de red, timeout (0,8 s), credencial interna ausente, r
 incoherente o respuesta fuera de contrato devuelven `503` con `Retry-After`, nunca un
 estado ni un historial vacio. El BFF no calcula transiciones; solo valida la respuesta.
 
+### Renovacion de poliza (SOL-317, HU33)
+
+`GET /v1/clientes/me/polizas/{polizaId}/renovacion` y
+`POST /v1/clientes/me/polizas/{polizaId}/renovaciones` requieren JWT del canal Web, rol y
+scope `cliente`; el cliente procede del principal y se envia a Polizas como `X-Cliente-ID`
+(`POLIZAS_SERVICE_URL` + `INTERNAL_API_TOKEN`). GET no admite query ni cuerpo y devuelve
+elegibilidad, oferta y ultimo intento. POST exige `Idempotency-Key` UUID y
+`{aceptaCondiciones:true, condicionesHash}`; el BFF valida la aceptacion explicita y no
+calcula reglas, vigencias ni primas.
+
+El BFF propaga `201`/`200`/`202` (pendiente, con `Retry-After`) solo si la respuesta
+corresponde a la poliza, al hash aceptado y al estado informado. `404 poliza_no_encontrada`,
+`422 poliza_no_renovable` (con `motivo`) y `409` (`condiciones_cambiaron`,
+`idempotencia_conflictiva`, `renovacion_en_curso` con `renovacionId`) se publican como
+problemas. Timeout (0,8 s en consulta, 5 s en renovacion), credencial ausente o respuesta
+fuera de contrato devuelven `503`: no confirma ni descarta la renovacion, y se debe
+reintentar con la misma clave. Reglas y recuperacion: `services/polizas/README.md`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
@@ -554,6 +572,7 @@ para validar la vigencia con el reloj del servidor.
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
 | `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
+| `POLIZAS_SERVICE_URL`       | Sin valor; devuelve 503 | Servicio de polizas (renovacion)                     |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.

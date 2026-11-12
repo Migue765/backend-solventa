@@ -17,6 +17,7 @@ tags:
   - name: Asesores
   - name: Socios
   - name: Siniestros
+  - name: Polizas
 paths:
   /v1/siniestros:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
@@ -1423,6 +1424,100 @@ paths:
           $ref: "#/components/responses/NoEncontrado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/renovacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta la elegibilidad y las condiciones de renovacion de una poliza
+      operationId: consultarRenovacionPoliza
+      description: |
+        HU33 (SOL-317). El cliente se deriva exclusivamente del JWT; no admite query ni cuerpo.
+        Solo los productos de vigencia mensual son renovables, desde 15 dias antes del fin y
+        mientras la poliza este vigente. Si es renovable devuelve la oferta con nueva vigencia
+        contigua, coberturas, prima, condiciones y `condicionesHash`, que el cliente debe aceptar
+        explicitamente. `ultimoIntento` permite recuperar un resultado pendiente o rechazado.
+        Una poliza inexistente o de otro cliente responde el mismo 404.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad y oferta de renovacion
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ElegibilidadRenovacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/renovaciones:
+    post:
+      tags: [Polizas]
+      summary: Confirma la renovacion aceptada y procesa su pago simulado
+      operationId: renovarPoliza
+      description: |
+        HU33 (SOL-317), ASR-EMI-01 y ASR-FIN-01. Exige `aceptaCondiciones: true` y el
+        `condicionesHash` de la oferta vigente; si las condiciones cambiaron responde 409
+        `condiciones_cambiaron`. El intento se registra antes del cobro simulado y la nueva
+        vigencia solo se registra con el pago confirmado, sin crear otra poliza. Un pago
+        rechazado conserva la poliza original y deja el intento como `rechazada`. Si el
+        resultado del pago es ambiguo responde 202 `pendiente`: repetir con la misma
+        Idempotency-Key recupera el mismo intento y nunca genera un segundo cobro. Otra clave
+        para el mismo periodo responde 409 `renovacion_en_curso` con `renovacionId`.
+        201 = intento nuevo con resultado definitivo; 200 = reintento con la misma clave.
+        Un 503 no confirma ni descarta la renovacion: se debe reintentar con la misma clave.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudRenovacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el resultado registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "201":
+          description: Renovacion registrada como renovada o rechazada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "202":
+          description: Pago ambiguo; la renovacion queda pendiente de conciliacion
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
     bearerAuth:
@@ -1431,6 +1526,13 @@ components:
       bearerFormat: JWT
       description: Access token JWT RS256 emitido por identidad (dura 1 hora).
   parameters:
+    PolizaId:
+      name: polizaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     SolicitudId:
       name: solicitudId
       in: path
@@ -1531,6 +1633,203 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    PeriodoVigencia:
+      type: object
+      additionalProperties: false
+      required: [inicio, fin]
+      properties:
+        inicio:
+          type: string
+          format: date
+        fin:
+          type: string
+          format: date
+    CoberturaRenovacion:
+      type: object
+      additionalProperties: false
+      required: [nombre, descripcion]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+        descripcion:
+          type: string
+          minLength: 1
+    PrimaRenovacion:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda, periodicidad]
+      properties:
+        monto:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+          description: Valor entero en pesos, como texto para no perder precision.
+        moneda:
+          const: COP
+        periodicidad:
+          const: mensual
+    OfertaRenovacion:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - producto
+        - finAnterior
+        - nuevaVigencia
+        - coberturas
+        - prima
+        - condiciones
+        - requierePago
+        - reglaVersion
+        - condicionesHash
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        producto:
+          type: string
+        finAnterior:
+          type: string
+          format: date
+        nuevaVigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaRenovacion"
+        prima:
+          $ref: "#/components/schemas/PrimaRenovacion"
+        condiciones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        requierePago:
+          type: boolean
+        reglaVersion:
+          type: string
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    RenovacionPoliza:
+      type: object
+      additionalProperties: false
+      description: Intento de renovacion academica; `simulada` siempre es true.
+      required:
+        - id
+        - polizaId
+        - estado
+        - motivo
+        - finAnterior
+        - nuevaVigencia
+        - coberturas
+        - prima
+        - condiciones
+        - condicionesHash
+        - reglaVersion
+        - creadaEn
+        - actualizadaEn
+        - simulada
+      properties:
+        id:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        estado:
+          enum: [pendiente, renovada, rechazada]
+        motivo:
+          enum: [pago_rechazado, null]
+        finAnterior:
+          type: string
+          format: date
+        nuevaVigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaRenovacion"
+        prima:
+          $ref: "#/components/schemas/PrimaRenovacion"
+        condiciones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        reglaVersion:
+          type: string
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        simulada:
+          const: true
+    ElegibilidadRenovacion:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - vigenciaActual
+        - renovable
+        - motivo
+        - ventana
+        - oferta
+        - ultimoIntento
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        vigenciaActual:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        renovable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_renovable
+            - poliza_programada
+            - poliza_vencida
+            - fuera_de_ventana
+            - null
+        ventana:
+          type: object
+          additionalProperties: false
+          required: [desde, hasta]
+          properties:
+            desde:
+              type: string
+              format: date
+            hasta:
+              type: string
+              format: date
+        oferta:
+          oneOf:
+            - $ref: "#/components/schemas/OfertaRenovacion"
+            - type: "null"
+        ultimoIntento:
+          oneOf:
+            - $ref: "#/components/schemas/RenovacionPoliza"
+            - type: "null"
+    SolicitudRenovacion:
+      type: object
+      additionalProperties: false
+      required: [aceptaCondiciones, condicionesHash]
+      properties:
+        aceptaCondiciones:
+          const: true
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     EstadoSiniestro:
       type: object
       additionalProperties: false
@@ -4069,5 +4368,12 @@ components:
             $ref: "#/components/schemas/ErrorCampo"
         operacion:
           $ref: "#/components/schemas/EstadoOperacionInformacion"
+        motivo:
+          type: string
+          description: Motivo de negocio de `poliza_no_renovable`.
+        renovacionId:
+          type: [string, "null"]
+          format: uuid
+          description: Renovacion que ocupa el periodo en `renovacion_en_curso`.
 security:
   - bearerAuth: []

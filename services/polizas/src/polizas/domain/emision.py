@@ -70,10 +70,13 @@ class EvidenciaEmision(BaseModel):
         if self.fechas_contratadas is not None:
             return self.fechas_contratadas.inicio, self.fechas_contratadas.fin
         inicio = self.confirmada_en.astimezone(UTC).date()
-        anio = inicio.year + (inicio.month == 12)
-        mes = inicio.month % 12 + 1
-        fin = date(anio, mes, min(inicio.day, calendar.monthrange(anio, mes)[1]))
-        return inicio, fin
+        return inicio, mes_calendario_despues(inicio)
+
+
+def mes_calendario_despues(inicio: date) -> date:
+    anio = inicio.year + (inicio.month == 12)
+    mes = inicio.month % 12 + 1
+    return date(anio, mes, min(inicio.day, calendar.monthrange(anio, mes)[1]))
 
 
 def estado_vigencia(inicio: date, fin: date, ahora: datetime) -> str:
