@@ -281,7 +281,9 @@ escrito o fotografiado dentro del documento.
 lo registra el servidor. `ubicacion` requiere consentimiento booleano `true`,
 coordenadas en rango y `fecha` ISO con zona. Fechas de captura/ubicacion futuras
 mas de cinco minutos se rechazan. El backend rechaza GPS EXIF, bloques IPTC
-Photoshop, claves GPS/location de PNG/XMP/MP4/PDF y GeoPDF sin consentimiento.
+Photoshop, metadatos estructurados GPS o coordenadas en PNG/XMP/PDF y GeoPDF
+sin consentimiento; las palabras aisladas en texto y localidades sin coordenadas
+no se interpretan como GPS. La revision de MP4 conserva su politica anterior.
 El cliente debe quitar metadata geografica antes de calcular el hash cuando no
 tiene permiso. No se recomprime ni cambia el hash silenciosamente.
 
