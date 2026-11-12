@@ -8,6 +8,14 @@ override_resource {
   }
 }
 
+override_resource {
+  target          = aws_apigatewayv2_integration.alb
+  override_during = plan
+  values = {
+    id = "test-alb-integration"
+  }
+}
+
 variables {
   name                     = "solventa-test"
   vpc_id                   = "vpc-00000000000000000"
@@ -31,6 +39,30 @@ run "destinations_reach_bff_web" {
   assert {
     condition     = aws_lb_listener_rule.bff_web_destinations.priority == 11 && aws_lb_listener_rule.bff_web.priority == 10 && length(var.bff_web_path_patterns) == 5
     error_message = "La nueva ruta no debe desplazar la regla web ni exceder sus cinco patrones."
+  }
+}
+
+run "preflight_routes_do_not_require_jwt" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_apigatewayv2_route.v1_options.route_key == "OPTIONS /v1/{proxy+}" &&
+      aws_apigatewayv2_route.v1_options.authorization_type == "NONE" &&
+      aws_apigatewayv2_route.v1_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
+      aws_apigatewayv2_route.v1.authorization_type == "JWT"
+    )
+    error_message = "El preflight web debe ser publico sin quitar JWT de las demas solicitudes."
+  }
+
+  assert {
+    condition = (
+      aws_apigatewayv2_route.movil_options.route_key == "OPTIONS /movil/{proxy+}" &&
+      aws_apigatewayv2_route.movil_options.authorization_type == "NONE" &&
+      aws_apigatewayv2_route.movil_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
+      aws_apigatewayv2_route.movil.authorization_type == "JWT"
+    )
+    error_message = "El preflight movil debe ser publico sin quitar JWT de las demas solicitudes."
   }
 }
 
