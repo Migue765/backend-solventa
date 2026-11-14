@@ -73,6 +73,28 @@ Con runtime Autopilot aprobado, el comando a preparar sobre el nuevo JSON proteg
 `uvx iam-policy-autopilot@latest generate-policies RUTA_ABSOLUTA_PLAN_JSON --region us-east-2 --account 396383602233 --pretty`.
 No ejecutarlo hoy ni imprimir el plan, descargar binarios o subir policies.
 
+### Excepcion OIDC sin tags, solo en primary
+
+Primary pasa a `module.eks` el alias `aws.eks_explicit_tags`, con los mismos
+profile/region/allowed_account_ids y sin default_tags, y fija
+`oidc_provider_tags = {}`. Solo OIDC queda sin tags: los demas recursos EKS
+conservan sus tags explicitos y Name donde existe. Los otros modulos siguen con
+el provider original y sus default_tags. La guarda de cuenta/rol no cambia.
+Usar un alias solo para OIDC exigiria otro contrato de providers a los callers;
+el alias de EKS evita ese cambio y no mueve recursos ni cambia states.
+
+El parametro del modulo tiene default null: conserva var.tags para callers
+anteriores. Quitar solo los tags OIDC sin retirar default_tags no basta; el
+provider los volveria a incluir en tags_all. URL/IRSA/client IDs/thumbprints
+permanecen iguales. La excepcion busca no requerir TagOpenIDConnectProvider
+amplio: no concede Create ni acredita SCP/tag policies o el payload SDK en AWS.
+AWS5.100 normaliza tags vacios a null y deja tags_all del OIDC sin tags desconocido
+hasta apply. Las pruebas offline comprueban los tags/tags_all efectivos del RESTO
+de recursos EKS; no rellenan ese valor desconocido ni simulan su ausencia en AWS.
+Verificar la omision real de Tags y el resultado remoto en la ejecucion autorizada.
+Requiere plan protegido y Autopilot NUEVOS; el binario etiquetado previo no sirve.
+Sin autorizacion no crear/modificar ni retaggear ningun issuer.
+
 Especialista-Despliegue ejecuta cada fase solo con el plan, revision y autorizacion
 correspondientes. Antes de empezar faltan el perfil real de rol asumido, sus roles
 administradores EKS, CIDRs aprobados y confirmacion del plan de cuenta/servicios.

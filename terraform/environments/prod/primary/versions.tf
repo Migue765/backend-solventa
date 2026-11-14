@@ -33,6 +33,13 @@ provider "aws" {
   }
 }
 
+provider "aws" {
+  alias               = "eks_explicit_tags"
+  region              = var.aws_region
+  profile             = var.aws_profile
+  allowed_account_ids = [var.account_id]
+}
+
 data "aws_caller_identity" "deployment" {
   lifecycle {
     postcondition {

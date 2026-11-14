@@ -75,6 +75,52 @@ def test_primary_forwards_external_boundary_to_every_new_role() -> None:
     )
 
 
+def test_primary_oidc_exception_keeps_provider_guards_and_other_eks_tags() -> None:
+    versions = (PRIMARY / "versions.tf").read_text()
+    providers = re.findall(r'^provider "aws" \{\n(.*?)^\}', versions, re.M | re.S)
+    assert len(providers) == 2
+    for provider in providers:
+        for field, value in {
+            "region": "var.aws_region",
+            "profile": "var.aws_profile",
+            "allowed_account_ids": "[var.account_id]",
+        }.items():
+            assert re.search(rf"^\s*{field}\s*=\s*{re.escape(value)}$", provider, re.M)
+        if re.search(r'^\s*alias\s*=\s*"eks_explicit_tags"$', provider, re.M):
+            assert "default_tags" not in provider
+        else:
+            assert re.search(r"default_tags \{\s+tags\s*=\s*local.tags", provider)
+    assert 'startswith(self.arn, "arn:aws:sts::${var.account_id}:assumed-role/")' in versions
+    config = "\n".join(path.read_text() for path in PRIMARY.glob("*.tf"))
+    assert config.count("aws.eks_explicit_tags") == 1
+    eks = re.search(r'^module "eks" \{\n(.*?)^\}', config, re.M | re.S)
+    assert eks is not None
+    assert re.search(r"aws\s*=\s*aws.eks_explicit_tags", eks[1])
+    assert re.search(r"oidc_provider_tags\s*=\s*\{\}", eks[1])
+    assert re.search(r"^\s*tags\s*=\s*local.tags$", eks[1], re.M)
+    module = (ROOT / "terraform" / "modules" / "eks" / "main.tf").read_text()
+    tagged = {
+        f"{kind}.{name}": body
+        for kind, name, body in re.findall(
+            r'^resource "([^"]+)" "([^"]+)" \{\n(.*?)^\}', module, re.M | re.S
+        )
+        if re.search(r"^\s*tags\s*=", body, re.M)
+    }
+    assert set(tagged) == {
+        "aws_iam_role.cluster",
+        "aws_iam_role.node",
+        "aws_eks_cluster.this",
+        "aws_eks_access_entry.admin",
+        "aws_launch_template.node",
+        "aws_eks_node_group.default",
+        "aws_eks_addon.this",
+        "aws_iam_openid_connect_provider.this",
+    }, "Incluir cualquier recurso nuevo etiquetable en las assertions tags/tags_all offline."
+    for resource, body in tagged.items():
+        if resource not in {"aws_eks_cluster.this", "aws_iam_openid_connect_provider.this"}:
+            assert re.search(r"^\s*tags\s*=\s*var.tags$", body, re.M), resource
+
+
 @pytest.mark.parametrize("path", sorted(K8S.rglob("*.yaml")), ids=lambda p: str(p.relative_to(K8S)))
 def test_kubernetes_manifests_parse(path: Path) -> None:
     for manifest in yaml.safe_load_all(path.read_text(encoding="utf-8")):

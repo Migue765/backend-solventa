@@ -28,6 +28,12 @@ module "eks" {
   source                   = "../../../modules/eks"
   permissions_boundary_arn = var.permissions_boundary_arns.network
 
+  providers = {
+    aws = aws.eks_explicit_tags
+    tls = tls
+  }
+  oidc_provider_tags = {}
+
   cluster_name         = local.cluster_name
   kubernetes_version   = var.kubernetes_version
   vpc_id               = var.network_context.vpc_id

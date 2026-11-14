@@ -80,6 +80,12 @@ variable "permissions_boundary_arn" {
   default     = null
 }
 
+variable "oidc_provider_tags" {
+  description = "Tags OIDC explicitos; null conserva var.tags. {} requiere provider sin default_tags para quedar sin tags."
+  type        = map(string)
+  default     = null
+}
+
 variable "tags" {
   description = "Tags comunes."
   type        = map(string)

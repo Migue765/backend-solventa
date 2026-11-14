@@ -190,5 +190,5 @@ resource "aws_iam_openid_connect_provider" "this" {
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.oidc.certificates[0].sha1_fingerprint]
 
-  tags = var.tags
+  tags = var.oidc_provider_tags == null ? var.tags : var.oidc_provider_tags
 }
