@@ -1,0 +1,6 @@
+# State NUEVO y separado del primary y de Jenkins. Completar el perfil real.
+bucket              = "solventa-tfstate-396383602233"
+key                 = "environments/prod/addons/terraform.tfstate"
+region              = "us-east-2"
+profile             = "REEMPLAZAR_POR_PERFIL_DE_ROL_ASUMIDO"
+allowed_account_ids = ["396383602233"]

@@ -18,6 +18,11 @@ fi
 
 : "${CLUSTER_NAME:?}" "${NAMESPACE:?}" "${ECR_REPOSITORY_URL:?}" "${IMAGE_TAG:?}" "${AWS_REGION:?}"
 
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  : "${SINIESTROS_EVIDENCIAS_BUCKET:?Indicar el bucket de evidencias de esta cuenta}"
+  export SINIESTROS_EVIDENCIAS_BUCKET
+fi
+
 if [ "$NAMESPACE" = "hu11-perfilamiento" ]; then
   echo "HU11 esta retirado: no se permite recrear ni actualizar sus workloads." >&2
   exit 1

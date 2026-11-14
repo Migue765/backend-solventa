@@ -1,5 +1,10 @@
 # Manifiestos Kubernetes - bff-web
 
+Para una cuenta vacia seguir [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+dependencias, Deployment semilla sin pods, JWE y aceptacion antes del cutover web.
+En esa reconstruccion, diferir `targetgroupbinding.yaml` hasta completar la
+activacion privada de JWE; no aplicar todo el directorio en lote.
+
 Backend for Frontend de la web de clientes. Compone cotizaciones y delega la autenticacion en `identidad`
 (`http://identidad.identidad.svc.cluster.local:8080`). Mismo esquema que `deploy/k8s` (cotizacion): los manifiestos con
 variables `${...}` se sustituyen con `envsubst` a partir de los outputs de Terraform.

@@ -34,6 +34,47 @@ def service_directory(service: str) -> Path:
     return K8S if service == "cotizacion" else K8S / service
 
 
+def test_primary_forwards_external_boundary_to_every_new_role() -> None:
+    config = "\n".join(path.read_text() for path in PRIMARY.glob("*.tf"))
+    assert not re.search(r'^resource "aws_iam_role" ', config, re.M)
+    roles = {"network": 0, "ci": 0, "application": 0}
+    for name, body in re.findall(r'^module "([^"]+)" \{\n(.*?)^\}', config, re.M | re.S):
+        source = re.search(r'^\s*source\s*=\s*"([^"]+)"', body, re.M)
+        assert source is not None, name
+        directory = (PRIMARY / source[1]).resolve()
+        module = "\n".join(path.read_text() for path in directory.glob("*.tf"))
+        declared = re.findall(
+            r'^resource "aws_iam_role" "([^"]+)" \{\n(.*?)^\}', module, re.M | re.S
+        )
+        if not declared:
+            continue
+        for role_name, role in declared:
+            family = (
+                "ci"
+                if directory.name == "cicd"
+                else "network"
+                if directory.name == "eks" or role_name == "alb_controller"
+                else "application"
+            )
+            parameter = (
+                "alb_permissions_boundary_arn"
+                if role_name == "alb_controller"
+                else "permissions_boundary_arn"
+            )
+            assert re.search(
+                rf"^\s*{parameter}\s*=\s*var\.permissions_boundary_arns\.{family}\s*$",
+                body,
+                re.M,
+            ), name
+            assert re.search(rf"^\s*permissions_boundary\s*=\s*var\.{parameter}\s*$", role, re.M), (
+                name
+            )
+            roles[family] += 1
+    assert roles == {"network": 3, "ci": 27, "application": 3}, (
+        "Revisar el inventario completo si cambian los roles de esta reconstruccion."
+    )
+
+
 @pytest.mark.parametrize("path", sorted(K8S.rglob("*.yaml")), ids=lambda p: str(p.relative_to(K8S)))
 def test_kubernetes_manifests_parse(path: Path) -> None:
     for manifest in yaml.safe_load_all(path.read_text(encoding="utf-8")):
@@ -91,6 +132,7 @@ def run_deploy(
     namespace: str | None = None,
     migrate: bool = False,
     service_account_role: str = IRSA_ROLE,
+    evidence_bucket: str = "solventa-test-siniestros-evidencias-123456789012",
 ) -> subprocess.CompletedProcess[str]:
     bash = shutil.which("bash")
     if bash is None:
@@ -149,6 +191,7 @@ source "$1"
             "KUBECTL_LOCAL": kubectl,
             "PREVIOUS_IMAGE": previous,
             "SERVICE_ACCOUNT_ROLE": service_account_role,
+            "SINIESTROS_EVIDENCIAS_BUCKET": evidence_bucket,
         },
         text=True,
         capture_output=True,
@@ -499,14 +542,6 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
     assert pod["securityContext"]["fsGroup"] == 10001
 
 
-def terraform_default(name: str) -> str:
-    variables = (PRIMARY / "variables.tf").read_text(encoding="utf-8")
-    block = variables.split(f'variable "{name}" {{', 1)[1].split("\n}", 1)[0]
-    match = re.search(r'default\s*=\s*"([^"]+)"', block)
-    assert match is not None, name
-    return match.group(1)
-
-
 def test_claims_evidence_bucket_and_irsa_role_match_terraform() -> None:
     claims = re.sub(r"\s+", " ", (PRIMARY / "siniestros.tf").read_text(encoding="utf-8"))
     assert 'bucket_name = "${var.name_prefix}-siniestros-evidencias-${var.account_id}"' in claims
@@ -523,8 +558,11 @@ def test_claims_evidence_bucket_and_irsa_role_match_terraform() -> None:
     )
     pod = deployment["spec"]["template"]["spec"]
     environment = {item["name"]: item.get("value") for item in pod["containers"][0]["env"]}
-    bucket = f"{terraform_default('name_prefix')}-siniestros-evidencias-"
-    assert environment["SINIESTROS_EVIDENCIAS_BUCKET"] == bucket + terraform_default("account_id")
+    assert environment["SINIESTROS_EVIDENCIAS_BUCKET"] == "${SINIESTROS_EVIDENCIAS_BUCKET}"
+    assert "siniestros_evidence_bucket = module.s3_siniestros_evidencias.bucket_name" in claims
+    pipeline = (ROOT / "terraform/modules/cicd/main.tf").read_text(encoding="utf-8")
+    assert 'name  = "SINIESTROS_EVIDENCIAS_BUCKET"' in pipeline
+    assert "value = environment_variable.value" in pipeline
     assert environment["AWS_REGION"] == "${AWS_REGION}"
     account = yaml.safe_load(
         (K8S / "siniestros" / "serviceaccount.yaml").read_text(encoding="utf-8")
@@ -532,6 +570,42 @@ def test_claims_evidence_bucket_and_irsa_role_match_terraform() -> None:
     assert pod["serviceAccountName"] == account["metadata"]["name"] == "siniestros"
     assert account["metadata"]["namespace"] == deployment["metadata"]["namespace"]
     assert account["metadata"]["annotations"] == {"eks.amazonaws.com/role-arn": "${IRSA_ROLE_ARN}"}
+
+
+def test_claims_missing_bucket_fails_before_aws_or_kubernetes() -> None:
+    result = run_deploy("siniestros", evidence_bucket="")
+    assert result.returncode != 0
+    assert "Indicar el bucket de evidencias de esta cuenta" in result.stderr
+    assert "aws|" not in result.stderr
+    assert "kubectl|" not in result.stderr
+
+
+def test_claims_manifest_renders_the_selected_account_bucket() -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash no disponible")
+    bucket = "solventa-test-siniestros-evidencias-123456789012"
+    result = subprocess.run(
+        [
+            bash,
+            "-c",
+            "command -v envsubst >/dev/null || exit 77; "
+            "envsubst '${SINIESTROS_EVIDENCIAS_BUCKET}' < deploy/k8s/siniestros/deployment.yaml",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "SINIESTROS_EVIDENCIAS_BUCKET": bucket},
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode == 77:
+        pytest.skip("envsubst no disponible para renderizado local")
+    assert result.returncode == 0, result.stderr
+    deployment = yaml.safe_load(result.stdout)
+    environment = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    selected = next(item for item in environment if item["name"] == "SINIESTROS_EVIDENCIAS_BUCKET")
+    assert selected["value"] == bucket
 
 
 def test_internal_urls_point_to_declared_services() -> None:

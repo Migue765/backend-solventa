@@ -1,5 +1,6 @@
 locals {
-  id = "${var.name}-redis"
+  id                = "${var.name}-redis"
+  security_group_id = var.existing_security_group_id != null ? var.existing_security_group_id : one(aws_security_group.redis[*].id)
 }
 
 resource "aws_elasticache_subnet_group" "this" {
@@ -10,6 +11,8 @@ resource "aws_elasticache_subnet_group" "this" {
 }
 
 resource "aws_security_group" "redis" {
+  count = var.existing_security_group_id == null ? 1 : 0
+
   name        = "${local.id}-sg"
   description = "Redis ${var.name}: solo desde los nodos EKS"
   vpc_id      = var.vpc_id
@@ -17,10 +20,15 @@ resource "aws_security_group" "redis" {
   tags = merge(var.tags, { Name = "${local.id}-sg" })
 }
 
+moved {
+  from = aws_security_group.redis
+  to   = aws_security_group.redis[0]
+}
+
 resource "aws_vpc_security_group_ingress_rule" "from_eks" {
   count = length(var.allowed_security_group_ids)
 
-  security_group_id            = aws_security_group.redis.id
+  security_group_id            = local.security_group_id
   referenced_security_group_id = var.allowed_security_group_ids[count.index]
   ip_protocol                  = "tcp"
   from_port                    = 6379
@@ -50,7 +58,7 @@ resource "aws_elasticache_replication_group" "this" {
   multi_az_enabled           = false
 
   subnet_group_name  = aws_elasticache_subnet_group.this.name
-  security_group_ids = [aws_security_group.redis.id]
+  security_group_ids = [local.security_group_id]
 
   at_rest_encryption_enabled = true
   kms_key_id                 = var.kms_key_arn

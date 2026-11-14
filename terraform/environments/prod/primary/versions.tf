@@ -6,10 +6,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.17"
-    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
@@ -20,13 +16,8 @@ terraform {
     }
   }
 
-  # El bucket lo crea terraform/bootstrap (solventa-tfstate-<account_id>).
-  # Los backends no admiten variables: ajustar bucket/profile si cambian.
+  # Completar con -backend-config; no reutilizar el state de otra cuenta.
   backend "s3" {
-    bucket       = "solventa-tfstate-976083331509"
-    key          = "environments/prod/primary/terraform.tfstate"
-    region       = "us-east-2"
-    profile      = "tesis"
     encrypt      = true
     use_lockfile = true
   }
@@ -42,20 +33,11 @@ provider "aws" {
   }
 }
 
-provider "helm" {
-  kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args = [
-        "eks", "get-token",
-        "--cluster-name", module.eks.cluster_name,
-        "--region", var.aws_region,
-        "--profile", var.aws_profile,
-      ]
+data "aws_caller_identity" "deployment" {
+  lifecycle {
+    postcondition {
+      condition     = startswith(self.arn, "arn:aws:sts::${var.account_id}:assumed-role/")
+      error_message = "Terraform requiere un perfil de rol asumido de la cuenta autorizada; no usar root ni usuarios IAM."
     }
   }
 }

@@ -45,6 +45,12 @@ variable "kms_key_arn" {
   type        = string
 }
 
+variable "permissions_boundary_arn" {
+  description = "Boundary existente administrada fuera de este modulo; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Tags comunes."
   type        = map(string)

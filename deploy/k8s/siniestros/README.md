@@ -21,9 +21,9 @@ El bucket cifra con la CMK del entorno, exige TLS, bloquea el acceso publico y t
 versionado sin Object Lock: una version sobrescrita o borrada se recupera durante 7
 dias y despues se elimina definitivamente. El rol IRSA solo permite `s3:PutObject`,
 `s3:GetObject` y `s3:DeleteObject` sobre `evidencias/*`, mas el uso de la CMK; no
-puede borrar versiones. `deployment.yaml` repite el nombre del bucket en
-`SINIESTROS_EVIDENCIAS_BUCKET` y las pruebas de infraestructura lo comparan con
-Terraform.
+puede borrar versiones. `deployment.yaml` recibe `${SINIESTROS_EVIDENCIAS_BUCKET}`:
+Terraform pasa el bucket real a CodeBuild y `deploy.sh` exige esa variable antes
+de invocar AWS o Kubernetes. El nombre no queda anclado a otra cuenta.
 
 No se despliega el trabajador parametrico ni se configura `FUENTES_PARAMETRICAS_JSON`:
 sin fuentes, la recepcion de eventos parametricos responde 401 a cualquier solicitud.
@@ -32,8 +32,10 @@ sin fuentes, la recepcion de eventos parametricos responde 401 a cualquier solic
 
 1. Aplicar Terraform desde la rama integrada, incluido el tercer nodo (ver
    `terraform/environments/prod/primary/README.md`). Comprobar el bucket:
-   `terraform output -raw siniestros_evidence_bucket` debe coincidir con
-   `SINIESTROS_EVIDENCIAS_BUCKET` de `deployment.yaml`.
+   `terraform output -raw siniestros_evidence_bucket` debe coincidir con el valor
+   de `SINIESTROS_EVIDENCIAS_BUCKET` del proyecto CodeBuild de despliegue.
+   Para renderizado manual autorizado, exportar ese output junto con `AWS_REGION`
+   e `IMAGE`, sin sustituir el placeholder por un bucket de otra cuenta.
 2. Crear una base PostgreSQL propia y un usuario con permisos solo sobre ella
    mediante el procedimiento de bases aprobado, sin imprimir credenciales ni
    versionarlas. No compartir tablas ni usar SQLite.
@@ -53,13 +55,14 @@ envsubst < serviceaccount.yaml | kubectl apply -f -
 
 5. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
    estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
-   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   y la configuracion nueva exige aprobacion manual antes de Deploy. Revisar la
+   ejecucion y aprobarla solo con prerrequisitos listos. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml` y `deployment.yaml` y soporta el primer
    Deployment inexistente.
 
 ```bash
 aws codepipeline start-pipeline-execution \
-  --name solventa-prod-siniestros --region us-east-2 \
+  --name solventa-prod-siniestros --profile "$AWS_PROFILE" --region us-east-2 \
   --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
 ```
 

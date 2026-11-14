@@ -51,7 +51,7 @@ spec:
             # terraform output siniestros_evidence_bucket. Sin bucket la evidencia
             # confirmada quedaria en el emptyDir y se perderia al reiniciar el pod.
             - name: SINIESTROS_EVIDENCIAS_BUCKET
-              value: solventa-prod-siniestros-evidencias-976083331509
+              value: ${SINIESTROS_EVIDENCIAS_BUCKET}
             - name: SINIESTROS_STORAGE_ROOT
               value: /var/lib/solventa/evidencias
           volumeMounts:

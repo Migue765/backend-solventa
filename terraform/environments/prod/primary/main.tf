@@ -3,19 +3,10 @@ locals {
     Project     = "solventa"
     Environment = var.environment
     ManagedBy   = "terraform"
+    Component   = "backend"
   }
 
   cluster_name = "${var.name_prefix}-eks"
-}
-
-module "network" {
-  source = "../../../modules/network"
-
-  name         = var.name_prefix
-  vpc_cidr     = var.vpc_cidr
-  az_count     = 2
-  cluster_name = local.cluster_name
-  tags         = local.tags
 }
 
 module "kms" {
@@ -34,13 +25,14 @@ module "ecr" {
 }
 
 module "eks" {
-  source = "../../../modules/eks"
+  source                   = "../../../modules/eks"
+  permissions_boundary_arn = var.permissions_boundary_arns.network
 
   cluster_name         = local.cluster_name
   kubernetes_version   = var.kubernetes_version
-  vpc_id               = module.network.vpc_id
-  private_subnet_ids   = module.network.private_subnet_ids
-  public_access_cidrs  = distinct(concat(var.public_access_cidrs, ["152.202.122.240/32"]))
+  vpc_id               = var.network_context.vpc_id
+  private_subnet_ids   = var.network_context.private_subnet_ids
+  public_access_cidrs  = var.public_access_cidrs
   admin_principal_arns = var.eks_admin_principal_arns
   node_instance_types  = var.node_instance_types
   node_min_size        = var.node_min_size
@@ -53,8 +45,9 @@ module "database" {
   source = "../../../modules/rds-postgres"
 
   name                       = var.name_prefix
-  vpc_id                     = module.network.vpc_id
-  subnet_ids                 = module.network.private_subnet_ids
+  vpc_id                     = var.network_context.vpc_id
+  subnet_ids                 = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.db
   allowed_security_group_ids = [module.eks.node_security_group_id]
   kms_key_arn                = module.kms.key_arn
   identifier                 = var.name_prefix
@@ -85,7 +78,9 @@ module "messaging" {
 }
 
 module "iam_irsa" {
-  source = "../../../modules/iam-irsa"
+  source                       = "../../../modules/iam-irsa"
+  permissions_boundary_arn     = var.permissions_boundary_arns.application
+  alb_permissions_boundary_arn = var.permissions_boundary_arns.network
 
   name                 = var.name_prefix
   oidc_provider_arn    = module.eks.oidc_provider_arn
@@ -111,8 +106,9 @@ module "redis" {
   source = "../../../modules/elasticache-redis"
 
   name                       = var.name_prefix
-  vpc_id                     = module.network.vpc_id
-  subnet_ids                 = module.network.private_subnet_ids
+  vpc_id                     = var.network_context.vpc_id
+  subnet_ids                 = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.redis
   allowed_security_group_ids = [module.eks.node_security_group_id]
   kms_key_arn                = module.kms.key_arn
   node_type                  = var.redis_node_type
@@ -146,7 +142,8 @@ module "jwt_key" {
 
 # identidad es el unico servicio nuevo con acceso a la base de usuarios, a Redis y a la clave JWT.
 module "iam_irsa_identidad" {
-  source = "../../../modules/irsa-service"
+  source                   = "../../../modules/irsa-service"
+  permissions_boundary_arn = var.permissions_boundary_arns.application
 
   name                 = "${var.name_prefix}-identidad"
   oidc_provider_arn    = module.eks.oidc_provider_arn
@@ -161,9 +158,13 @@ module "iam_irsa_identidad" {
 module "api_gateway" {
   source = "../../../modules/api-gateway"
 
-  name                     = var.name_prefix
-  vpc_id                   = module.network.vpc_id
-  private_subnet_ids       = module.network.private_subnet_ids
+  name               = var.name_prefix
+  vpc_id             = var.network_context.vpc_id
+  private_subnet_ids = var.network_context.private_subnet_ids
+  existing_security_group_ids = {
+    alb      = var.network_context.security_group_ids.alb
+    vpc_link = var.network_context.security_group_ids.vpc_link
+  }
   target_security_group_id = module.eks.node_security_group_id
   listener_protocol        = var.api_listener_protocol
   certificate_arn          = var.api_certificate_arn
@@ -176,144 +177,104 @@ module "api_gateway" {
 }
 
 module "cicd" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  require_manual_approval   = var.require_manual_approval
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = var.service_namespace
-  ecr_repository_arn        = module.ecr.repository_arn
-  ecr_repository_url        = module.ecr.repository_url
-  tags                      = local.tags
+  name                       = var.name_prefix
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  require_manual_approval    = var.require_manual_approval
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.cotizacion
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = var.service_namespace
+  ecr_repository_arn         = module.ecr.repository_arn
+  ecr_repository_url         = module.ecr.repository_url
+  tags                       = local.tags
 }
 
 # Segundo pipeline (bff-web): reutiliza la conexion con GitHub de cotizacion, pero con
 # bucket, roles y SG propios (resource_prefix) y un patron de tag disjunto del de cotizacion.
 # No migra: los BFF no tienen base de datos (los usuarios los migra identidad).
 module "cicd_bff_web" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  service_name              = "bff-web"
-  resource_prefix           = "${var.name_prefix}-bff-web"
-  github_connection_arn     = module.cicd.connection_arn
-  run_migrations            = false
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  release_tag_patterns      = var.bff_web_release_tag_patterns
-  require_manual_approval   = var.require_manual_approval
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = var.bff_web_namespace
-  ecr_repository_arn        = module.ecr_bff_web.repository_arn
-  ecr_repository_url        = module.ecr_bff_web.repository_url
-  tags                      = local.tags
+  name                       = var.name_prefix
+  service_name               = "bff-web"
+  resource_prefix            = "${var.name_prefix}-bff-web"
+  github_connection_arn      = module.cicd.connection_arn
+  run_migrations             = false
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  release_tag_patterns       = var.bff_web_release_tag_patterns
+  require_manual_approval    = var.require_manual_approval
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.bff-web
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = var.bff_web_namespace
+  ecr_repository_arn         = module.ecr_bff_web.repository_arn
+  ecr_repository_url         = module.ecr_bff_web.repository_url
+  tags                       = local.tags
 }
 
 # Tercer pipeline (bff-movil): misma conexion con GitHub, tag bff-movil-v* y sin migraciones.
 module "cicd_bff_movil" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  service_name              = "bff-movil"
-  resource_prefix           = "${var.name_prefix}-bff-movil"
-  github_connection_arn     = module.cicd.connection_arn
-  run_migrations            = false
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  release_tag_patterns      = var.bff_movil_release_tag_patterns
-  require_manual_approval   = var.require_manual_approval
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = var.bff_movil_namespace
-  ecr_repository_arn        = module.ecr_bff_movil.repository_arn
-  ecr_repository_url        = module.ecr_bff_movil.repository_url
-  tags                      = local.tags
+  name                       = var.name_prefix
+  service_name               = "bff-movil"
+  resource_prefix            = "${var.name_prefix}-bff-movil"
+  github_connection_arn      = module.cicd.connection_arn
+  run_migrations             = false
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  release_tag_patterns       = var.bff_movil_release_tag_patterns
+  require_manual_approval    = var.require_manual_approval
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.bff-movil
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = var.bff_movil_namespace
+  ecr_repository_arn         = module.ecr_bff_movil.repository_arn
+  ecr_repository_url         = module.ecr_bff_movil.repository_url
+  tags                       = local.tags
 }
 
 # Cuarto pipeline (identidad): tag identidad-v*, con migraciones (dueno de la tabla usuarios).
 module "cicd_identidad" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  service_name              = "identidad"
-  resource_prefix           = "${var.name_prefix}-identidad"
-  github_connection_arn     = module.cicd.connection_arn
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  release_tag_patterns      = var.identidad_release_tag_patterns
-  require_manual_approval   = var.require_manual_approval
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = var.identidad_namespace
-  ecr_repository_arn        = module.ecr_identidad.repository_arn
-  ecr_repository_url        = module.ecr_identidad.repository_url
-  tags                      = local.tags
-}
-
-# ---------------------------------------------------------------------------
-# Controladores en el cluster (Helm)
-# ---------------------------------------------------------------------------
-resource "helm_release" "aws_load_balancer_controller" {
-  name       = "aws-load-balancer-controller"
-  namespace  = "kube-system"
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  version    = var.alb_controller_chart_version
-
-  set {
-    name  = "clusterName"
-    value = module.eks.cluster_name
-  }
-
-  set {
-    name  = "region"
-    value = var.aws_region
-  }
-
-  set {
-    name  = "vpcId"
-    value = module.network.vpc_id
-  }
-
-  set {
-    name  = "serviceAccount.name"
-    value = "aws-load-balancer-controller"
-  }
-
-  set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.iam_irsa.alb_controller_role_arn
-  }
-
-  depends_on = [module.eks]
-}
-
-resource "helm_release" "metrics_server" {
-  name       = "metrics-server"
-  namespace  = "kube-system"
-  repository = "https://kubernetes-sigs.github.io/metrics-server/"
-  chart      = "metrics-server"
-  version    = var.metrics_server_chart_version
-
-  depends_on = [module.eks]
+  name                       = var.name_prefix
+  service_name               = "identidad"
+  resource_prefix            = "${var.name_prefix}-identidad"
+  github_connection_arn      = module.cicd.connection_arn
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  release_tag_patterns       = var.identidad_release_tag_patterns
+  require_manual_approval    = var.require_manual_approval
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.identidad
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = var.identidad_namespace
+  ecr_repository_arn         = module.ecr_identidad.repository_arn
+  ecr_repository_url         = module.ecr_identidad.repository_url
+  tags                       = local.tags
 }

@@ -1,5 +1,9 @@
 # Manifiestos Kubernetes - identidad
 
+Para una cuenta vacia usar [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+bases/Secrets nuevos y addons antes de consumidores. No copiar datos o secretos
+del origen ni ejecutar sus procedimientos de mantenimiento durante el arranque.
+
 Servicio del contexto *Identidad y Cliente*: dueno de los usuarios, verifica credenciales y emite los JWT (RS256).
 Los BFF le delegan la autenticacion por el DNS interno `http://identidad.identidad.svc.cluster.local:8080`.
 Hacia internet solo se publica `/.well-known/openid-configuration` y `/.well-known/jwks.json` (a traves del API
@@ -74,33 +78,35 @@ Si el discovery no responde o su `issuer` no coincide con `$JWT_ISSUER`, el auth
 
 ## Esquema de base de datos
 
-`DB_SCHEMA=identidad`: las tablas viven en un esquema propio de `solventa_prod` (un esquema aislado por dominio).
-La migracion debe crearlo (`CREATE SCHEMA IF NOT EXISTS identidad`). Si no lo hace, crearlo una vez a mano con las
-credenciales master antes del primer Job de migracion.
+`DB_SCHEMA=identidad`: las tablas viven en un esquema propio en la base destino.
+El Job crea el esquema si falta (`CREATE SCHEMA IF NOT EXISTS identidad`).
+El operador autorizado debe preparar propiedad y permisos del usuario de aplicacion
+antes del Job. Ante permisos insuficientes, detener y corregir esa preparacion;
+no sustituir el DSN runtime por credenciales master.
 
 ## Secreto `identidad-config`
 
-Lee tres valores de Secrets Manager (el rol IRSA del servicio ya puede leerlos):
+Requiere tres valores nuevos del destino, entregados por el operador autorizado:
 
-- Base: `terraform output -raw db_secret_arn` (credenciales master generadas por RDS).
+- Base: DSN `postgresql+psycopg://` de un usuario de aplicacion, con TLS/CA revisados;
+  no usar las credenciales master generadas por RDS como usuario runtime.
 - Redis: `terraform output -raw redis_secret_arn` (JSON con `auth_token`, `host`, `port` y `url`; `url` ya es
   `rediss://:<token>@<endpoint>:6379/0`). Se usa para el limitador de intentos de login.
 - Clave JWT: `terraform output -raw jwt_key_secret_arn` (clave privada RSA en formato PEM).
 
 ```bash
-cd terraform/environments/prod/primary
-get() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text \
-  --profile tesis --region us-east-2; }
-DB_SECRET=$(get "$(terraform output -raw db_secret_arn)")
-DB_USER=$(echo "$DB_SECRET" | jq -r .username)
-DB_PASS=$(echo "$DB_SECRET" | jq -r .password | jq -sRr @uri)
-REDIS_URL=$(get "$(terraform output -raw redis_secret_arn)" | jq -r .url)
-
-kubectl -n identidad create secret generic identidad-config \
-  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/solventa_prod" \
-  --from-literal=REDIS_URL="${REDIS_URL}" \
-  --from-file=JWT_PRIVATE_KEY=<(get "$(terraform output -raw jwt_key_secret_arn)")
+set -euo pipefail
+: "${CONTEXT:?}" "${DATABASE_URL_FILE:?}" "${REDIS_URL_FILE:?}" "${JWT_PRIVATE_KEY_FILE:?}"
+kubectl --context "$CONTEXT" -n identidad create secret generic identidad-config \
+  --from-file=DATABASE_URL="$DATABASE_URL_FILE" \
+  --from-file=REDIS_URL="$REDIS_URL_FILE" \
+  --from-file=JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY_FILE" --dry-run=client -o yaml |
+  kubectl --context "$CONTEXT" -n identidad apply -f -
 ```
+
+Los archivos nuevos viven fuera de Git con acceso restringido; no imprimir su
+contenido, el YAML ni habilitar `set -x`. JWE usa un Secret independiente, no
+esta clave JWT; prepararlo y verificarlo segun `docs/operacion-login-cifrado.md`.
 
 La contrasena de RDS rota y el Secret queda desactualizado: hay que volver a sincronizarlo (o usar External Secrets).
 El auth token de Redis no rota solo.

@@ -20,7 +20,7 @@ output "alb_dns_name" {
 
 output "alb_security_group_id" {
   description = "SG del ALB interno."
-  value       = aws_security_group.alb.id
+  value       = local.alb_security_group_id
 }
 
 output "target_group_arn" {

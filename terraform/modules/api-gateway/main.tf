@@ -1,12 +1,16 @@
 locals {
-  https         = var.listener_protocol == "HTTPS"
-  listener_port = local.https ? 443 : 80
+  https                      = var.listener_protocol == "HTTPS"
+  listener_port              = local.https ? 443 : 80
+  alb_security_group_id      = var.existing_security_group_ids != null ? var.existing_security_group_ids.alb : one(aws_security_group.alb[*].id)
+  vpc_link_security_group_id = var.existing_security_group_ids != null ? var.existing_security_group_ids.vpc_link : one(aws_security_group.vpc_link[*].id)
 }
 
 # ---------------------------------------------------------------------------
 # Security groups
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "vpc_link" {
+  count = var.existing_security_group_ids == null ? 1 : 0
+
   name        = "${var.name}-vpclink"
   description = "VPC Link de API Gateway hacia el ALB interno"
   vpc_id      = var.vpc_id
@@ -15,6 +19,8 @@ resource "aws_security_group" "vpc_link" {
 }
 
 resource "aws_security_group" "alb" {
+  count = var.existing_security_group_ids == null ? 1 : 0
+
   name        = "${var.name}-alb-internal"
   description = "ALB interno: solo acepta trafico del VPC Link"
   vpc_id      = var.vpc_id
@@ -22,9 +28,19 @@ resource "aws_security_group" "alb" {
   tags = merge(var.tags, { Name = "${var.name}-alb-internal" })
 }
 
+moved {
+  from = aws_security_group.vpc_link
+  to   = aws_security_group.vpc_link[0]
+}
+
+moved {
+  from = aws_security_group.alb
+  to   = aws_security_group.alb[0]
+}
+
 resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
-  security_group_id            = aws_security_group.vpc_link.id
-  referenced_security_group_id = aws_security_group.alb.id
+  security_group_id            = local.vpc_link_security_group_id
+  referenced_security_group_id = local.alb_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = local.listener_port
   to_port                      = local.listener_port
@@ -32,8 +48,8 @@ resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link" {
-  security_group_id            = aws_security_group.alb.id
-  referenced_security_group_id = aws_security_group.vpc_link.id
+  security_group_id            = local.alb_security_group_id
+  referenced_security_group_id = local.vpc_link_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = local.listener_port
   to_port                      = local.listener_port
@@ -41,7 +57,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_targets" {
-  security_group_id            = aws_security_group.alb.id
+  security_group_id            = local.alb_security_group_id
   referenced_security_group_id = var.target_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = var.target_port
@@ -51,7 +67,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_targets" {
 
 resource "aws_vpc_security_group_ingress_rule" "targets_from_alb" {
   security_group_id            = var.target_security_group_id
-  referenced_security_group_id = aws_security_group.alb.id
+  referenced_security_group_id = local.alb_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = var.target_port
   to_port                      = var.target_port
@@ -65,7 +81,7 @@ resource "aws_lb" "internal" {
   name                       = "${var.name}-internal"
   internal                   = true
   load_balancer_type         = "application"
-  security_groups            = [aws_security_group.alb.id]
+  security_groups            = [local.alb_security_group_id]
   subnets                    = var.private_subnet_ids
   drop_invalid_header_fields = true
 
@@ -340,7 +356,7 @@ resource "aws_apigatewayv2_api" "this" {
 
 resource "aws_apigatewayv2_vpc_link" "this" {
   name               = "${var.name}-vpclink"
-  security_group_ids = [aws_security_group.vpc_link.id]
+  security_group_ids = [local.vpc_link_security_group_id]
   subnet_ids         = var.private_subnet_ids
 
   tags = var.tags
