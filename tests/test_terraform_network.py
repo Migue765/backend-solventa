@@ -5,8 +5,29 @@ import shutil
 import subprocess
 from copy import deepcopy
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
+
+
+class SecurityGroupIds(TypedDict):
+    db: str
+    redis: str
+    alb: str
+    vpc_link: str
+    cicd: dict[str, str]
+
+
+class NetworkContext(TypedDict):
+    account_id: str
+    region: str
+    name_prefix: str
+    vpc_id: str
+    vpc_arn: str
+    public_subnet_ids: list[str]
+    private_subnet_ids: list[str]
+    security_group_ids: SecurityGroupIds
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIMARY = ROOT / "terraform" / "environments" / "prod" / "primary"
@@ -71,7 +92,7 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
         "terraform {\n  required_providers {\n    aws = {\n"
         '      source = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n'
     )
-    context = {
+    context: NetworkContext = {
         "account_id": "396383602233",
         "region": "us-east-2",
         "name_prefix": "solventa-prod",
@@ -101,7 +122,14 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
             for service in SERVICES
         },
     }
-    metadata = {
+    group_ids = {
+        "db": context["security_group_ids"]["db"],
+        "redis": context["security_group_ids"]["redis"],
+        "alb": context["security_group_ids"]["alb"],
+        "vpc_link": context["security_group_ids"]["vpc_link"],
+        **{f"cicd-{service}": id for service, id in context["security_group_ids"]["cicd"].items()},
+    }
+    metadata: dict[str, dict[str, str | dict[str, str]]] = {
         "data.aws_vpc.network": {
             "owner_id": context["account_id"],
             "arn": context["vpc_arn"],
@@ -114,14 +142,7 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
         },
         **{
             f'data.aws_security_group.network["{key}"]': {
-                "arn": (
-                    "arn:aws:ec2:us-east-2:396383602233:security-group/"
-                    + (
-                        context["security_group_ids"]["cicd"][key.removeprefix("cicd-")]
-                        if key.startswith("cicd-")
-                        else context["security_group_ids"][key]
-                    )
-                ),
+                "arn": f"arn:aws:ec2:us-east-2:396383602233:security-group/{group_ids[key]}",
                 "vpc_id": context["vpc_id"],
                 "name": name,
             }
@@ -134,8 +155,11 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
                 "availability_zone": f"us-east-2{'ab'[index]}",
                 "tags": {"Tier": tier},
             }
-            for tier in ("public", "private")
-            for index, id in enumerate(context[f"{tier}_subnet_ids"])
+            for tier, subnet_ids in (
+                ("public", context["public_subnet_ids"]),
+                ("private", context["private_subnet_ids"]),
+            )
+            for index, id in enumerate(subnet_ids)
         },
     }
     db = 'data.aws_security_group.network["db"]'
@@ -144,7 +168,7 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
         family: f"arn:aws:iam::396383602233:policy/test-{family}-boundary"
         for family in ("network", "ci", "application")
     }
-    cases = (
+    cases: tuple[tuple[str, str | None, str | None, str | dict[str, str] | None], ...] = (
         ("valid", None, None, None),
         ("foreign_group_vpc", db, "vpc_id", "vpc-00000000000000000"),
         (
@@ -188,10 +212,13 @@ def test_network_context_metadata_fails_closed_offline(tmp_path: Path) -> None:
             if key == "duplicate_group":
                 inputs["security_group_ids"]["db"] = inputs["security_group_ids"]["redis"]
             else:
-                inputs[key] = value
+                assert key == "account_id" and isinstance(value, str)
+                inputs["account_id"] = value
         elif target == "var.permissions_boundary_arns":
+            assert key is not None and isinstance(value, str)
             family_inputs[key] = value
         elif target:
+            assert key is not None and value is not None
             responses[target][key] = value
         variables = {
             "network_context": inputs,
