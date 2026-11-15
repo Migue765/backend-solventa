@@ -338,6 +338,32 @@ Variables:
 - `EVENTOS_PARAMETRICOS_LOTE`: lote del trabajador, maximo 5.000.
 - `EVENTOS_PARAMETRICOS_MAX_BODY_BYTES`: limite del cuerpo de recepcion.
 
+## HU31: pagos parametricos
+
+HU31 consume los casos validos de HU30 dentro del servicio Siniestros. Cada version de
+regla define `beneficiarioId`, `montoIndemnizacion` y `moneda`; HU30 sella esos valores
+en el caso junto con evento, regla, version y siniestro. Un caso sin decision valida,
+siniestro parametrico aprobado o datos financieros validos no ordena un pago.
+
+El pago es un simulador academico con efecto durable. Antes de ejecutar consulta si la
+operacion ya produjo un efecto, conserva una clave idempotente por caso y registra cada
+intento. Si se pierde una respuesta despues de guardar el efecto, el intento queda
+ambiguo y la siguiente conciliacion recupera la confirmacion sin repetir la
+indemnizacion. Solo una confirmacion cambia el siniestro a `pagado`.
+
+Los endpoints internos son:
+
+- `POST /internal/v1/pagos-parametricos/procesamiento`: incorpora y procesa casos.
+- `POST /internal/v1/pagos-parametricos/conciliacion`: reintenta operaciones pendientes.
+- `GET /internal/v1/pagos-parametricos/casos/{casoId}`: reconstruye evento, regla,
+  siniestro, operacion e intentos.
+
+El trabajador continuo se ejecuta por separado:
+
+```powershell
+python -m siniestros.payment_worker --limit 100
+```
+
 ## Errores
 
 | HTTP | `code` |
