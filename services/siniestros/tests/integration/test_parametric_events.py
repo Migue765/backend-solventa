@@ -11,11 +11,23 @@ from alembic.config import Config as AlembicConfig
 from flask import Flask
 from siniestros.app import create_app
 from siniestros.domain import Config
+from siniestros.domain.pagos_parametricos import (
+    CasoPagoParametrico,
+    RespuestaPagoAmbigua,
+    ResultadoProveedorPago,
+)
+from siniestros.infrastructure.pagos_parametricos import (
+    ProcesadorPagosParametricos,
+    SimuladorPagoParametrico,
+)
 from siniestros.models import (
     AutomaticPaymentCase,
     Claim,
     ParametricDecision,
     ParametricEvent,
+    ParametricPayment,
+    ParametricPaymentAttempt,
+    ParametricPaymentEffect,
     ParametricQueueState,
 )
 from sqlalchemy import func, select
@@ -83,6 +95,9 @@ def rule(
         "ubicacionCodigo": "CO-ANT-001",
         "clienteId": str(uuid4()),
         "polizaId": str(uuid4()),
+        "beneficiarioId": str(uuid4()),
+        "montoIndemnizacion": "250000.00",
+        "moneda": "COP",
         "vigenteDesde": "2026-01-01T00:00:00Z",
         "vigenteHasta": "2027-01-01T00:00:00Z",
     }
@@ -123,6 +138,25 @@ def process(app: Flask, limit: int = 5_000) -> TestResponse:
     )
 
 
+def prepare_payment_case(app: Flask, configured_rule: dict[str, object] | None = None) -> dict:
+    selected_rule = configured_rule or rule()
+    register_rule(app, selected_rule)
+    receive(app, event())
+    assert process(app).get_json() == {"casosValidos": 1, "procesados": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        case = session.scalar(select(AutomaticPaymentCase))
+        assert case is not None
+        return dict(case.payload)
+
+
+def process_payments(app: Flask, limit: int = 10) -> TestResponse:
+    return app.test_client().post(
+        "/internal/v1/pagos-parametricos/procesamiento",
+        headers=INTERNAL_HEADERS,
+        json={"limite": limit},
+    )
+
+
 def test_procesa_evento_con_regla_vigente_y_entrega_caso_a_hu31(app: Flask) -> None:
     configured_rule = rule()
     register_rule(app, configured_rule)
@@ -146,6 +180,8 @@ def test_procesa_evento_con_regla_vigente_y_entrega_caso_a_hu31(app: Flask) -> N
     assert cases[0]["fuente"] == SOURCE
     assert cases[0]["reglaId"] == configured_rule["reglaId"]
     assert cases[0]["reglaVersion"] == 1
+    assert cases[0]["beneficiarioId"] == configured_rule["beneficiarioId"]
+    assert cases[0]["indemnizacion"] == {"monto": "250000.00", "moneda": "COP"}
 
     claim = app.test_client().get(
         f"/v1/siniestros/{cases[0]['siniestroId']}/estado",
@@ -349,6 +385,193 @@ def test_evento_sin_regla_conserva_decision_explicita(app: Flask) -> None:
         assert decision.regla_version is None
 
 
+def test_hu31_paga_caso_validado_y_actualiza_siniestro(app: Flask) -> None:
+    case = prepare_payment_case(app)
+
+    response = process_payments(app)
+    detail = app.test_client().get(
+        f"/internal/v1/pagos-parametricos/casos/{case['casoId']}",
+        headers=INTERNAL_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "casosIncorporados": 1,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    assert detail.status_code == 200
+    payment = detail.get_json()
+    assert payment["casoId"] == case["casoId"]
+    assert payment["siniestroId"] == case["siniestroId"]
+    assert payment["evento"]["eventoId"] == case["eventoId"]
+    assert payment["regla"] == {
+        "reglaId": case["reglaId"],
+        "version": case["reglaVersion"],
+    }
+    assert payment["estado"] == "confirmado"
+    assert payment["intentos"][0]["estado"] == "confirmado"
+
+    claim = app.test_client().get(
+        f"/v1/siniestros/{case['siniestroId']}/estado",
+        headers={**CLIENT_HEADERS, "X-Cliente-ID": case["clienteId"]},
+    )
+    assert claim.status_code == 200
+    assert claim.get_json()["estado"] == "pagado"
+
+
+def test_hu31_redelivery_no_duplica_pago_efecto_intento_ni_indemnizacion(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+
+    for _ in range(3):
+        assert process_payments(app).get_json() == {
+            "casosIncorporados": 0,
+            "confirmados": 0,
+            "rechazados": 0,
+            "pendientes": 0,
+        }
+
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 1
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentAttempt)) == 1
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "pagado"
+
+
+def test_hu31_no_ordena_pago_de_caso_no_validado(app: Flask) -> None:
+    configured_rule = rule(threshold=100)
+    register_rule(app, configured_rule)
+    receive(app, event(value=80))
+    assert process(app).get_json() == {"casosValidos": 0, "procesados": 1}
+
+    assert process_payments(app).get_json() == {
+        "casosIncorporados": 0,
+        "confirmados": 0,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+
+
+def test_hu31_rechaza_regla_sin_beneficiario_o_monto_valido(app: Flask) -> None:
+    missing_beneficiary = rule()
+    missing_beneficiary.pop("beneficiarioId")
+    invalid_amount = {**rule(), "montoIndemnizacion": "0.00"}
+
+    client = app.test_client()
+    first = client.post(
+        "/internal/v1/reglas-parametricas",
+        headers=INTERNAL_HEADERS,
+        json=missing_beneficiary,
+    )
+    second = client.post(
+        "/internal/v1/reglas-parametricas",
+        headers=INTERNAL_HEADERS,
+        json=invalid_amount,
+    )
+
+    assert first.status_code == second.status_code == 400
+    assert first.get_json()["code"] == second.get_json()["code"] == "solicitud_invalida"
+
+
+def test_hu31_diagnostica_caso_historico_sin_datos_y_no_lo_reintenta(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        stored.payload = {
+            key: value
+            for key, value in stored.payload.items()
+            if key not in {"beneficiarioId", "indemnizacion"}
+        }
+
+    first = process_payments(app)
+    replay = process_payments(app)
+
+    assert first.get_json()["casosIncorporados"] == 0
+    assert replay.get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        assert stored.rechazado_en is not None
+        assert stored.ultimo_error == "datos_financieros_invalidos"
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+
+
+def test_hu31_concilia_ack_perdido_sin_repetir_efecto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    simulated = SimuladorPagoParametrico(repository)
+    clock = [datetime.now(UTC)]
+
+    class LostAcknowledgement:
+        def __init__(self) -> None:
+            self.executions = 0
+
+        def consultar(self, pago_id: UUID, huella: str) -> ResultadoProveedorPago | None:
+            return simulated.consultar(pago_id, huella)
+
+        def ejecutar(
+            self,
+            pago_id: UUID,
+            payment_case: CasoPagoParametrico,
+            huella: str,
+        ) -> ResultadoProveedorPago:
+            self.executions += 1
+            simulated.ejecutar(pago_id, payment_case, huella)
+            raise RespuestaPagoAmbigua("ack_perdido")
+
+    provider = LostAcknowledgement()
+    processor = ProcesadorPagosParametricos(repository, provider, lambda: clock[0])
+
+    assert processor.procesar(10) == {
+        "casosIncorporados": 1,
+        "confirmados": 0,
+        "rechazados": 0,
+        "pendientes": 1,
+    }
+    clock[0] += timedelta(seconds=3)
+    assert processor.procesar(10) == {
+        "casosIncorporados": 0,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    assert provider.executions == 1
+
+    detail = processor.detalle(UUID(case["casoId"]))
+    assert detail["estado"] == "confirmado"
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert [attempt["estado"] for attempt in attempts] == [
+        "ambiguo",
+        "confirmado",
+    ]
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+
+
+def test_hu31_conserva_rechazo_definitivo_sin_marcar_siniestro_pagado(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    provider = SimuladorPagoParametrico(repository, ResultadoProveedorPago.RECHAZADO)
+    processor = ProcesadorPagosParametricos(repository, provider)
+
+    assert processor.procesar(10)["rechazados"] == 1
+    detail = processor.detalle(UUID(case["casoId"]))
+    assert detail["estado"] == "rechazado"
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert attempts[0]["estado"] == "rechazado"
+    with Session(app.extensions["siniestros_engine"]) as session:
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "aprobado"
+
+
 def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     contract_path = (
         Path(__file__).resolve().parents[4]
@@ -368,3 +591,8 @@ def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     )
     assert "/casos-pago-automatico/pendientes" in contract["paths"]
     assert "/casos-pago-automatico/{casoId}/confirmacion" in contract["paths"]
+    assert "/pagos-parametricos/procesamiento" in contract["paths"]
+    assert "/pagos-parametricos/conciliacion" in contract["paths"]
+    assert "/pagos-parametricos/casos/{casoId}" in contract["paths"]
+    required_rule_fields = contract["components"]["schemas"]["Regla"]["required"]
+    assert {"beneficiarioId", "montoIndemnizacion", "moneda"} <= set(required_rule_fields)
