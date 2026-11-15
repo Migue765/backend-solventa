@@ -58,3 +58,51 @@ class PagoRenovacionModel(Base):
     moneda: Mapped[str] = mapped_column(String(3))
     resultado: Mapped[str] = mapped_column(String(20))
     evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class VersionPolizaModel(Base):
+    """Instantanea historica de condiciones; nunca se actualiza ni se borra (D-09)."""
+
+    __tablename__ = "versiones_poliza"
+
+    poliza_id: Mapped[UUID] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(primary_key=True)
+    plan: Mapped[str] = mapped_column(String(20))
+    coberturas: Mapped[list[str]] = mapped_column(JSON)
+    prima: Mapped[str] = mapped_column(String(20))
+    efectivo_desde: Mapped[date]
+    origen: Mapped[str] = mapped_column(String(20))
+    endoso_id: Mapped[UUID | None]
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EndosoModel(Base):
+    __tablename__ = "endosos"
+    __table_args__ = (UniqueConstraint("cliente_id", "idempotency_key"),)
+
+    endoso_id: Mapped[UUID] = mapped_column(primary_key=True)
+    poliza_id: Mapped[UUID] = mapped_column(index=True)
+    cliente_id: Mapped[UUID]
+    idempotency_key: Mapped[UUID]
+    solicitud_hash: Mapped[str] = mapped_column(String(64))
+    version_anterior: Mapped[int]
+    version_nueva: Mapped[int]
+    impacto: Mapped[dict[str, object]] = mapped_column(JSON)
+    impacto_hash: Mapped[str] = mapped_column(String(64))
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuditoriaPolizaModel(Base):
+    """Registro append-only de intentos de modificacion confirmados y rechazados."""
+
+    __tablename__ = "auditoria_polizas"
+
+    auditoria_id: Mapped[UUID] = mapped_column(primary_key=True)
+    poliza_id: Mapped[UUID] = mapped_column(index=True)
+    cliente_id: Mapped[UUID]
+    accion: Mapped[str] = mapped_column(String(40))
+    resultado: Mapped[str] = mapped_column(String(20))
+    motivo: Mapped[str | None] = mapped_column(String(60))
+    detalle: Mapped[dict[str, object]] = mapped_column(JSON)
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    ocurrido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))

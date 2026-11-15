@@ -107,19 +107,26 @@ class HttpPolicyRenewalGateway:
             with urlopen(request, timeout=timeout) as response:  # noqa: S310
                 return json.load(response), response.status
         except HTTPError as error:
-            _raise_business_error(error)
+            payload = _payload(error)
+            if payload is not None:
+                self._translate_error(error, payload)
             raise RenewalServiceUnavailableError() from error
         except (URLError, OSError, TimeoutError, ValueError) as error:
             raise RenewalServiceUnavailableError() from error
 
+    def _translate_error(self, error: HTTPError, payload: dict[str, Any]) -> None:
+        _raise_renewal_error(error, payload)
 
-def _raise_business_error(error: HTTPError) -> None:
+
+def _payload(error: HTTPError) -> dict[str, Any] | None:
     try:
         payload = json.load(error)
     except ValueError:
-        return
-    if not isinstance(payload, dict):
-        return
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _raise_renewal_error(error: HTTPError, payload: dict[str, Any]) -> None:
     code = payload.get("error")
     if error.code == 404 and code == "poliza_no_encontrada":
         raise PolicyNotFoundError() from error

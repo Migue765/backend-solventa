@@ -407,6 +407,20 @@ problemas. Timeout (0,8 s en consulta, 5 s en renovacion), credencial ausente o 
 fuera de contrato devuelven `503`: no confirma ni descarta la renovacion, y se debe
 reintentar con la misma clave. Reglas y recuperacion: `services/polizas/README.md`.
 
+### Modificacion versionada de poliza (SOL-319, HU34)
+
+`GET /v1/clientes/me/polizas/{polizaId}/modificacion`,
+`POST .../modificaciones/simulacion` y `POST .../modificaciones` requieren JWT del canal Web,
+rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. El BFF valida que
+solo se envien `versionBase`, `plan` y `coberturasOpcionales` (y en la confirmacion
+`confirma:true` e `impactoHash` con `Idempotency-Key`), y que las respuestas sean coherentes:
+historial ordenado que inicia en la version vigente, diferencia mensual igual a la resta de
+primas y endoso que avanza exactamente una version con el hash confirmado. Los rechazos se
+publican como problemas: `422 poliza_no_modificable` (`motivo`), `cambio_no_permitido`
+(`campo`) y `sin_cambios`, y `409` `version_desactualizada` (`versionActual`),
+`impacto_cambio` e `idempotencia_conflictiva`. Un `503` no confirma ni descarta la
+modificacion. Reglas: `services/polizas/README.md`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
