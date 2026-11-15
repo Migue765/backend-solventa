@@ -771,13 +771,19 @@ paths:
       tags: [Usuarios]
       summary: Registra un usuario cliente
       operationId: registrarUsuario
+      description: >-
+        Con ENCRYPTED_LOGIN_ENABLED=true exige NuevoUsuarioCifrado y rechaza plaintext.
+        Sin habilitar conserva NuevoUsuario. Crea usuario y decision inicial de
+        perfilamiento en una transaccion, sin iniciar sesion ni emitir tokens.
       security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/NuevoUsuario"
+              oneOf:
+                - $ref: "#/components/schemas/NuevoUsuario"
+                - $ref: "#/components/schemas/NuevoUsuarioCifrado"
       responses:
         "201":
           description: Usuario creado
@@ -791,6 +797,24 @@ paths:
           $ref: "#/components/responses/Conflicto"
         "429":
           $ref: "#/components/responses/DemasiadasSolicitudes"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/usuarios/desafio:
+    get:
+      tags: [Usuarios]
+      operationId: obtenerDesafioRegistro
+      summary: Desafio de registro cifrado de un solo uso, valido 60 segundos
+      security: []
+      responses:
+        "200":
+          description: Clave publica y desafio de registro, no almacenar en cache
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesafioLogin"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/sesiones/desafio:
@@ -2739,6 +2763,54 @@ components:
           format: password
           minLength: 8
           maxLength: 128
+    NuevoUsuarioCifrado:
+      type: object
+      additionalProperties: false
+      required: [nombre, correo, credencialCifrada, tipoDocumento, numeroDocumento, telefono, fechaNacimiento, consentimiento]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        correo:
+          type: string
+          format: email
+          maxLength: 254
+        credencialCifrada:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: >-
+            JWE compacto RSA-OAEP-256/A256GCM con kid del desafio,
+            typ=solventa-register+jwe e interior exacto {desafioId,correo,contrasena}.
+            Correo interior y exterior coinciden. Password 8..128; sin fallback.
+        tipoDocumento:
+          type: string
+          enum: [cc, ce, passport, ppt]
+        numeroDocumento:
+          type: string
+          minLength: 5
+          maxLength: 16
+          description: cc 6..10 digitos, ce 6..12, passport 5..16 alfanumericos, ppt 7..10; normalizado a mayusculas.
+        telefono:
+          type: string
+          pattern: "^\\+57[0-9]{10}$"
+        fechaNacimiento:
+          type: string
+          format: date
+          description: Anterior a hoy, sin minimo de 18 anos.
+        consentimiento:
+          type: object
+          additionalProperties: false
+          required: [autorizado, versionTerminos]
+          description: >-
+            Eleccion explicita de perfilamiento para cotizacion: open_finance/open_data,
+            indicador_riesgo, 30 dias desde alta, revocable. False registra rechazo,
+            no concede acceso. Decision y outbox atomicos con usuario; version inicial 1.
+            versionTerminos no es la revision optimista de la API de revocacion.
+          properties:
+            autorizado: {type: boolean}
+            versionTerminos: {type: string, const: "1.0"}
     UsuarioCreado:
       type: object
       additionalProperties: false

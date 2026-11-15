@@ -283,13 +283,13 @@ def call(
 
 
 def encrypted_login_payload(
-    challenge: dict[str, Any], email: str, password: str
+    challenge: dict[str, Any], email: str, password: str, *, purpose: str = "login"
 ) -> dict[str, object]:
     header = {
         "alg": "RSA-OAEP-256",
         "enc": "A256GCM",
         "kid": challenge["clavePublica"]["kid"],
-        "typ": "solventa-login+jwe",
+        "typ": f"solventa-{purpose}+jwe",
     }
     plaintext = json.dumps(
         {"desafioId": challenge["desafioId"], "correo": email, "contrasena": password}
@@ -305,7 +305,7 @@ def test_local_stack_login_flag(tmp_path: Path, encrypted: bool) -> None:
     with LocalStack(tmp_path, encrypted_login_enabled=encrypted) as stack:
         web, mobile = stack.urls["web"], stack.urls["mobile"]
         status, _ = call(
-            web + "/v1/usuarios",
+            stack.urls["identity"] + "/v1/usuarios",
             {"nombre": "Synthetic", "correo": email, "contrasena": password},
         )
         assert status == 201
@@ -321,6 +321,49 @@ def test_local_stack_login_flag(tmp_path: Path, encrypted: bool) -> None:
             payload = encrypted_login_payload(challenge, email, password)
             assert call(web + "/v1/sesiones", payload)[0] == 200
             assert call(web + "/v1/sesiones", payload)[0] == 400
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_registration_jwe_over_real_bff_identity_http(tmp_path: Path, authorized: bool) -> None:
+    with LocalStack(tmp_path, encrypted_login_enabled=True) as stack:
+        web = stack.urls["web"]
+        email, password = f"registration-{uuid4().hex}@example.com", "Local-Test-Password!"
+        status, challenge = call(web + "/v1/usuarios/desafio")
+        assert status == 200
+        payload = {
+            **encrypted_login_payload(challenge, email, password, purpose="register"),
+            "nombre": "Cliente prueba registro",
+            "tipoDocumento": "passport",
+            "numeroDocumento": uuid4().hex[:16].upper(),
+            "telefono": "+573001234567",
+            "fechaNacimiento": "2010-01-01",
+            "consentimiento": {"autorizado": authorized, "versionTerminos": "1.0"},
+        }
+        status, created = call(web + "/v1/usuarios", payload)
+        assert status == 201 and set(created) == {"usuario"}
+        assert created["usuario"]["rol"] == "cliente"
+        assert created["usuario"]["identificacion"] == payload["numeroDocumento"]
+        assert call(web + "/v1/usuarios", payload)[0] == 400
+        status, login_challenge = call(web + "/v1/sesiones/desafio")
+        assert status == 200
+        status, session = call(
+            web + "/v1/sesiones", encrypted_login_payload(login_challenge, email, password)
+        )
+        assert status == 200
+        auth = {"Authorization": "Bearer " + session["accessToken"]}
+        status, decision = call(web + "/v1/consentimientos/perfilamiento", headers=auth)
+        assert status == 200
+        assert decision["estado"] == ("autorizado" if authorized else "rechazado")
+        assert decision["actorId"] == created["usuario"]["id"]
+        assert decision["version"] == 1 and decision["versionTerminos"] == "1.0"
+        if authorized:
+            status, revoked = call(
+                web + "/v1/consentimientos/perfilamiento",
+                {"autorizado": False, "version": 1},
+                auth,
+                method="PUT",
+            )
+            assert status == 200 and revoked["estado"] == "revocado"
 
 
 def test_local_bff_uses_only_its_own_profile_http_service(

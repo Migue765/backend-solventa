@@ -239,7 +239,11 @@ o imagenes. No aplicar Terraform para un rollback operativo de esta compuerta.
    apagada hasta una activacion coordinada con Android. No cambiar flags por
    `set image` ni declarar que el login esta listo antes de verificar el gateway.
 7. Crear nuevas cuentas sinteticas para aceptacion. Cliente: registro vigente
-   `POST /v1/usuarios` desde el consumidor compatible, con sus datos obligatorios.
+   `GET /v1/usuarios/desafio` y `POST /v1/usuarios` cifrado desde el consumidor
+   compatible, con datos maestros y eleccion explicita de consentimiento.
+   Verificar true/false persistidos con usuario/outbox en una transaccion,
+   TTL60/replay400 y respuesta201 sin tokens. Requiere ambos flags activos y
+   la nueva ruta publica revisada; el plan881 anterior no contiene esa ruta.
    Socio: CLI existente `python -m flask --app identidad.app create-partner-user`
    con nombre/correo/socio sinteticos nuevos y password por prompt oculto;
    no usar la opcion `--password` ni conceder roles desde el registro publico.

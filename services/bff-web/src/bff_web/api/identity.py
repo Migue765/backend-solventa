@@ -14,6 +14,10 @@ REJECTIONS = {
     ),
     "refresh_invalido": ("Sesión no válida", "Inicia sesión nuevamente."),
     "correo_ya_registrado": ("Correo ya registrado", "Ya existe una cuenta con ese correo."),
+    "documento_ya_registrado": (
+        "Documento ya registrado",
+        "Ya existe una cuenta con ese documento.",
+    ),
     "demasiados_intentos": ("Demasiados intentos", "Espera antes de intentar nuevamente."),
 }
 

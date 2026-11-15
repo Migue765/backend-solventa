@@ -177,7 +177,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/NuevoUsuario"
+              oneOf:
+                - $ref: "#/components/schemas/NuevoUsuario"
+                - $ref: "./bff-web-v1.yaml#/components/schemas/NuevoUsuarioCifrado"
       responses:
         "201":
           description: Usuario creado
@@ -188,9 +190,27 @@ paths:
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "409":
-          $ref: "#/components/responses/CorreoYaRegistrado"
+          description: Correo o documento ya registrado
         "429":
           $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/usuarios/desafio:
+    get:
+      tags: [Usuarios]
+      summary: Desafio de registro, separado del login, requiere flag cifrado activo
+      operationId: emitirDesafioRegistro
+      security: []
+      responses:
+        "200":
+          description: Desafio de un solo uso persistido en Redis, TTL60
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/DesafioLogin"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /oauth/login-challenge:

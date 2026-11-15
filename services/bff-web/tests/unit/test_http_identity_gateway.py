@@ -10,6 +10,55 @@ from support import ACCESS_TTL, REFRESH_TTL, USER, IdentityServer, KeyPair, toke
 CID = "7a7f3a9e-1c1e-4f4a-9a53-0b6b2c5f9d11"
 
 
+def registration_request() -> dict[str, object]:
+    return {
+        "nombre": "Ana",
+        "correo": "ana@solventa.co",
+        "credencialCifrada": "test-jwe",
+        "tipoDocumento": "passport",
+        "numeroDocumento": "test123",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "2010-01-01",
+        "consentimiento": {"autorizado": False, "versionTerminos": "1.0"},
+    }
+
+
+@pytest.mark.parametrize("missing", [None, "numeroDocumento", "telefono"])
+def test_encrypted_registration_preserves_fields_and_rejects_incomplete_confirmation(
+    identity_server: IdentityServer, missing: str | None
+) -> None:
+    data = {
+        "id": str(USER.user_id),
+        "nombre": "Ana",
+        "correo": "ana@solventa.co",
+        "rol": "cliente",
+        "tipoDocumento": "passport",
+        "numeroDocumento": "TEST123",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "2010-01-01",
+    }
+    if missing is not None:
+        data.pop(missing)
+    identity_server.respond("POST", "/v1/usuarios", 201, {"usuario": data})
+    gateway = HttpIdentityGateway(identity_server.url)
+    if missing is not None:
+        with pytest.raises(IdentityUnavailableError):
+            gateway.encrypted_register(registration_request(), CID)
+    else:
+        user = gateway.encrypted_register(registration_request(), CID)
+        assert user.identification == "TEST123" and user.role == "cliente"
+    assert identity_server.requests[0]["body"] == registration_request()
+
+
+def test_registration_document_conflict_is_not_hidden_as_an_outage(
+    identity_server: IdentityServer,
+) -> None:
+    identity_server.respond("POST", "/v1/usuarios", 409, {"code": "documento_ya_registrado"})
+    with pytest.raises(IdentityRejectedError) as raised:
+        HttpIdentityGateway(identity_server.url).encrypted_register(registration_request(), CID)
+    assert raised.value.status == 409 and raised.value.code == "documento_ya_registrado"
+
+
 def closed_port_url() -> str:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))

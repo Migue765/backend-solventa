@@ -1,6 +1,16 @@
+import base64
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StrictBool,
+    field_validator,
+)
 
 from bff_web.domain.auth import AccessClaims, TokenSet, User
 
@@ -25,6 +35,60 @@ class RegisterRequest(BaseModel):
     nombre: str = Field(min_length=1, max_length=120)
     correo: EmailStr = Field(max_length=254)
     contrasena: str = Field(min_length=8, max_length=128)
+
+
+class RegistrationConsent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    autorizado: StrictBool
+    versionTerminos: Literal["1.0"]
+
+
+class EncryptedRegisterRequest(EncryptedLoginRequest):
+    nombre: str = Field(min_length=1, max_length=120)
+    tipoDocumento: Literal["cc", "ce", "passport", "ppt"]
+    numeroDocumento: str = Field(min_length=5, max_length=16)
+    telefono: str = Field(pattern=r"^\+57[0-9]{10}$")
+    fechaNacimiento: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    consentimiento: RegistrationConsent
+
+    @field_validator("nombre", "correo", "telefono", "numeroDocumento", mode="before")
+    @classmethod
+    def trim_fields(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class RegistrationPublicKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kty: Literal["RSA"]
+    n: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    e: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    alg: Literal["RSA-OAEP-256"]
+    use: Literal["enc"]
+    kid: str = Field(min_length=1)
+
+    @field_validator("e")
+    @classmethod
+    def validate_exponent(cls, value: str) -> str:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        exponent = int.from_bytes(decoded, "big")
+        if exponent < 3 or exponent % 2 == 0:
+            raise ValueError("Clave RSA invalida.")
+        return value
+
+    @field_validator("n")
+    @classmethod
+    def validate_modulus(cls, value: str) -> str:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        if int.from_bytes(decoded, "big").bit_length() < 2048:
+            raise ValueError("Clave RSA demasiado corta.")
+        return value
+
+
+class RegistrationChallenge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    desafioId: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    clavePublica: RegistrationPublicKey
+    expiraEn: AwareDatetime
 
 
 class RefreshRequest(BaseModel):
