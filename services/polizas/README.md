@@ -91,6 +91,38 @@ otra solicitud. Un pendiente se recupera repitiendo la misma clave o con
 `flask --app polizas.app conciliar-renovaciones`, que resuelve los pendientes con mas
 de 30 s; no hay worker programado.
 
+## Modificacion versionada (HU34, SOL-319)
+
+Componente Ciclo de Vida (entidad Endoso del modelo de dominio). Aplica D-09 y ASR-AUD-01:
+cada cambio crea una version inmutable y conserva las anteriores; todo intento de
+confirmacion, aceptado o rechazado, queda en `auditoria_polizas` (append-only).
+
+**Reglas `academica-modificacion-v1`** (catalogo comun en `domain/condiciones.py`):
+- Modificables: los cinco productos mensuales, con la poliza vigente y sin terminar hoy
+  (`producto_no_modificable`, `poliza_programada`, `poliza_vencida`, `fin_de_vigencia`).
+- Campos autorizados: `plan` (esencial 1,00; integral 1,15; premium 1,30) y las coberturas
+  opcionales del producto, cada una con recargo mensual. Las obligatorias no se pueden
+  retirar; pedir una no autorizada responde `422 cambio_no_permitido` con `campo`. Cualquier
+  otro campo es `400`.
+- Prima mensual = (base + recargos de opcionales incluidas) x factor del plan. La version 1
+  (emision) es plan esencial con todas las coberturas y coincide con la tarifa de renovacion.
+- El cambio es efectivo desde el dia siguiente; la vigencia no cambia. El impacto informa la
+  diferencia mensual y el ajuste prorrateado por los dias restantes.
+- La renovacion (SOL-317) conserva el plan y las coberturas de la version vigente.
+
+`GET /v1/polizas/{id}/modificacion`: `versionActual`, `historial` (descendente), `opciones` y
+elegibilidad. `POST .../modificaciones/simulacion` con `{versionBase, plan,
+coberturasOpcionales}` calcula el impacto (`impactoHash`) sin persistir; `422 sin_cambios` si
+no hay diferencias y `409 version_desactualizada` (con `versionActual`) si la base no es la
+vigente.
+
+`POST .../modificaciones` con `Idempotency-Key` y `{..., confirma:true, impactoHash}` recalcula
+el impacto y, si coincide, crea en una transaccion el endoso, la version 1 de emision cuando
+aun no existe, la nueva version y su registro de auditoria. `409 impacto_cambio` si el impacto
+ya no es el simulado; la clave primaria `(poliza_id, version)` hace que, entre confirmaciones
+concurrentes, solo una avance la version. `201` endoso nuevo; `200` misma clave y solicitud;
+`409 idempotencia_conflictiva` si la clave se reutiliza con otra solicitud.
+
 ## Integracion y recuperacion
 
 Cotizacion activa emision con `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`.

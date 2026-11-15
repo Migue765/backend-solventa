@@ -12,6 +12,7 @@ from polizas.domain.renovacion import (
     ventana,
 )
 from polizas.infrastructure.models import PagoRenovacionModel, PolizaModel, RenovacionModel
+from polizas.infrastructure.versiones import condiciones_vigentes
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -108,7 +109,12 @@ class RepositorioRenovaciones:
                 "motivo": motivo,
                 "ventana": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
                 "oferta": (
-                    oferta(poliza.poliza_id, poliza.tipo, poliza.fecha_fin)
+                    oferta(
+                        poliza.poliza_id,
+                        poliza.tipo,
+                        poliza.fecha_fin,
+                        condiciones_vigentes(sesion, poliza)[1],
+                    )
                     if motivo is None
                     else None
                 ),
@@ -160,7 +166,9 @@ class RepositorioRenovaciones:
         )
         if motivo is not None:
             raise PolizaNoRenovable(motivo)
-        condiciones = oferta(poliza.poliza_id, poliza.tipo, poliza.fecha_fin)
+        condiciones = oferta(
+            poliza.poliza_id, poliza.tipo, poliza.fecha_fin, condiciones_vigentes(sesion, poliza)[1]
+        )
         if condiciones["condicionesHash"] != solicitud.condiciones_hash:
             raise CondicionesCambiaron()
         vigencia = condiciones["nuevaVigencia"]

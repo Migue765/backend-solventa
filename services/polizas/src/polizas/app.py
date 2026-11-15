@@ -13,7 +13,19 @@ from sqlalchemy.orm import sessionmaker
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from polizas.domain.emision import EvidenciaEmision
+from polizas.domain.modificacion import (
+    CambioNoPermitido,
+    ConfirmacionModificacion,
+    SinCambios,
+    SolicitudModificacion,
+)
 from polizas.domain.renovacion import SolicitudRenovacion
+from polizas.infrastructure.modificaciones import (
+    ImpactoCambio,
+    PolizaNoModificable,
+    RepositorioModificaciones,
+    VersionDesactualizada,
+)
 from polizas.infrastructure.renovaciones import (
     CondicionesCambiaron,
     IdempotenciaConflictiva,
@@ -53,6 +65,7 @@ def create_app(
     app.extensions["polizas_engine"] = engine
     app.extensions["polizas_repository"] = repositorio
     app.extensions["polizas_renovaciones"] = renovaciones
+    modificaciones = RepositorioModificaciones(sesiones)
 
     @app.before_request
     def autenticar() -> tuple[Response, int] | None:
@@ -107,6 +120,32 @@ def create_app(
             return jsonify(resultado), 202
         return jsonify(resultado), 201 if nueva else 200
 
+    @app.get("/v1/polizas/<uuid:poliza_id>/modificacion")
+    def consultar_modificacion(poliza_id: UUID) -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La consulta no admite parametros ni cuerpo.")
+        return jsonify(modificaciones.consultar(poliza_id, _cliente(), reloj()))
+
+    @app.post("/v1/polizas/<uuid:poliza_id>/modificaciones/simulacion")
+    def simular_modificacion(poliza_id: UUID) -> Response:
+        if request.args:
+            raise ValueError("La simulacion no admite parametros.")
+        cliente_id = _cliente()
+        solicitud = SolicitudModificacion.model_validate(request.get_json())
+        return jsonify(modificaciones.simular(poliza_id, cliente_id, solicitud, reloj()))
+
+    @app.post("/v1/polizas/<uuid:poliza_id>/modificaciones")
+    def modificar(poliza_id: UUID) -> tuple[Response, int]:
+        if request.args:
+            raise ValueError("La modificacion no admite parametros.")
+        cliente_id = _cliente()
+        clave = UUID(request.headers.get("Idempotency-Key", ""))
+        confirmacion = ConfirmacionModificacion.model_validate(request.get_json())
+        resultado, nueva = modificaciones.confirmar(
+            poliza_id, cliente_id, clave, confirmacion, str(g.correlation_id), reloj()
+        )
+        return jsonify(resultado), 201 if nueva else 200
+
     @app.cli.command("conciliar-renovaciones")
     def conciliar_renovaciones() -> None:
         print(f"renovaciones_conciliadas={renovaciones.conciliar_pendientes()}")
@@ -134,6 +173,34 @@ def create_app(
         return jsonify(
             error="poliza_no_renovable", motivo=error.motivo, correlationId=g.correlation_id
         ), 422
+
+    @app.errorhandler(PolizaNoModificable)
+    def no_modificable(error: PolizaNoModificable) -> tuple[Response, int]:
+        return jsonify(
+            error="poliza_no_modificable", motivo=error.motivo, correlationId=g.correlation_id
+        ), 422
+
+    @app.errorhandler(CambioNoPermitido)
+    def cambio_no_permitido(error: CambioNoPermitido) -> tuple[Response, int]:
+        return jsonify(
+            error="cambio_no_permitido", campo=error.campo, correlationId=g.correlation_id
+        ), 422
+
+    @app.errorhandler(SinCambios)
+    def sin_cambios(_: SinCambios) -> tuple[Response, int]:
+        return jsonify(error="sin_cambios", correlationId=g.correlation_id), 422
+
+    @app.errorhandler(VersionDesactualizada)
+    def version_desactualizada(error: VersionDesactualizada) -> tuple[Response, int]:
+        return jsonify(
+            error="version_desactualizada",
+            versionActual=error.version_actual,
+            correlationId=g.correlation_id,
+        ), 409
+
+    @app.errorhandler(ImpactoCambio)
+    def impacto_cambio(_: ImpactoCambio) -> tuple[Response, int]:
+        return jsonify(error="impacto_cambio", correlationId=g.correlation_id), 409
 
     @app.errorhandler(CondicionesCambiaron)
     def condiciones_cambiaron(_: CondicionesCambiaron) -> tuple[Response, int]:
