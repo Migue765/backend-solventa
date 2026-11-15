@@ -16,7 +16,7 @@ from bff_movil.app import create_app as create_mobile
 from bff_web.app import create_app as create_web
 from PIL import Image, PngImagePlugin
 from pypdf import PdfWriter
-from pypdf.generic import DictionaryObject, NameObject
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from siniestros.app import create_app
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
 from siniestros.infrastructure.models import CambioEstadoModel
@@ -242,6 +242,295 @@ def test_embedded_geo_requires_consent_and_rejection_erases_bytes(
     assert call(allowed + "/confirmacion", "POST", token=token)[0] == 200
 
 
+@pytest.mark.parametrize("channel", ["mobile", "web"])
+def test_pdf_with_innocent_structured_metadata_is_accepted(runtime: dict, channel: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_metadata(
+        {
+            "/ecv-data": '{"location":{"city":"Bogota"},"showLocation":true,"scores":[-74.0,4.6]}',
+            "/Title": "GPS and location in a travel document",
+        }
+    )
+    metadata = DecodedStreamObject()
+    metadata.set_data(
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        b"<dc:description>GPS location and latitude are ordinary words here</dc:description>"
+        b"</x:xmpmeta>"
+    )
+    writer._root_object[NameObject("/Metadata")] = writer._add_object(metadata)
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    first = runtime["users"][0]
+    token = first["token"] if channel == "mobile" else first["webToken"]
+    root = runtime[channel] + "/siniestros/" + first["claim"]["id"]
+    payload = {
+        "mimeType": "application/pdf",
+        "tamanoBytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+    status, upload = call(
+        root + "/cargas", "POST", payload, token, {"Idempotency-Key": str(uuid4())}
+    )
+    assert status == 201
+    url = root + "/cargas/" + upload["id"]
+    assert (
+        call(
+            url + "/contenido",
+            "PUT",
+            data,
+            token,
+            {"Content-Type": "application/octet-stream", "Upload-Offset": "0"},
+        )[0]
+        == 200
+    )
+    assert call(url + "/confirmacion", "POST", token=token)[0] == 200
+    assert call(root + "/evidencias/" + upload["id"] + "/contenido", token=token) == (200, data)
+
+
+@pytest.mark.parametrize("kind", ["png", "jpeg"])
+def test_image_with_innocent_text_metadata_is_accepted(runtime: dict, kind: str) -> None:
+    output = io.BytesIO()
+    image = Image.new("RGB", (16, 16), "blue")
+    if kind == "png":
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text("Description", "GPS location and latitude are ordinary words")
+        image.save(output, format="PNG", pnginfo=metadata)
+    else:
+        exif = Image.Exif()
+        exif[270] = "GPS location and latitude are ordinary words"
+        image.save(output, format="JPEG", exif=exif)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, f"image/{kind}")
+    assert put(runtime, url, data)[0] == 200
+    assert call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])[0] == 200
+
+
+@pytest.mark.parametrize(
+    "xmp",
+    [
+        b"<exif:GPSLatitude>4,30N</exif:GPSLatitude>",
+        b'<rdf:Description exif:GPSLongitude="74,00W"/>',
+        b"<exif:Location><exif:coordinates>-74.0,4.6</exif:coordinates></exif:Location>",
+    ],
+)
+def test_xmp_coordinates_require_consent(runtime: dict, xmp: bytes) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    metadata = DecodedStreamObject()
+    metadata.set_data(
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:exif="http://ns.adobe.com/exif/1.0/" '
+        b'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' + xmp + b"</x:xmpmeta>"
+    )
+    writer._root_object[NameObject("/Metadata")] = writer._add_object(metadata)
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, "application/pdf")
+    assert put(runtime, url, data)[0] == 200
+    token = runtime["users"][0]["token"]
+    assert call(url + "/confirmacion", "POST", token=token)[1]["code"] == "ubicacion_no_autorizada"
+    location = {
+        "consentimiento": True,
+        "latitud": 4,
+        "longitud": -74,
+        "fecha": datetime.now(UTC).isoformat(),
+    }
+    _, allowed, _ = start_upload(runtime, data, "application/pdf", ubicacion=location)
+    assert put(runtime, allowed, data)[0] == 200
+    assert call(allowed + "/confirmacion", "POST", token=token)[0] == 200
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        '{"location":"+04.0000-074.0000/"}',
+        '{"location":{"lat":4.0,"lng":-74.0}}',
+        '{"location":[4.0,-74.0]}',
+    ],
+)
+def test_pdf_structured_location_coordinates_require_consent(runtime: dict, location: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_metadata({"/ecv-data": location})
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, "application/pdf")
+    assert put(runtime, url, data)[0] == 200
+    status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
+    assert (status, problem["code"]) == (422, "ubicacion_no_autorizada")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        '{"location":{"coordinates":[-74.0,4.6]}}',
+        '{"location":{"places":[{"coordinates":[-74.0,4.6]}]}}',
+        '{"location":{"coordinates":"-74.0,4.6"}}',
+    ],
+)
+def test_nested_location_coordinates_require_consent(runtime: dict, metadata: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.add_metadata({"/ecv-data": metadata})
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    root, url, upload = start_upload(runtime, data, "application/pdf")
+    repo = runtime["app"].extensions["siniestros_repository"]
+    with repo.sessions() as session:
+        assert session.get(Upload, upload["id"]).location is None
+    assert put(runtime, url, data)[0] == 200
+    token = runtime["users"][0]["token"]
+    status, before = call(root + "/evidencias", token=token)
+    assert status == 200
+    status, problem = call(url + "/confirmacion", "POST", token=token)
+    assert (status, problem.get("code")) == (422, "ubicacion_no_autorizada")
+    assert call(root + "/evidencias", token=token) == (200, before)
+    location = {
+        "consentimiento": True,
+        "latitud": 4.6,
+        "longitud": -74,
+        "fecha": datetime.now(UTC).isoformat(),
+    }
+    _, allowed, _ = start_upload(runtime, data, "application/pdf", ubicacion=location)
+    assert put(runtime, allowed, data)[0] == 200
+    assert call(allowed + "/confirmacion", "POST", token=token)[0] == 200
+
+
+@pytest.mark.parametrize("kind", ["pdf", "png"])
+@pytest.mark.parametrize(
+    "comment,expected",
+    [("location: 4.7,-74.0", (422, "ubicacion_no_autorizada")), ("location: Bogota", (200, None))],
+)
+def test_plain_metadata_location_distinguishes_coordinates_from_city(
+    runtime: dict, kind: str, comment: str, expected: tuple[int, str | None]
+) -> None:
+    output = io.BytesIO()
+    if kind == "pdf":
+        writer = PdfWriter()
+        writer.add_blank_page(width=100, height=100)
+        writer.add_metadata({"/Subject": comment})
+        writer.write(output)
+    else:
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text("Comment", comment)
+        Image.new("RGB", (16, 16), "blue").save(output, format="PNG", pnginfo=metadata)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, "application/pdf" if kind == "pdf" else "image/png")
+    assert put(runtime, url, data)[0] == 200
+    status, result = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
+    assert (status, result.get("code")) == expected
+    if expected[0] == 422:
+        location = {
+            "consentimiento": True,
+            "latitud": 4.7,
+            "longitud": -74,
+            "fecha": datetime.now(UTC).isoformat(),
+        }
+        _, allowed, _ = start_upload(
+            runtime,
+            data,
+            "application/pdf" if kind == "pdf" else "image/png",
+            ubicacion=location,
+        )
+        assert put(runtime, allowed, data)[0] == 200
+        assert call(allowed + "/confirmacion", "POST", token=runtime["users"][0]["token"])[0] == 200
+
+
+def test_utf16_xmp_coordinates_require_consent(runtime: dict) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    metadata = DecodedStreamObject()
+    metadata.set_data(
+        '<?xml version="1.0" encoding="UTF-16"?>'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:exif="http://ns.adobe.com/exif/1.0/">'
+        "<exif:GPSLatitude>4,30N</exif:GPSLatitude></x:xmpmeta>".encode("utf-16")
+    )
+    writer._root_object[NameObject("/Metadata")] = writer._add_object(metadata)
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, "application/pdf")
+    assert put(runtime, url, data)[0] == 200
+    status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
+    assert (status, problem["code"]) == (422, "ubicacion_no_autorizada")
+
+
+def test_xmp_doctype_is_rejected_without_expanding_entities(runtime: dict) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    metadata = DecodedStreamObject()
+    metadata.set_data(b'<!DOCTYPE x [<!ENTITY a "data">]><x>&a;</x>')
+    writer._root_object[NameObject("/Metadata")] = writer._add_object(metadata)
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    _, url, _ = start_upload(runtime, data, "application/pdf")
+    assert put(runtime, url, data)[0] == 200
+    status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
+    assert (status, problem["code"]) == (422, "formato_invalido")
+
+
+def test_invalid_pdf_is_rejected(runtime: dict) -> None:
+    data = b"%PDF-1.7\ninvalid synthetic document"
+    _, url, _ = start_upload(runtime, data, "application/pdf")
+    assert put(runtime, url, data)[0] == 200
+    status, problem = call(url + "/confirmacion", "POST", token=runtime["users"][0]["token"])
+    assert (status, problem["code"]) == (422, "formato_invalido")
+
+
+@pytest.mark.parametrize("channel", ["mobile", "web"])
+def test_protected_pdf_reject_reconcile_cancel_and_replace(runtime: dict, channel: str) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.encrypt("synthetic-password")
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    first = runtime["users"][0]
+    token = first["token"] if channel == "mobile" else first["webToken"]
+    root = runtime[channel] + "/siniestros/" + first["claim"]["id"]
+    assert isinstance(root, str)
+
+    def create(content: bytes) -> str:
+        body = {
+            "mimeType": "application/pdf",
+            "tamanoBytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+        status, upload = call(
+            root + "/cargas", "POST", body, token, {"Idempotency-Key": str(uuid4())}
+        )
+        assert status == 201
+        upload_id = upload["id"]
+        assert isinstance(upload_id, str)
+        url = root + "/cargas/" + upload_id
+        assert (
+            call(
+                url + "/contenido",
+                "PUT",
+                content,
+                token,
+                {"Content-Type": "application/octet-stream", "Upload-Offset": "0"},
+            )[0]
+            == 200
+        )
+        return url
+
+    url = create(data)
+    status, problem = call(url + "/confirmacion", "POST", token=token)
+    assert (status, problem["code"]) == (422, "formato_invalido")
+    status, upload = call(url, token=token)
+    assert status == 200 and upload["estado"] == "pendiente" and upload["offset"] == 0
+    assert upload["ultimoResultado"]["code"] == "formato_invalido"
+    assert call(url, "DELETE", token=token)[0] == 204
+    replacement = create(pdf_bytes())
+    assert call(replacement + "/confirmacion", "POST", token=token)[0] == 200
+
+
 @pytest.mark.parametrize(
     "data,digest,code",
     [
@@ -415,6 +704,7 @@ def test_policy_limits_conflicts_cancel_and_invalid_metadata(runtime: dict) -> N
     assert call(url + "/confirmacion", "POST", token=token)[1]["code"] == "carga_cancelada"
     cases: list[tuple[dict[str, Any], tuple[int, str]]] = [
         ({"mimeType": "text/html"}, (415, "formato_no_permitido")),
+        ({"tamanoBytes": 0}, (400, "solicitud_invalida")),
         ({"tamanoBytes": 10 * 1024 * 1024 + 1}, (413, "limite_tamano")),
         (
             {
