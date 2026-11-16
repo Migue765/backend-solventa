@@ -9,9 +9,11 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 
+from siniestros.api.fraude import registrar_rutas_fraude
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
 from siniestros.domain.decision import DecisionRevision, ResultadoEvaluacion
 from siniestros.domain.estado import SiniestroNoIntegro
+from siniestros.domain.fraude import ConfiguracionFraude
 from siniestros.domain.parametricos import (
     ConfirmacionCaso,
     LimiteProcesamiento,
@@ -19,6 +21,7 @@ from siniestros.domain.parametricos import (
     ReglaParametrica,
 )
 from siniestros.infrastructure.decisiones import ServicioDecisiones
+from siniestros.infrastructure.fraude import MotorFraude
 from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
@@ -28,7 +31,7 @@ from siniestros.repository import Repository
 logger = logging.getLogger(__name__)
 
 
-def create_app(config: Config | None = None) -> Flask:
+def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None = None) -> Flask:
     config = config or Config.from_environment()
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = max(
@@ -44,6 +47,9 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["pagos_parametricos_processor"] = pagos_parametricos
     decisiones = ServicioDecisiones(repo)
     app.extensions["decisiones_siniestro_service"] = decisiones
+    motor_fraude = MotorFraude(repo, fraude or ConfiguracionFraude.from_environment())
+    app.extensions["motor_fraude"] = motor_fraude
+    registrar_rutas_fraude(app, motor_fraude)
 
     @app.before_request
     def authorize() -> None:
@@ -222,6 +228,8 @@ def create_app(config: Config | None = None) -> Flask:
         record, status = repo.create_claim(
             g.owner, operation(), ClaimInput.model_validate(body()), g.correlation_id
         )
+        if status == 201:
+            motor_fraude.detectar_en_flujo(UUID(record["id"]), "registro", g.correlation_id)
         return jsonify(record), status
 
     @app.get("/v1/siniestros/<uuid:claim_id>")
@@ -275,7 +283,10 @@ def create_app(config: Config | None = None) -> Flask:
     @app.post("/v1/siniestros/<uuid:claim_id>/cargas/<uuid:upload_id>/confirmacion")
     def confirm(claim_id: UUID, upload_id: UUID) -> Response:
         empty()
-        return jsonify(repo.confirm(g.owner, str(claim_id), str(upload_id), g.correlation_id))
+        record = repo.confirm(g.owner, str(claim_id), str(upload_id), g.correlation_id)
+        if record["estado"] == "confirmada":
+            motor_fraude.detectar_en_flujo(claim_id, "evidencia", g.correlation_id)
+        return jsonify(record)
 
     @app.delete("/v1/siniestros/<uuid:claim_id>/cargas/<uuid:upload_id>")
     def cancel(claim_id: UUID, upload_id: UUID) -> Response:
