@@ -328,12 +328,18 @@ El trabajador continuo se inicia por separado:
 python -m siniestros.parametric_worker --limit 5000
 ```
 
-El criterio de 1.000.000 de eventos en diez minutos queda pendiente de una prueba de
+En AWS corre como `siniestros-eventos-parametricos` con 2 replicas y PDB (ver
+`deploy/k8s/siniestros/README.md`). Una prueba concurrente con varios productores
+comprueba que la suma de lotes aceptados nunca supera la capacidad, que cada lote se
+acepta completo o se rechaza con 429 y que los rechazados entran al reintentar tras
+procesar la cola, sin perder eventos.
+
+El criterio de 1.000.000 de eventos en diez minutos queda **pendiente** de una prueba de
 capacidad por HTTP contra los pods y PostgreSQL del ambiente AWS, con limites reales de
 CPU/memoria, productores concurrentes, replicas del trabajador y metricas de
 backpressure. No se sustituye esa evidencia con una extrapolacion o benchmark SQLite
-local. El despliegue en AWS no incluye el trabajador ni fuentes parametricas
-configuradas, y no acredita este criterio.
+local. El despliegue en AWS no configura fuentes parametricas y no acredita este
+criterio.
 
 Variables:
 
@@ -349,24 +355,46 @@ regla define `beneficiarioId`, `montoIndemnizacion` y `moneda`; HU30 sella esos 
 en el caso junto con evento, regla, version y siniestro. Un caso sin decision valida,
 siniestro parametrico aprobado o datos financieros validos no ordena un pago.
 
+Antes de crear el pago, cada caso se contrasta con la version de regla persistida y con
+el evento y el siniestro asociados. Si no coinciden, el caso se rechaza de forma
+definitiva (no se reintenta) con uno de estos codigos en `ultimo_error`:
+
+- `beneficiario_invalido`: el beneficiario no es el de la version de regla.
+- `monto_invalido`: monto o moneda distintos a los de la version, o version sin ellos.
+- `poliza_invalida`: la poliza no coincide con la regla o con el siniestro.
+- `evento_no_asociado`: fuente o `eventoId` distintos al evento que origino el caso.
+- `regla_no_encontrada` u `origen_no_validado`: no existe la version o la decision valida.
+
 El pago es un simulador academico con efecto durable. Antes de ejecutar consulta si la
 operacion ya produjo un efecto, conserva una clave idempotente por caso y registra cada
 intento. Si se pierde una respuesta despues de guardar el efecto, el intento queda
 ambiguo y la siguiente conciliacion recupera la confirmacion sin repetir la
 indemnizacion. Solo una confirmacion cambia el siniestro a `pagado`.
 
+Cada reserva toma un lease de 30 s. Si la replica que lo tenia muere, al vencer el lease
+otra replica cierra el intento `en_proceso` como `ambiguo` con codigo `lease_vencido`,
+abre el siguiente intento y consulta al proveedor antes de ejecutar; la replica caida
+ya no puede finalizar (`409 reserva_pago_conflictiva`). Asi, el historial de intentos
+no deja huerfanos y se reconstruye completo.
+
 Los endpoints internos son:
 
 - `POST /internal/v1/pagos-parametricos/procesamiento`: incorpora y procesa casos.
 - `POST /internal/v1/pagos-parametricos/conciliacion`: reintenta operaciones pendientes.
-- `GET /internal/v1/pagos-parametricos/casos/{casoId}`: reconstruye evento, regla,
-  siniestro, operacion e intentos.
+- `GET /internal/v1/pagos-parametricos/casos/{casoId}`: reconstruye evento (fuente,
+  `eventoId`, ocurrencia y recepcion), regla y version, siniestro, beneficiario,
+  indemnizacion e intentos.
+- `GET /internal/v1/pagos-parametricos/siniestros/{siniestroId}`: la misma
+  reconstruccion a partir del siniestro parametrico.
 
-El trabajador continuo se ejecuta por separado:
+El trabajador continuo se ejecuta por separado y en AWS corre como
+`siniestros-pagos-parametricos` con 2 replicas y PDB:
 
 ```powershell
 python -m siniestros.payment_worker --limit 100
 ```
+
+La disponibilidad de 99,99 % sigue pendiente de medirse en el ambiente AWS.
 
 ## HU27: aprobar o enrutar siniestro (SOL-179)
 
