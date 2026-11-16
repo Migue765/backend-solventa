@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -10,7 +10,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from flask import Flask
 from polizas.app import create_app
-from polizas.infrastructure.models import Base, PolizaModel
+from polizas.infrastructure.models import Base, CancelacionModel, PolizaModel, RenovacionModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -186,6 +186,74 @@ def test_estado_del_reporte_se_calcula_al_corte(app: Flask) -> None:
         "/v1/reportes/polizas", query_string={"corte": "2026-01-09T23:59:59Z"}, headers=HEADERS
     )
     assert previa.get_json()["registros"] == 0
+
+
+def test_reporte_aplica_cancelaciones_y_renovaciones_al_corte(app: Flask) -> None:
+    renovada = _emitir(app, "automotive", "2026-01-10T00:00:00Z")
+    cancelada = _emitir(app, "life", "2026-01-10T00:00:00Z")
+    engine = app.extensions["polizas_engine"]
+    with Session(engine) as session:
+        for poliza in session.scalars(select(PolizaModel)):
+            poliza.emitida_en = datetime(2026, 1, 10, tzinfo=UTC)
+        poliza_renovada = session.get(PolizaModel, UUID(renovada["id"]))
+        poliza_cancelada = session.get(PolizaModel, UUID(cancelada["id"]))
+        assert poliza_renovada is not None and poliza_cancelada is not None
+        fin_anterior = poliza_renovada.fecha_fin
+        poliza_renovada.fecha_fin = date(2026, 3, 10)
+        poliza_cancelada.estado = "cancelada"
+        session.add(
+            RenovacionModel(
+                renovacion_id=uuid4(),
+                poliza_id=poliza_renovada.poliza_id,
+                cliente_id=uuid4(),
+                idempotency_key=uuid4(),
+                solicitud_hash="0" * 64,
+                reserva_periodo=None,
+                fin_anterior=fin_anterior,
+                nuevo_inicio=fin_anterior,
+                nuevo_fin=date(2026, 3, 10),
+                condiciones={},
+                condiciones_hash="0" * 64,
+                regla_version="test",
+                estado="renovada",
+                motivo=None,
+                intentos_pago=1,
+                creada_en=datetime(2026, 2, 5, tzinfo=UTC),
+                actualizada_en=datetime(2026, 2, 5, tzinfo=UTC),
+            )
+        )
+        session.add(
+            CancelacionModel(
+                cancelacion_id=uuid4(),
+                poliza_id=poliza_cancelada.poliza_id,
+                cliente_id=uuid4(),
+                idempotency_key=uuid4(),
+                solicitud_hash="0" * 64,
+                motivo="otro",
+                liquidacion={},
+                liquidacion_hash="0" * 64,
+                fecha_efectiva=date(2026, 1, 15),
+                creada_en=datetime(2026, 1, 15, tzinfo=UTC),
+            )
+        )
+        session.commit()
+
+    def al_corte(corte: str) -> dict[str, dict]:
+        respuesta = app.test_client().get(
+            "/v1/reportes/polizas", query_string={"corte": corte}, headers=HEADERS
+        )
+        assert respuesta.status_code == 200
+        return {poliza["id"]: poliza for poliza in respuesta.get_json()["polizas"]}
+
+    antes = al_corte("2026-01-12T00:00:00Z")
+    assert antes[cancelada["id"]]["estado"] == "vigente"
+    assert antes[renovada["id"]]["fechaFin"] == fin_anterior.isoformat()
+    durante = al_corte("2026-02-01T00:00:00Z")
+    assert durante[cancelada["id"]]["estado"] == "cancelada"
+    assert durante[renovada["id"]]["fechaFin"] == fin_anterior.isoformat()
+    despues = al_corte("2026-02-20T00:00:00Z")
+    assert despues[renovada["id"]] == {**durante[renovada["id"]], "fechaFin": "2026-03-10"}
+    assert despues[renovada["id"]]["estado"] == "vigente"
 
 
 @pytest.mark.parametrize(

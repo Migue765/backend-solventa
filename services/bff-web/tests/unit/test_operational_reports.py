@@ -53,7 +53,7 @@ def test_corte_por_defecto_es_anterior_al_instante_actual() -> None:
         {"desde": ["2026-10-01"], "hasta": ["2026-10-14"], "corte": ["2026-10-14T11:00:00"]},
         {"desde": ["2026-10-01"], "hasta": ["2026-10-14"], "corte": ["ayer"]},
         {"desde": ["2026-10-01"], "hasta": ["2026-10-13"], "producto": ["hogar"]},
-        {"desde": ["2026-10-01"], "hasta": ["2026-10-13"], "estado": ["cancelada"]},
+        {"desde": ["2026-10-01"], "hasta": ["2026-10-13"], "estado": ["anulada"]},
     ],
 )
 def test_filtros_no_permitidos_se_rechazan(args: dict[str, list[str]]) -> None:
@@ -70,7 +70,7 @@ def test_reporte_consolida_indicadores_sin_filtros() -> None:
     assert indicators["polizas"] == {
         "emitidasEnPeriodo": 2,
         "cartera": 3,
-        "porEstado": {"programada": 1, "vigente": 2, "vencida": 0},
+        "porEstado": {"programada": 1, "vigente": 2, "vencida": 0, "cancelada": 0},
     }
     assert indicators["primas"] == {
         "confirmadas": 2,
@@ -123,7 +123,12 @@ def test_filtro_de_estado_usa_el_estado_de_la_poliza_al_corte() -> None:
     report = build_report(filters(estado="programada"), snapshot(), GENERATED)
 
     indicators = report["indicadores"]
-    assert indicators["polizas"]["porEstado"] == {"programada": 1, "vigente": 0, "vencida": 0}
+    assert indicators["polizas"]["porEstado"] == {
+        "programada": 1,
+        "vigente": 0,
+        "vencida": 0,
+        "cancelada": 0,
+    }
     assert indicators["primas"]["confirmadas"] == 0
     assert indicators["siniestros"]["reportados"] == 0
     assert indicators["pagos"]["registrados"] == 0

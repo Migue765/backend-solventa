@@ -14,7 +14,9 @@ paths:
       - url: http://polizas.polizas.svc.cluster.local:8080
     get:
       operationId: reportePolizasAlCorte
-      description: Polizas emitidas hasta el corte con su estado de vigencia al corte.
+      description: >
+        Polizas emitidas hasta el corte con su estado al corte; una cancelacion registrada
+        hasta el corte prevalece y una renovacion confirmada despues del corte no se refleja.
       security: [{internalToken: []}]
       parameters:
         - $ref: "#/components/parameters/Corte"
@@ -152,7 +154,7 @@ components:
         emitidaEn: {type: string, format: date-time}
         fechaInicio: {type: string, format: date}
         fechaFin: {type: string, format: date}
-        estado: {type: string, enum: [programada, vigente, vencida]}
+        estado: {type: string, enum: [programada, vigente, vencida, cancelada]}
     Prima:
       type: object
       additionalProperties: false

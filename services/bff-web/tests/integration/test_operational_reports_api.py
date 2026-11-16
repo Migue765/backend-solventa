@@ -134,7 +134,7 @@ def test_usuario_sin_alcance_de_reportes_se_rechaza(
     [
         {**QUERY, "clienteId": "2923bf51-1899-4a3e-9547-b8ccb9c2c84f"},
         {**QUERY, "producto": "hogar"},
-        {**QUERY, "estado": "cancelada"},
+        {**QUERY, "estado": "anulada"},
         {**QUERY, "corte": "2026-10-14T12:30:00Z"},
         {"desde": "2026-10-01"},
         {"desde": "2025-01-01", "hasta": "2026-10-13"},
@@ -259,7 +259,7 @@ def test_catalogo_de_filtros_permitidos(app: Flask, keypair: KeyPair) -> None:
             "payment-protection",
             "mortgage-life",
         ],
-        "estados": ["programada", "vigente", "vencida"],
+        "estados": ["programada", "vigente", "vencida", "cancelada"],
         "periodoMaximoDias": 366,
     }
     assert denied.status_code == 401

@@ -164,7 +164,9 @@ si la clave se reutiliza con otra solicitud. Una poliza cancelada no se renueva 
 `GET /v1/reportes/polizas?corte=<ISO con zona>` (SOL-322) alimenta los reportes
 operativos del BFF Web. Devuelve `{corte,fuente:"polizas",registros,huella,polizas:[...]}`
 con las polizas emitidas hasta el corte (`id,tipo,pagoId,emitidaEn,fechaInicio,fechaFin`
-y `estado` programada/vigente/vencida al corte), sin cliente ni suscripcion. `huella` es
+y `estado` programada/vigente/vencida/cancelada al corte), sin cliente ni suscripcion. Una
+cancelacion registrada hasta el corte prevalece y una renovacion confirmada despues del
+corte conserva el `fechaFin` anterior. `huella` es
 el SHA-256 del JSON canonico de `polizas`. Corte ausente, futuro o sin zona y parametros
 extra responden `400`. Contrato: `contracts/openapi/reportes-operativos-internal-v1.yaml`.
 

@@ -30,7 +30,7 @@ PRODUCTS = (
     "payment-protection",
     "mortgage-life",
 )
-POLICY_STATES = ("programada", "vigente", "vencida")
+POLICY_STATES = ("programada", "vigente", "vencida", "cancelada")
 CLAIM_STATES = (
     "reportado",
     "en_evaluacion",
@@ -83,7 +83,7 @@ class PolicyRecord(_Record):
     emitidaEn: AwareDatetime
     fechaInicio: date
     fechaFin: date
-    estado: Literal["programada", "vigente", "vencida"]
+    estado: Literal["programada", "vigente", "vencida", "cancelada"]
 
 
 class PremiumRecord(_Record):
