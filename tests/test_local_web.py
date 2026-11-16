@@ -73,7 +73,7 @@ def test_bootstrap_from_fresh_directory_closes_services_and_keeps_only_synthetic
         assert ready["databaseMode"] == "postgresql"
         evidence = ready["databaseEvidence"]
         assert len(evidence) == 7
-        assert sum(domain["domainTables"] for domain in evidence.values()) == 61
+        assert sum(domain["domainTables"] for domain in evidence.values()) == 63
         for name, domain in evidence.items():
             assert domain["database"] == "solventa_prod" and domain["schema"] == name
             assert domain["crud"] and domain["runtimeDdlDenied"]

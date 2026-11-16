@@ -263,7 +263,7 @@ def main() -> None:
                         "HTTP local directo al BFF; no API Gateway/TLS/WAF/MultiAZ/DR",
                         *([] if args.postgres else ["SQLite legacy no cumple BD unica"]),
                         "Poliza/pago academicos; no proveedores reales",
-                        "Registro JWE publico requiere integrar PR114",
+                        "Registro JWE publico no ejercitado por el fixture",
                         "Sin BFF movil/Asistencias/Notificaciones",
                     ],
                 }

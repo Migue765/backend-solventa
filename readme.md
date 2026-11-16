@@ -173,8 +173,9 @@ En cada arranque se migran Identidad, Cotizacion, Polizas, Siniestros,
 Notificaciones y Asistencias con sus historiales Alembic existentes en esquemas
 distintos. Perfilamiento reutiliza su inicializacion existente, solo sobre
 esquema nuevo; `create_all` no es una migracion de datos existentes. Se repite
-la inicializacion para comprobar que no colisionan los historiales. Son 58 tablas
-de los seis dominios web mas 3 de Asistencias, sin contar las tablas Alembic.
+la inicializacion para comprobar que no colisionan los historiales. Son 60 tablas
+de los seis dominios web mas 3 de Asistencias (63 en total), sin contar las tablas
+Alembic. Siniestros incluye 14 tablas tras `0006_decisiones_siniestro`.
 Notificaciones y Asistencias quedan preparadas en SQL sin arrancar sus APIs
 porque no las necesita este recorrido web.
 
@@ -239,9 +240,8 @@ RSA/JWT/JWE y token interno se generan en memoria; no hay secretos preexistentes
 Ambos recorridos son modos sinteticos explicitos: fakeredis para desafios, FuenteMock para
 OpenFinance/OpenData y pago/poliza academicos. Un error API aborta el arranque;
 no se sustituye por un resultado mock. No prueba proveedores ni almacenamiento
-productivos. El registro JWE publico del frontend publicado requiere integrar
-PR114; el alta del fixture usa el contrato directo existente de Identidad, NO
-acredita ese registro publico ni vuelve develop equivalente a su HEAD479672b.
+productivos. El alta del fixture usa el contrato directo existente de Identidad;
+no ejercita ni acredita el registro JWE publico del BFF.
 No ejecuta Terraform ni modifica servidores, demos o instalaciones Android.
 
 Para comprobar arranque y cierre sin dejar servicios, usa
