@@ -318,6 +318,20 @@ un caso estable en `casos_pago_automatico`. HU31 consulta la outbox mediante
 consulta o confirmacion no crea otro siniestro ni caso. Un caso pendiente significa
 **entrega durable para HU31**, no pago ejecutado.
 
+### Notificaciones (HU22)
+
+En la misma transaccion que registra un cambio de estado visible para el cliente
+(`en_evaluacion` en adelante) o confirma un pago parametrico, Siniestros encola en
+`outbox_notificaciones` un evento `siniestro_estado_cambiado` o
+`pago_parametrico_ejecutado` con identificador determinista (siniestro y secuencia, o
+pago). Solo guarda cliente, recurso, estado y fecha; no copia importes, cuentas ni
+texto interno. `POST /internal/v1/notificaciones/publicacion` (Bearer
+`INTERNAL_API_TOKEN`) publica pendientes en orden de intentos y antiguedad hacia
+`NOTIFICACIONES_SERVICE_URL`; se detiene en el primer fallo y lo reintenta en el
+siguiente ciclo. Sin esa URL responde `503 notificaciones_no_configuradas`. Las
+repeticiones no duplican avisos: Notificaciones usa `eventoId` como clave idempotente.
+La migracion es `0007_outbox_notificaciones` (encadenada a `0006_decisiones_siniestro`).
+
 El trabajador continuo se inicia por separado:
 
 ```powershell
