@@ -499,6 +499,96 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
     assert pod["securityContext"]["fsGroup"] == 10001
 
 
+def test_claims_parametric_workers_are_redundant_and_protected_by_budgets() -> None:
+    workers = list(
+        yaml.safe_load_all((K8S / "siniestros" / "workers.yaml").read_text(encoding="utf-8"))
+    )
+    budgets = list(
+        yaml.safe_load_all((K8S / "siniestros" / "workers-pdb.yaml").read_text(encoding="utf-8"))
+    )
+    api = yaml.safe_load((K8S / "siniestros" / "deployment.yaml").read_text(encoding="utf-8"))
+    api_environment = {
+        item["name"]: item for item in api["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    commands: dict[str, list[str]] = {}
+    replicas: dict[str, int] = {}
+    for worker in workers:
+        assert worker["kind"] == "Deployment"
+        assert worker["metadata"]["namespace"] == "siniestros"
+        name = worker["metadata"]["name"]
+        replicas[name] = worker["spec"]["replicas"]
+        assert replicas[name] >= 2
+        assert worker["spec"]["strategy"]["rollingUpdate"] == {"maxSurge": 1, "maxUnavailable": 0}
+        labels = worker["spec"]["template"]["metadata"]["labels"]
+        assert worker["spec"]["selector"]["matchLabels"] == {"app.kubernetes.io/name": name}
+        assert labels["app.kubernetes.io/name"] == name != "siniestros"
+        pod = worker["spec"]["template"]["spec"]
+        assert pod["automountServiceAccountToken"] is False
+        assert "serviceAccountName" not in pod
+        assert pod["securityContext"]["runAsNonRoot"] is True
+        container = pod["containers"][0]
+        assert container["image"] == "${IMAGE}"
+        assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
+        assert container["securityContext"]["allowPrivilegeEscalation"] is False
+        commands[name] = container["command"]
+        environment = {item["name"]: item for item in container["env"]}
+        for key in ("INTERNAL_API_TOKEN", "SINIESTROS_DATABASE_URL", "POLIZAS_SERVICE_URL"):
+            assert environment[key] == api_environment[key]
+        assert environment["SINIESTROS_STORAGE_ROOT"]["value"] == "/var/lib/solventa/evidencias"
+        assert "FUENTES_PARAMETRICAS_JSON" not in environment
+        assert "SINIESTROS_EVIDENCIAS_BUCKET" not in environment
+    assert commands == {
+        "siniestros-eventos-parametricos": [
+            "python",
+            "-m",
+            "siniestros.parametric_worker",
+            "--limit",
+            "5000",
+        ],
+        "siniestros-pagos-parametricos": [
+            "python",
+            "-m",
+            "siniestros.payment_worker",
+            "--limit",
+            "100",
+        ],
+    }
+    protected = {}
+    for budget in budgets:
+        assert budget["kind"] == "PodDisruptionBudget"
+        assert budget["metadata"]["namespace"] == "siniestros"
+        protected[budget["spec"]["selector"]["matchLabels"]["app.kubernetes.io/name"]] = budget[
+            "spec"
+        ]["minAvailable"]
+    assert set(protected) == set(replicas)
+    assert all(1 <= protected[name] < replicas[name] for name in replicas)
+
+
+def test_claims_workers_deploy_only_after_api_rollout_and_revert_on_failure() -> None:
+    result = run_deploy("siniestros")
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = result.stderr.splitlines()
+    api = calls.index("kubectl|-n siniestros rollout status deployment/siniestros --timeout=300s")
+    budgets = calls.index("kubectl|apply -f deploy/k8s/siniestros/workers-pdb.yaml")
+    assert api < budgets
+    assert calls[budgets:].count("applied|Deployment") == 2
+    for worker in ("siniestros-eventos-parametricos", "siniestros-pagos-parametricos"):
+        rollout = f"kubectl|-n siniestros rollout status deployment/{worker} --timeout=300s"
+        assert calls.index(rollout) > budgets
+
+    worker_failure = run_deploy(
+        "siniestros",
+        "-n siniestros rollout status deployment/siniestros-pagos-parametricos --timeout=300s",
+    )
+    assert worker_failure.returncode != 0
+    assert "rollout undo deployment/siniestros-pagos-parametricos" in worker_failure.stderr
+    assert "completado." not in worker_failure.stdout
+
+    api_failure = run_deploy("siniestros", "rollout")
+    assert api_failure.returncode != 0
+    assert "workers" not in api_failure.stderr
+
+
 def terraform_default(name: str) -> str:
     variables = (PRIMARY / "variables.tf").read_text(encoding="utf-8")
     block = variables.split(f'variable "{name}" {{', 1)[1].split("\n}", 1)[0]

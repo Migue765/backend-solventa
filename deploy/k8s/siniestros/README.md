@@ -25,8 +25,33 @@ puede borrar versiones. `deployment.yaml` repite el nombre del bucket en
 `SINIESTROS_EVIDENCIAS_BUCKET` y las pruebas de infraestructura lo comparan con
 Terraform.
 
-No se despliega el trabajador parametrico ni se configura `FUENTES_PARAMETRICAS_JSON`:
-sin fuentes, la recepcion de eventos parametricos responde 401 a cualquier solicitud.
+## Trabajadores parametricos (HU30 y HU31)
+
+Tras confirmar el rollout del API, `deploy/codebuild/deploy.sh` aplica
+`workers-pdb.yaml` y `workers.yaml` con la misma imagen y espera su rollout; si un
+trabajador falla, revierte ese Deployment y el pipeline termina en error:
+
+- `siniestros-eventos-parametricos`: `python -m siniestros.parametric_worker --limit 5000`.
+- `siniestros-pagos-parametricos`: `python -m siniestros.payment_worker --limit 100`.
+
+Cada uno corre con 2 replicas repartidas por nodo y un PodDisruptionBudget con
+`minAvailable: 1`. Es seguro porque la cola usa `FOR UPDATE SKIP LOCKED` y cada pago
+se reserva con un lease de 30 s: si una replica muere a mitad de un pago, otra marca
+el intento huerfano como `ambiguo` (`lease_vencido`), consulta al proveedor y no
+repite el efecto. Los trabajadores no usan el bucket ni la cuenta IRSA, y solo leen
+`INTERNAL_API_TOKEN` y `SINIESTROS_DATABASE_URL` de `siniestros-runtime`.
+
+No se configura `FUENTES_PARAMETRICAS_JSON`: sin fuentes, la recepcion de eventos
+parametricos responde 401 a cualquier solicitud y los trabajadores quedan en espera.
+La prueba de capacidad de 1.000.000 de eventos en 10 minutos y la medicion de
+disponibilidad siguen pendientes de ejecutarse en AWS (ver el README del servicio).
+
+Verificacion:
+
+```bash
+kubectl -n siniestros get deploy,pdb -l app.kubernetes.io/part-of=siniestros
+kubectl -n siniestros get pdb siniestros-eventos-parametricos siniestros-pagos-parametricos
+```
 
 ## Prerrequisitos de la primera entrega
 
