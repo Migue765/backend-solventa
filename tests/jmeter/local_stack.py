@@ -32,6 +32,7 @@ from perfilamiento.persistence import RepositorioPerfiles
 from polizas.app import create_app as policy_app
 from siniestros.app import create_app as claims_app
 from siniestros.domain import Config as ClaimsConfig
+from sqlalchemy.engine import make_url
 from werkzeug.serving import BaseWSGIServer, WSGIRequestHandler, make_server
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +64,7 @@ class LocalStack:
         mobile_port: int | None = 0,
         encrypted_login_enabled: bool = False,
         conciliacion_emision_habilitada: bool = False,
+        prepared_databases: dict[str, str] | None = None,
     ) -> None:
         self.directory = directory
         self.encrypted_login_enabled = encrypted_login_enabled
@@ -73,6 +75,7 @@ class LocalStack:
         self.threads: dict[str, threading.Thread] = {}
         self.apps: dict[str, Flask] = {}
         self.urls: dict[str, str] = {}
+        self.prepared_databases = prepared_databases
 
     def start(self, name: str, app: Flask, port: int = 0) -> str:
         server = make_server("127.0.0.1", port, app, threaded=True, request_handler=QuietHandler)
@@ -113,17 +116,42 @@ class LocalStack:
                 "Unset DATABASE_URL, DB_SCHEMA and POLIZAS_DATABASE_URL for isolation."
             )
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.databases = {
-            name: f"sqlite:///{(self.directory / (name + '.db')).as_posix()}"
-            for name in ("identidad", "cotizacion", "polizas", "perfilamiento", "siniestros")
-        }
-        for name in ("identidad", "cotizacion", "polizas", "siniestros"):
-            config = MigrationConfig(str(ROOT / "services" / name / "alembic.ini"))
-            config.set_main_option("sqlalchemy.url", self.databases[name])
-            command.upgrade(config, "head")
-        profiles = RepositorioPerfiles(self.databases["perfilamiento"])
-        profiles.inicializar()
-        profiles.engine.dispose()
+        if self.prepared_databases is None:
+            self.databases = {
+                name: f"sqlite:///{(self.directory / (name + '.db')).as_posix()}"
+                for name in ("identidad", "cotizacion", "polizas", "perfilamiento", "siniestros")
+            }
+            for name in ("identidad", "cotizacion", "polizas", "siniestros"):
+                config = MigrationConfig(str(ROOT / "services" / name / "alembic.ini"))
+                config.set_main_option("sqlalchemy.url", self.databases[name])
+                command.upgrade(config, "head")
+            profiles = RepositorioPerfiles(self.databases["perfilamiento"])
+            profiles.inicializar()
+            profiles.engine.dispose()
+        else:
+            targets = [make_url(url) for url in self.prepared_databases.values()]
+            if (
+                set(self.prepared_databases)
+                != {
+                    "identidad",
+                    "cotizacion",
+                    "perfilamiento",
+                    "polizas",
+                    "siniestros",
+                    "notificaciones",
+                    "asistencias",
+                }
+                or any(
+                    url.drivername != "postgresql+psycopg"
+                    or url.host != "127.0.0.1"
+                    or url.database != "solventa_prod"
+                    or not url.port
+                    for url in targets
+                )
+                or len({url.port for url in targets}) != 1
+            ):
+                raise RuntimeError("Solo se admite una BD PostgreSQL sintetica en loopback.")
+            self.databases = dict(self.prepared_databases)
         self.internal_token = secrets.token_urlsafe(32)
         pem = _private_key_pem()
         issuer = "https://identity.local.solventa.test"

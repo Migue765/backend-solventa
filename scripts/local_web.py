@@ -7,6 +7,7 @@ import os
 import secrets
 import signal
 import subprocess
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
@@ -186,9 +187,20 @@ def main() -> None:
     parser.add_argument("--web-port", type=int, default=5001)
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument(
+        "--postgres", action="store_true", help="Use one fresh native PostgreSQL DB."
+    )
+    parser.add_argument(
+        "--postgres-bin", type=Path, help="Verified PostgreSQL 17 Windows bin directory."
+    )
+    parser.add_argument("--postgres-port", type=int, default=55417)
+    parser.add_argument(
         "--check", action="store_true", help="Verify startup and stop owned services."
     )
     args = parser.parse_args()
+    if args.postgres != (args.postgres_bin is not None):
+        parser.error("--postgres y --postgres-bin deben usarse juntos; no hay fallback SQLite.")
+    if not 1 <= args.postgres_port <= 65535:
+        parser.error("--postgres-port debe estar entre 1 y 65535.")
     if any(os.getenv(name) for name in ("DATABASE_URL", "DB_SCHEMA", "POLIZAS_DATABASE_URL")):
         raise RuntimeError("Elimina las variables de bases externas antes de arrancar.")
     directory = (args.data_dir or Path("reports") / f"local-web-{uuid4().hex}").resolve()
@@ -196,9 +208,25 @@ def main() -> None:
     stopped = Event()
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
-    with LocalStack(
-        directory, args.web_port, mobile_port=None, encrypted_login_enabled=True
-    ) as stack:
+    with ExitStack() as resources:
+        databases = None
+        database_evidence: dict[str, object] | None = None
+        if args.postgres:
+            from scripts.local_database import postgres_cluster
+
+            database = resources.enter_context(
+                postgres_cluster(args.postgres_bin.resolve(), directory, args.postgres_port)
+            )
+            databases, database_evidence = database.runtime_urls, database.evidence
+        stack = resources.enter_context(
+            LocalStack(
+                directory,
+                args.web_port,
+                mobile_port=None,
+                encrypted_login_enabled=True,
+                prepared_databases=databases,
+            )
+        )
         accounts = seed_and_verify(stack)
         fixture = directory / "accounts.json"
         with os.fdopen(os.open(fixture, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
@@ -211,10 +239,29 @@ def main() -> None:
                     "urls": stack.urls,
                     "accountsFile": str(fixture),
                     "syntheticOnly": True,
+                    "databaseMode": "postgresql" if args.postgres else "sqlite-legacy",
+                    "databaseEvidence": database_evidence,
+                    "postgres": (
+                        {
+                            "host": "127.0.0.1",
+                            "port": args.postgres_port,
+                            "database": "solventa_prod",
+                            "pid": int(
+                                (directory / "postgres" / "data" / "postmaster.pid")
+                                .read_text()
+                                .splitlines()[0]
+                            ),
+                            "dataDirectory": str(directory / "postgres" / "data"),
+                        }
+                        if args.postgres
+                        else None
+                    ),
                     "clientDocument": "1098765432",
                     "partnerId": "LOCAL-WEB",
                     "limitations": [
-                        "SQLite; fakeredis; OpenFinance/OpenData FuenteMock",
+                        "fakeredis; OpenFinance/OpenData FuenteMock",
+                        "HTTP local directo al BFF; no API Gateway/TLS/WAF/MultiAZ/DR",
+                        *([] if args.postgres else ["SQLite legacy no cumple BD unica"]),
                         "Poliza/pago academicos; no proveedores reales",
                         "Registro JWE publico requiere integrar PR114",
                         "Sin BFF movil/Asistencias/Notificaciones",
