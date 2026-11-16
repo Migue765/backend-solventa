@@ -11,9 +11,9 @@ from bff_movil.domain.policy_modification import (
     PolicyNotModifiableError,
     PolicyServiceUnavailableError,
 )
-from bff_movil.infrastructure.http_policy_modification_gateway import (
-    MAX_RESPONSE_BYTES,
-    HttpPolicyModificationGateway,
+from bff_movil.infrastructure.http_policy_renewal_gateway import (
+    MAX_PAYLOAD,
+    HttpPolicyRenewalGateway,
 )
 from policy_modification_data import CHANGE, CONFIRMATION, POLICY_ID, impact, result, state
 from support import IdentityServer
@@ -34,12 +34,12 @@ def server() -> Iterator[IdentityServer]:
 
 
 @pytest.fixture
-def gateway(server: IdentityServer) -> HttpPolicyModificationGateway:
-    return HttpPolicyModificationGateway(server.url + "/", "interno", 1, 1)
+def gateway(server: IdentityServer) -> HttpPolicyRenewalGateway:
+    return HttpPolicyRenewalGateway(server.url + "/", "interno", 1, 1, 1)
 
 
 def test_consulta_simula_y_confirma_con_identidad_interna(
-    server: IdentityServer, gateway: HttpPolicyModificationGateway
+    server: IdentityServer, gateway: HttpPolicyRenewalGateway
 ) -> None:
     server.respond("GET", STATE_PATH, 200, state())
     server.respond("POST", SIMULATION_PATH, 200, impact())
@@ -64,7 +64,7 @@ def test_consulta_simula_y_confirma_con_identidad_interna(
 
 
 def test_reintento_idempotente_devuelve_200(
-    server: IdentityServer, gateway: HttpPolicyModificationGateway
+    server: IdentityServer, gateway: HttpPolicyRenewalGateway
 ) -> None:
     server.respond("POST", CONFIRM_PATH, 200, result())
     assert gateway.confirm(POLICY_ID, CLIENT, uuid4(), CONFIRM, "c")[1] == 200
@@ -126,7 +126,7 @@ def test_reintento_idempotente_devuelve_200(
 )
 def test_traduce_errores_de_polizas(
     server: IdentityServer,
-    gateway: HttpPolicyModificationGateway,
+    gateway: HttpPolicyRenewalGateway,
     status: int,
     body: object,
     expected: type[Exception],
@@ -141,7 +141,7 @@ def test_traduce_errores_de_polizas(
 
 
 def test_error_sin_json_es_no_disponible(
-    server: IdentityServer, gateway: HttpPolicyModificationGateway
+    server: IdentityServer, gateway: HttpPolicyRenewalGateway
 ) -> None:
     server.respond_raw("GET", STATE_PATH, 502, b"<html>")
     with pytest.raises(PolicyServiceUnavailableError):
@@ -165,7 +165,7 @@ def test_error_sin_json_es_no_disponible(
 )
 def test_respuestas_incoherentes_no_se_aceptan(
     server: IdentityServer,
-    gateway: HttpPolicyModificationGateway,
+    gateway: HttpPolicyRenewalGateway,
     method: str,
     path: str,
     body: object,
@@ -181,7 +181,7 @@ def test_respuestas_incoherentes_no_se_aceptan(
 
 
 def test_confirmacion_con_estado_inesperado_no_se_acepta(
-    server: IdentityServer, gateway: HttpPolicyModificationGateway
+    server: IdentityServer, gateway: HttpPolicyRenewalGateway
 ) -> None:
     server.respond("POST", CONFIRM_PATH, 202, result())
     with pytest.raises(PolicyServiceUnavailableError):
@@ -189,9 +189,9 @@ def test_confirmacion_con_estado_inesperado_no_se_acepta(
 
 
 def test_rechaza_respuestas_grandes_o_invalidas(
-    server: IdentityServer, gateway: HttpPolicyModificationGateway
+    server: IdentityServer, gateway: HttpPolicyRenewalGateway
 ) -> None:
-    server.respond_raw("GET", STATE_PATH, 200, b"[" + b" " * MAX_RESPONSE_BYTES + b"]")
+    server.respond_raw("GET", STATE_PATH, 200, b"[" + b" " * MAX_PAYLOAD + b"]")
     with pytest.raises(PolicyServiceUnavailableError):
         gateway.get_state(POLICY_ID, CLIENT, "c")
     server.respond_raw("GET", STATE_PATH, 200, b"no-json")
@@ -201,12 +201,12 @@ def test_rechaza_respuestas_grandes_o_invalidas(
 
 def test_sin_configuracion_o_sin_red_no_esta_disponible(server: IdentityServer) -> None:
     for gateway in (
-        HttpPolicyModificationGateway("", "interno"),
-        HttpPolicyModificationGateway(server.url, ""),
+        HttpPolicyRenewalGateway("", "interno"),
+        HttpPolicyRenewalGateway(server.url, ""),
     ):
         with pytest.raises(PolicyServiceUnavailableError):
             gateway.get_state(POLICY_ID, CLIENT, "c")
     assert server.requests == []
-    offline = HttpPolicyModificationGateway("http://127.0.0.1:9", "interno", 0.5, 0.5)
+    offline = HttpPolicyRenewalGateway("http://127.0.0.1:9", "interno", 0.5, 0.5, 0.5)
     with pytest.raises(PolicyServiceUnavailableError):
         offline.simulate(POLICY_ID, CLIENT, REQUEST, "c")

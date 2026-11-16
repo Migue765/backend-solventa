@@ -24,9 +24,6 @@ from bff_movil.config import Config
 from bff_movil.domain.auth import CHANNEL
 from bff_movil.domain.errors import IdentityUnavailableError
 from bff_movil.infrastructure.http_identity_gateway import HttpIdentityGateway
-from bff_movil.infrastructure.http_policy_modification_gateway import (
-    HttpPolicyModificationGateway,
-)
 from bff_movil.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from bff_movil.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_movil.problems import problem_response
@@ -70,12 +67,7 @@ def create_app(
     )
     app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or policies_gateway
     app.extensions["policy_query_gateway"] = policy_query_gateway or policies_gateway
-    app.extensions["policy_modification_gateway"] = (
-        policy_modification_gateway
-        or HttpPolicyModificationGateway(
-            active_config.policies_service_url, active_config.internal_api_token
-        )
-    )
+    app.extensions["policy_modification_gateway"] = policy_modification_gateway or policies_gateway
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)

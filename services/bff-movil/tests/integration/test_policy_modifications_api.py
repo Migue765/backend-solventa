@@ -17,9 +17,7 @@ from bff_movil.domain.policy_modification import (
     PolicyNotModifiableError,
     PolicyServiceUnavailableError,
 )
-from bff_movil.infrastructure.http_policy_modification_gateway import (
-    HttpPolicyModificationGateway,
-)
+from bff_movil.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from flask import Flask
 from policy_modification_data import (
     CHANGE,
@@ -354,7 +352,7 @@ def test_lee_la_url_de_polizas_del_entorno(monkeypatch: pytest.MonkeyPatch) -> N
     config = Config.from_environment()
     assert config.policies_service_url == "http://polizas.svc:8080"
     gateway = create_app(config).extensions["policy_modification_gateway"]
-    assert isinstance(gateway, HttpPolicyModificationGateway)
+    assert isinstance(gateway, HttpPolicyRenewalGateway)
 
 
 def test_modelos_rechazan_respuestas_incoherentes() -> None:
