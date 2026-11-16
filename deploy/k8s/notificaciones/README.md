@@ -4,8 +4,9 @@ Para una cuenta vacia seguir primero [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
 bases/Secrets nuevos, migraciones y dependencias antes del cutover.
 
 Servicio interno (`http://notificaciones.notificaciones.svc.cluster.local:8080`), sin
-ruta publica ni TargetGroupBinding. Lo llaman BFF Movil (bandeja y preferencias) y,
-si se activa, Cotizacion (pagos confirmados). `terraform/environments/prod/primary/notificaciones.tf`
+ruta publica ni TargetGroupBinding. Lo llaman BFF Movil (bandeja y preferencias),
+Siniestros (cambios de estado y pagos parametricos, por su CronJob de publicacion) y,
+si se activa, Cotizacion (pagos confirmados y polizas emitidas). `terraform/environments/prod/primary/notificaciones.tf`
 crea ECR `solventa/notificaciones` y el pipeline `solventa-prod-notificaciones` (tag
 `notificaciones-v*`). No usa rol IRSA ni volumenes: todo el estado vive en su base.
 Revisar el plan antes del apply; este documento no autoriza cambiar recursos ajenos.
@@ -78,7 +79,8 @@ Conservar la base. Desactivar primero los productores y consumidores:
 ```bash
 kubectl -n cotizacion set env deployment/cotizacion NOTIFICACIONES_SERVICE_URL-
 kubectl -n bff-movil set env deployment/bff-movil NOTIFICACIONES_SERVICE_URL-
+kubectl -n siniestros patch cronjob siniestros-notificaciones -p '{"spec":{"suspend":true}}'
 kubectl -n notificaciones patch cronjob notificaciones-despachos -p '{"spec":{"suspend":true}}'
 ```
 
-Cotizacion conserva los eventos no publicados y los reintenta al reactivar la URL.
+Cotizacion y Siniestros conservan los eventos no publicados y los reintentan al reactivar.

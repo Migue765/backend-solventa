@@ -46,6 +46,8 @@ spec:
                   key: SINIESTROS_DATABASE_URL
             - name: POLIZAS_SERVICE_URL
               value: http://polizas.polizas.svc.cluster.local:8080
+            - name: NOTIFICACIONES_SERVICE_URL
+              value: http://notificaciones.notificaciones.svc.cluster.local:8080
             - name: AWS_REGION
               value: ${AWS_REGION}
             # terraform output siniestros_evidence_bucket. Sin bucket la evidencia
