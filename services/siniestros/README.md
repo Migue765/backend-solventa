@@ -77,7 +77,14 @@ cliente responden igual: `404 siniestro_no_encontrado`. Parametros invalidos: `4
 credencial ausente o incorrecta: `401`; fallo de persistencia: `503`. Todas las
 respuestas llevan `Cache-Control: no-store` y `X-Correlation-ID`.
 
-## Prueba local con la Web (SOL-177)
+`POST /internal/v1/reportes/consulta` con `{"corte":"<ISO con zona>"}` (SOL-322) solo
+exige el `INTERNAL_API_TOKEN`, sin `X-Cliente-ID`, y alimenta los reportes operativos del
+BFF Web. Devuelve `{corte,fuente:"siniestros",registros,huella,siniestros,pagos}`: siniestros
+reportados hasta el corte (`id,polizaId,tipo,estado,reportadoEn`, con el estado vigente al
+corte segun el historial) y pagos parametricos creados hasta el corte
+(`id,siniestroId,estado,monto,moneda,creadoEn`). No incluye cliente, descripcion,
+evidencias, decisiones ni datos de fraude. Contrato:
+`contracts/openapi/reportes-operativos-internal-v1.yaml`.
 
 Usa el entorno `.venv` de la raiz con identidad, cotizacion, siniestros y bff-web
 instalados (`pip install -e`). Abre una consola de PowerShell por servicio, todas en la

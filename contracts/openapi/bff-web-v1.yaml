@@ -18,6 +18,7 @@ tags:
   - name: Socios
   - name: Siniestros
   - name: Polizas
+  - name: Reportes
 paths:
   /v1/siniestros:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
@@ -1744,6 +1745,165 @@ paths:
           $ref: "#/components/responses/ReglaNegocio"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/reportes/operativos:
+    get:
+      tags: [Reportes]
+      summary: Consolida indicadores operativos de polizas, primas, siniestros y pagos
+      operationId: consultarReporteOperativo
+      description: |
+        HU36 (SOL-322). Requiere JWT con rol y scope asesor; otros perfiles reciben 403
+        alcance_insuficiente sin consultar las fuentes. Solo admite los filtros documentados
+        (cada uno con un unico valor); cualquier otro parametro responde 400.
+        Los indicadores se calculan desde fuentes propietarias identificables (polizas,
+        cotizacion para primas y siniestros para siniestros y pagos) leidas al mismo corte;
+        ninguna fuente entrega ni el reporte expone datos personales.
+        La huella es el SHA-256 del JSON canonico del reporte sin generadoEn: el mismo corte
+        y filtros producen la misma huella. Si cualquier fuente falla o responde datos
+        incoherentes se responde 503 consolidacion_incompleta sin indicadores parciales.
+        Toda consulta, autorizada o rechazada, se audita con actor, filtros, corte, huella y
+        correlationId.
+      parameters:
+        - $ref: "#/components/parameters/ReporteDesde"
+        - $ref: "#/components/parameters/ReporteHasta"
+        - $ref: "#/components/parameters/ReporteProducto"
+        - $ref: "#/components/parameters/ReporteEstado"
+        - name: corte
+          in: query
+          required: false
+          description: >-
+            Instante de corte ISO 8601 con zona horaria, no futuro. Si se omite se fija
+            un minuto antes del instante actual, truncado al segundo.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Reporte consolidado al corte
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReporteOperativo"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente; el usuario no esta autorizado para reportes
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "503":
+          $ref: "#/components/responses/ConsolidacionIncompleta"
+  /v1/reportes/operativos/descarga:
+    get:
+      tags: [Reportes]
+      summary: Descarga en CSV el reporte operativo confirmado para un corte
+      operationId: descargarReporteOperativo
+      description: |
+        HU36 (SOL-322). Recalcula el reporte con los mismos filtros y corte y solo lo
+        entrega si su huella coincide con la confirmada en la consulta; en otro caso
+        responde 409 reporte_no_reproducible. El CSV tiene columnas
+        ambito,indicador,dimension,moneda,valor, incluye corte, huella, filtros, indicadores
+        y fuentes, y no contiene identificadores ni datos personales. La descarga se audita.
+      parameters:
+        - $ref: "#/components/parameters/ReporteDesde"
+        - $ref: "#/components/parameters/ReporteHasta"
+        - $ref: "#/components/parameters/ReporteProducto"
+        - $ref: "#/components/parameters/ReporteEstado"
+        - name: corte
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: huella
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      responses:
+        "200":
+          description: CSV del reporte confirmado
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="reporte-operativo-0123456789ab.csv"
+            X-Reporte-Huella:
+              schema:
+                type: string
+            X-Reporte-Corte:
+              schema:
+                type: string
+                format: date-time
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "503":
+          $ref: "#/components/responses/ConsolidacionIncompleta"
+  /v1/reportes/operativos/opciones:
+    get:
+      tags: [Reportes]
+      summary: Catalogo de filtros permitidos para reportes operativos
+      operationId: consultarOpcionesReporteOperativo
+      description: Requiere JWT con rol y scope asesor. No admite parametros.
+      responses:
+        "200":
+          description: Productos, estados de poliza y periodo maximo permitidos
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [productos, estados, periodoMaximoDias]
+                properties:
+                  productos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProductoReporte"
+                  estados:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EstadoPolizaReporte"
+                  periodoMaximoDias:
+                    type: integer
+                    const: 366
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
 components:
   securitySchemes:
     bearerAuth:
@@ -1782,7 +1942,52 @@ components:
         enum: ["1"]
         default: "1"
       description: Una version distinta devuelve 400 version_no_soportada.
+    ReporteDesde:
+      name: desde
+      in: query
+      required: true
+      description: Primer dia (UTC) del periodo. El periodo no supera 366 dias.
+      schema:
+        type: string
+        format: date
+    ReporteHasta:
+      name: hasta
+      in: query
+      required: true
+      description: Ultimo dia (UTC) del periodo; no puede ser posterior al dia del corte.
+      schema:
+        type: string
+        format: date
+    ReporteProducto:
+      name: producto
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/ProductoReporte"
+    ReporteEstado:
+      name: estado
+      in: query
+      required: false
+      description: Estado de vigencia de la poliza al corte.
+      schema:
+        $ref: "#/components/schemas/EstadoPolizaReporte"
   responses:
+    ConsolidacionIncompleta:
+      description: >-
+        consolidacion_incompleta; una fuente fallo o respondio datos incoherentes. Incluye
+        la extension fuente y nunca indicadores parciales.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+        Cache-Control:
+          schema:
+            const: no-store
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     CuotaSocio:
       description: cuota_socio_excedida o socio_ocupado, sin iniciar perfilamiento
       headers:
@@ -1859,6 +2064,211 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    ProductoReporte:
+      type: string
+      enum:
+        - automotive
+        - travel
+        - life
+        - device-protection
+        - parametric
+        - parametric-weather
+        - payment-protection
+        - mortgage-life
+    EstadoPolizaReporte:
+      type: string
+      enum: [programada, vigente, vencida]
+    TotalMoneda:
+      type: object
+      additionalProperties: false
+      required: [moneda, monto]
+      properties:
+        moneda:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        monto:
+          type: string
+          pattern: "^\\d+\\.\\d{2}$"
+    ReporteOperativo:
+      type: object
+      additionalProperties: false
+      description: >-
+        Indicadores agregados sin datos personales. Polizas: cartera al corte y emitidas en
+        el periodo. Primas: pagos confirmados en el periodo. Siniestros: reportados en el
+        periodo con su estado al corte. Pagos: pagos parametricos creados en el periodo con
+        su estado al corte. Los filtros de producto y estado se aplican sobre la poliza.
+      required:
+        [corte, generadoEn, filtros, indicadores, porProducto, inconsistencias, fuentes, huella]
+      properties:
+        corte:
+          type: string
+          format: date-time
+        generadoEn:
+          type: string
+          format: date-time
+          description: Instante de calculo; no forma parte de la huella.
+        filtros:
+          type: object
+          additionalProperties: false
+          required: [desde, hasta, producto, estado]
+          properties:
+            desde:
+              type: string
+              format: date
+            hasta:
+              type: string
+              format: date
+            producto:
+              oneOf:
+                - $ref: "#/components/schemas/ProductoReporte"
+                - type: "null"
+            estado:
+              oneOf:
+                - $ref: "#/components/schemas/EstadoPolizaReporte"
+                - type: "null"
+        indicadores:
+          type: object
+          additionalProperties: false
+          required: [polizas, primas, siniestros, pagos]
+          properties:
+            polizas:
+              type: object
+              additionalProperties: false
+              required: [emitidasEnPeriodo, cartera, porEstado]
+              properties:
+                emitidasEnPeriodo:
+                  type: integer
+                  minimum: 0
+                cartera:
+                  type: integer
+                  minimum: 0
+                porEstado:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                    minimum: 0
+            primas:
+              type: object
+              additionalProperties: false
+              required: [confirmadas, totales]
+              properties:
+                confirmadas:
+                  type: integer
+                  minimum: 0
+                totales:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TotalMoneda"
+            siniestros:
+              type: object
+              additionalProperties: false
+              required: [reportados, porEstado, porTipo]
+              properties:
+                reportados:
+                  type: integer
+                  minimum: 0
+                porEstado:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                    minimum: 0
+                porTipo:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                    minimum: 0
+            pagos:
+              type: object
+              additionalProperties: false
+              required: [registrados, porEstado, totales]
+              properties:
+                registrados:
+                  type: integer
+                  minimum: 0
+                porEstado:
+                  type: object
+                  additionalProperties:
+                    type: integer
+                    minimum: 0
+                totales:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [estado, moneda, monto]
+                    properties:
+                      estado:
+                        type: string
+                        enum: [pendiente, confirmado, rechazado]
+                      moneda:
+                        type: string
+                      monto:
+                        type: string
+        porProducto:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - producto
+              - polizasEmitidas
+              - cartera
+              - primasConfirmadas
+              - primas
+              - siniestrosReportados
+              - pagosRegistrados
+            properties:
+              producto:
+                $ref: "#/components/schemas/ProductoReporte"
+              polizasEmitidas:
+                type: integer
+              cartera:
+                type: integer
+              primasConfirmadas:
+                type: integer
+              primas:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TotalMoneda"
+              siniestrosReportados:
+                type: integer
+              pagosRegistrados:
+                type: integer
+        inconsistencias:
+          type: object
+          additionalProperties: false
+          description: Diferencias entre fuentes informadas explicitamente, no ocultas.
+          required:
+            [siniestrosSinPoliza, polizasSinPrima, primasConProductoDistinto, pagosSinSiniestro]
+          properties:
+            siniestrosSinPoliza:
+              type: integer
+            polizasSinPrima:
+              type: integer
+            primasConProductoDistinto:
+              type: integer
+            pagosSinSiniestro:
+              type: integer
+        fuentes:
+          type: array
+          description: Trazabilidad de cada fuente leida al corte.
+          items:
+            type: object
+            additionalProperties: false
+            required: [servicio, registros, huella]
+            properties:
+              servicio:
+                type: string
+                enum: [polizas, primas, siniestros]
+              registros:
+                type: integer
+                minimum: 0
+              huella:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
+        huella:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     MontoCop:
       type: object
       additionalProperties: false
@@ -5086,6 +5496,10 @@ components:
             $ref: "#/components/schemas/ErrorCampo"
         operacion:
           $ref: "#/components/schemas/EstadoOperacionInformacion"
+        fuente:
+          type: string
+          enum: [polizas, primas, siniestros, consolidacion]
+          description: Fuente que impidio consolidar un reporte operativo (consolidacion_incompleta).
         motivo:
           type: string
           description: Motivo de negocio de `poliza_no_renovable`.

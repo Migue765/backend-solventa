@@ -1,6 +1,7 @@
 import hmac
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,6 +25,7 @@ from siniestros.infrastructure.decisiones import ServicioDecisiones
 from siniestros.infrastructure.fraude import MotorFraude
 from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
+from siniestros.infrastructure.reportes import ConsultaReporte, RepositorioReportes
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
 from siniestros.policies import policies
 from siniestros.repository import Repository
@@ -50,6 +52,7 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
     motor_fraude = MotorFraude(repo, fraude or ConfiguracionFraude.from_environment())
     app.extensions["motor_fraude"] = motor_fraude
     registrar_rutas_fraude(app, motor_fraude)
+    reportes = RepositorioReportes(repo.sessions)
 
     @app.before_request
     def authorize() -> None:
@@ -195,6 +198,14 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
     def consultar_pago_parametrico_por_siniestro(siniestro_id: UUID) -> Response:
         empty()
         return jsonify(pagos_parametricos.detalle_por_siniestro(siniestro_id))
+
+    @app.post("/internal/v1/reportes/consulta")
+    def consultar_reporte() -> Response:
+        entrada = ConsultaReporte.model_validate(body())
+        try:
+            return jsonify(reportes.consultar(entrada.corte, datetime.now(UTC)))
+        except ValueError as error:
+            raise Problem(400, "solicitud_invalida") from error
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:

@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -117,3 +117,95 @@ def test_fallo_persistencia_no_parece_lista_vacia(tmp_path: Path) -> None:
         .status_code
         == 503
     )
+
+
+def _emitir(app: Flask, tipo: str = "automotive", confirmada: str = "2026-10-01T00:00:00Z") -> dict:
+    evidencia = {
+        "clienteId": str(uuid4()),
+        "suscripcionId": str(uuid4()),
+        "pagoId": str(uuid4()),
+        "tipo": tipo,
+        "confirmadaEn": confirmada,
+        "simulada": True,
+        "fechasContratadas": None,
+    }
+    respuesta = app.test_client().post("/v1/polizas", json=evidencia, headers=HEADERS)
+    assert respuesta.status_code == 200
+    return {**evidencia, **respuesta.get_json()}
+
+
+def test_reporte_por_corte_reproducible_y_sin_datos_del_cliente(app: Flask) -> None:
+    cliente = app.test_client()
+    primera = _emitir(app, "life")
+    antes = datetime.now(UTC)
+    corte = antes.isoformat()
+    assert cliente.get("/v1/reportes/polizas", query_string={"corte": corte}).status_code == 401
+    respuesta = cliente.get("/v1/reportes/polizas", query_string={"corte": corte}, headers=HEADERS)
+    _emitir(app, "automotive")
+
+    assert respuesta.status_code == 200
+    cuerpo = respuesta.get_json()
+    assert respuesta.headers["Cache-Control"] == "no-store"
+    assert cuerpo["fuente"] == "polizas"
+    assert cuerpo["registros"] == 1
+    assert cuerpo["polizas"] == [
+        {
+            "id": primera["id"],
+            "tipo": "life",
+            "pagoId": primera["pagoId"],
+            "emitidaEn": cuerpo["polizas"][0]["emitidaEn"],
+            "fechaInicio": "2026-10-01",
+            "fechaFin": "2026-11-01",
+            "estado": "vigente" if antes.date() <= date(2026, 11, 1) else "vencida",
+        }
+    ]
+    assert primera["clienteId"] not in respuesta.get_data(as_text=True)
+    repetida = cliente.get("/v1/reportes/polizas", query_string={"corte": corte}, headers=HEADERS)
+    assert repetida.get_json() == cuerpo
+    actual = cliente.get(
+        "/v1/reportes/polizas",
+        query_string={"corte": datetime.now(UTC).isoformat()},
+        headers=HEADERS,
+    ).get_json()
+    assert actual["registros"] == 2
+    assert actual["huella"] != cuerpo["huella"]
+
+
+def test_estado_del_reporte_se_calcula_al_corte(app: Flask) -> None:
+    _emitir(app, "automotive", "2026-01-10T00:00:00Z")
+    engine = app.extensions["polizas_engine"]
+    with Session(engine) as session:
+        poliza = session.scalars(select(PolizaModel)).one()
+        poliza.emitida_en = datetime(2026, 1, 10, tzinfo=UTC)
+        session.commit()
+    respuesta = app.test_client().get(
+        "/v1/reportes/polizas", query_string={"corte": "2026-01-20T00:00:00Z"}, headers=HEADERS
+    )
+    assert respuesta.get_json()["polizas"][0]["estado"] == "vigente"
+    previa = app.test_client().get(
+        "/v1/reportes/polizas", query_string={"corte": "2026-01-09T23:59:59Z"}, headers=HEADERS
+    )
+    assert previa.get_json()["registros"] == 0
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "?corte=2026-01-01T00:00:00",
+        "?corte=x",
+        "?corte=2999-01-01T00:00:00Z",
+        "?corte=2026-01-01T00:00:00Z&corte=2026-01-02T00:00:00Z",
+        "?corte=2026-01-01T00:00:00Z&clienteId=x",
+    ],
+)
+def test_reporte_rechaza_corte_invalido(app: Flask, query: str) -> None:
+    assert app.test_client().get("/v1/reportes/polizas" + query, headers=HEADERS).status_code == 400
+
+
+def test_reporte_con_fallo_de_persistencia_no_parece_vacio(tmp_path: Path) -> None:
+    app = create_app(f"sqlite:///{tmp_path / 'sin-migrar.db'}", TOKEN)
+    respuesta = app.test_client().get(
+        "/v1/reportes/polizas", query_string={"corte": "2026-01-01T00:00:00Z"}, headers=HEADERS
+    )
+    assert respuesta.status_code == 503

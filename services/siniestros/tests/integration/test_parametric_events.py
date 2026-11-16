@@ -17,6 +17,7 @@ from siniestros.domain.pagos_parametricos import (
     RespuestaPagoAmbigua,
     ResultadoProveedorPago,
 )
+from siniestros.infrastructure.models import CambioEstadoModel
 from siniestros.infrastructure.pagos_parametricos import (
     ProcesadorPagosParametricos,
     SimuladorPagoParametrico,
@@ -32,7 +33,7 @@ from siniestros.models import (
     ParametricQueueState,
     ParametricRule,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from werkzeug.test import TestResponse
 
@@ -794,3 +795,55 @@ def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     assert "/pagos-parametricos/siniestros/{siniestroId}" in contract["paths"]
     required_rule_fields = contract["components"]["schemas"]["Regla"]["required"]
     assert {"beneficiarioId", "montoIndemnizacion", "moneda"} <= set(required_rule_fields)
+
+
+def test_reporte_de_pagos_parametricos_al_corte_sin_beneficiario(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).status_code == 200
+    creado = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        session.execute(
+            update(ParametricPayment).values(
+                creado_en=creado, finalizado_en=creado + timedelta(hours=2)
+            )
+        )
+        session.execute(update(Claim).values(created=(creado - timedelta(hours=1)).isoformat()))
+        session.execute(update(CambioEstadoModel).values(ocurrido_en=creado - timedelta(hours=1)))
+        session.execute(
+            update(CambioEstadoModel)
+            .where(CambioEstadoModel.estado == "pagado")
+            .values(ocurrido_en=creado + timedelta(hours=2))
+        )
+        payment = session.scalars(select(ParametricPayment)).one()
+        payment_id, beneficiary = payment.id, payment.beneficiario_id
+
+    def report(corte: datetime) -> dict:
+        response = app.test_client().post(
+            "/internal/v1/reportes/consulta",
+            headers=INTERNAL_HEADERS,
+            json={"corte": corte.isoformat()},
+        )
+        assert response.status_code == 200
+        return cast(dict, response.get_json())
+
+    pending = report(creado + timedelta(hours=1))
+    confirmed = report(creado + timedelta(hours=3))
+
+    assert pending["pagos"] == [
+        {
+            "id": payment_id,
+            "siniestroId": case["siniestroId"],
+            "estado": "pendiente",
+            "monto": "250000.00",
+            "moneda": "COP",
+            "creadoEn": "2026-11-08T12:00:00Z",
+        }
+    ]
+    assert pending["siniestros"][0]["tipo"] == "parametrico"
+    assert pending["siniestros"][0]["estado"] == "aprobado"
+    assert pending["registros"] == 2
+    assert confirmed["pagos"][0]["estado"] == "confirmado"
+    assert confirmed["siniestros"][0]["estado"] == "pagado"
+    assert beneficiary not in str(confirmed)
+    assert case["clienteId"] not in str(confirmed)
+    assert report(creado - timedelta(minutes=1))["pagos"] == []

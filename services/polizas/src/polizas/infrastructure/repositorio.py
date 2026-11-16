@@ -1,8 +1,9 @@
 import hashlib
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from polizas.domain.emision import EvidenciaEmision, estado_vigencia
+from polizas.domain.reporte import instante
 from polizas.infrastructure.models import PolizaModel
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -73,6 +74,33 @@ class RepositorioPolizas:
                     .order_by(PolizaModel.emitida_en.desc(), PolizaModel.poliza_id)
                 )
             ]
+
+    def reporte(self, corte: datetime) -> list[dict[str, object]]:
+        """Polizas emitidas hasta el corte, sin datos del cliente, con su estado al corte."""
+        with self.sesiones() as sesion:
+            polizas = sesion.scalars(
+                select(PolizaModel)
+                .where(PolizaModel.emitida_en <= corte)
+                .order_by(PolizaModel.poliza_id)
+            ).all()
+            return [
+                {
+                    "id": str(poliza.poliza_id),
+                    "tipo": poliza.tipo,
+                    "pagoId": str(poliza.pago_id),
+                    "emitidaEn": instante(_utc(poliza.emitida_en)),
+                    "fechaInicio": poliza.fecha_inicio.isoformat(),
+                    "fechaFin": poliza.fecha_fin.isoformat(),
+                    "estado": estado_vigencia(poliza.fecha_inicio, poliza.fecha_fin, corte),
+                }
+                for poliza in polizas
+                if _utc(poliza.emitida_en) <= corte
+            ]
+
+
+def _utc(valor: datetime) -> datetime:
+    # SQLite devuelve instantes sin zona aunque la columna sea timezone=True.
+    return valor.replace(tzinfo=UTC) if valor.tzinfo is None else valor.astimezone(UTC)
 
 
 def _serializar(poliza: PolizaModel, ahora: datetime) -> dict[str, object]:

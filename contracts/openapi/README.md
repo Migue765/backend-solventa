@@ -8,6 +8,9 @@ Esta carpeta contiene los contratos HTTP públicos y versionados de Solventa.
   referenciada desde `bff-movil-v1.yaml`.
 - `identidad-v1.yaml`: registro de usuarios y emisión de tokens JWT (OAuth 2.0, RS256). Lo
   consumen los BFF y el API Gateway, que valida los tokens con el JWKS publicado.
+- `reportes-operativos-internal-v1.yaml`: fuentes internas sin datos personales (Polizas,
+  Cotizacion y Siniestros) que el BFF Web consolida al mismo corte para los reportes
+  operativos (SOL-322).
 
 Los microservicios internos conservan sus propios modelos y se integran a través del BFF. Un
 cambio incompatible requiere una nueva versión del contrato.

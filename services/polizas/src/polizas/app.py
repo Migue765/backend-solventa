@@ -21,6 +21,7 @@ from polizas.domain.modificacion import (
     SolicitudModificacion,
 )
 from polizas.domain.renovacion import SolicitudRenovacion
+from polizas.domain.reporte import corte_desde_texto, huella, instante
 from polizas.infrastructure.cancelaciones import (
     LiquidacionCambio,
     PolizaNoCancelable,
@@ -103,6 +104,22 @@ def create_app(
             raise ValueError("La consulta no admite cuerpo.")
         cliente_id = UUID(request.args["clienteId"])
         return jsonify(polizas=repositorio.listar(cliente_id, datetime.now(UTC)))
+
+    @app.get("/v1/reportes/polizas")
+    def reporte() -> Response:
+        if set(request.args) != {"corte"} or len(request.args.getlist("corte")) != 1:
+            raise ValueError("Se requiere un unico corte.")
+        if request.get_data():
+            raise ValueError("La consulta no admite cuerpo.")
+        corte = corte_desde_texto(request.args["corte"], datetime.now(UTC))
+        registros = repositorio.reporte(corte)
+        return jsonify(
+            corte=instante(corte),
+            fuente="polizas",
+            registros=len(registros),
+            huella=huella(registros),
+            polizas=registros,
+        )
 
     @app.post("/v1/polizas")
     def emitir() -> Response:
