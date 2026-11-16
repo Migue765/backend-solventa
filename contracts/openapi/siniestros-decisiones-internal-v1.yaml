@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: Solventa decisiones de siniestros internas
+  version: 1.0.0
+  description: >
+    HU27 (SOL-179). Aprueba automaticamente o enruta un siniestro segun el resultado de
+    evaluacion y fraude, asigna perito o cola de revision, actualiza la maquina de estados
+    sin omitir transiciones obligatorias y registra reglas, actor, fecha, resultado y motivo.
+    Los reintentos devuelven la decision existente sin duplicar aprobacion ni asignacion.
+servers:
+  - url: /internal/v1
+paths:
+  /siniestros/{siniestroId}/decisiones/automatica:
+    post:
+      operationId: decidirSiniestroAutomaticamente
+      description: >
+        Idempotente por (siniestroId, evaluacionId). Acepta siniestros en reportado o
+        en_evaluacion; desde reportado registra explicitamente el paso obligatorio
+        en_evaluacion. Fraude bloqueante o nivel alto nunca se aprueba y va a la cola
+        fraude; inspeccion va al perito indicado o a la cola inspeccion; revision humana,
+        fraude medio o no elegible van a la cola revision; el resto se aprueba.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/SiniestroId"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResultadoEvaluacion"}
+      responses:
+        "201": {$ref: "#/components/responses/Decision"}
+        "200": {$ref: "#/components/responses/Decision"}
+        "400": {$ref: "#/components/responses/Problema"}
+        "401": {$ref: "#/components/responses/Problema"}
+        "404": {$ref: "#/components/responses/Problema"}
+        "409":
+          description: >
+            transicion_no_permitida si el estado vigente no admite la decision;
+            idempotencia_conflictiva si el mismo evaluacionId llega con otro contenido.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problema"}
+        "503": {$ref: "#/components/responses/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/decisiones/revision:
+    post:
+      operationId: decidirSiniestroEnRevision
+      description: >
+        Decision humana sobre un caso en en_revision o en_inspeccion. Cierra la asignacion
+        activa y, si reenruta a inspeccion, crea una nueva. Idempotente por Idempotency-Key.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/SiniestroId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DecisionRevision"}
+      responses:
+        "201": {$ref: "#/components/responses/Decision"}
+        "200": {$ref: "#/components/responses/Decision"}
+        "400": {$ref: "#/components/responses/Problema"}
+        "401": {$ref: "#/components/responses/Problema"}
+        "404": {$ref: "#/components/responses/Problema"}
+        "409": {$ref: "#/components/responses/Problema"}
+        "503": {$ref: "#/components/responses/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/decisiones:
+    get:
+      operationId: consultarDecisionesSiniestro
+      description: Auditoria de decisiones y asignacion activa del siniestro.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/SiniestroId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: Estado vigente, asignacion activa y decisiones en orden cronologico
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [siniestroId, estado, asignacionActiva, decisiones]
+                properties:
+                  siniestroId: {type: string, format: uuid}
+                  estado: {$ref: "#/components/schemas/Estado"}
+                  asignacionActiva:
+                    oneOf:
+                      - {$ref: "#/components/schemas/Asignacion"}
+                      - {type: "null"}
+                  decisiones:
+                    type: array
+                    items: {$ref: "#/components/schemas/Decision"}
+        "401": {$ref: "#/components/responses/Problema"}
+        "404": {$ref: "#/components/responses/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+  /colas-revision/{cola}/asignaciones:
+    get:
+      operationId: listarAsignacionesCola
+      security: [{internalToken: []}]
+      parameters:
+        - name: cola
+          in: path
+          required: true
+          schema: {type: string, enum: [revision, inspeccion, fraude]}
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200": {$ref: "#/components/responses/Asignaciones"}
+        "401": {$ref: "#/components/responses/Problema"}
+        "404": {$ref: "#/components/responses/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+  /peritos/{peritoId}/asignaciones:
+    get:
+      operationId: listarAsignacionesPerito
+      security: [{internalToken: []}]
+      parameters:
+        - name: peritoId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200": {$ref: "#/components/responses/Asignaciones"}
+        "401": {$ref: "#/components/responses/Problema"}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  parameters:
+    SiniestroId:
+      name: siniestroId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      schema: {type: string, format: uuid}
+  schemas:
+    Estado:
+      type: string
+      enum:
+        - reportado
+        - en_evaluacion
+        - en_revision
+        - en_inspeccion
+        - aprobado
+        - rechazado
+        - pagado
+        - cerrado
+    ResultadoEvaluacion:
+      type: object
+      additionalProperties: false
+      required: [evaluacionId, evaluadoEn, elegible, requiereInspeccion, fraude, reglas, motivo]
+      properties:
+        evaluacionId: {type: string, format: uuid}
+        evaluadoEn: {type: string, format: date-time}
+        elegible: {type: boolean}
+        requiereInspeccion: {type: boolean}
+        requiereRevisionHumana: {type: boolean, default: false}
+        fraude:
+          type: object
+          additionalProperties: false
+          required: [nivel, bloqueante]
+          properties:
+            nivel: {type: string, enum: [bajo, medio, alto]}
+            bloqueante: {type: boolean}
+        reglas:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: {$ref: "#/components/schemas/ReglaEvaluada"}
+        motivo: {type: string, minLength: 10, maxLength: 1000}
+        peritoId: {type: [string, "null"], format: uuid}
+    ReglaEvaluada:
+      type: object
+      additionalProperties: false
+      required: [reglaId, version, resultado]
+      properties:
+        reglaId: {type: string, minLength: 1, maxLength: 100}
+        version: {type: integer, minimum: 1}
+        resultado: {type: string, minLength: 1, maxLength: 100}
+    DecisionRevision:
+      type: object
+      additionalProperties: false
+      required: [revisorId, resultado, motivo]
+      properties:
+        revisorId: {type: string, format: uuid}
+        resultado: {type: string, enum: [aprobado, rechazado, inspeccion]}
+        motivo: {type: string, minLength: 10, maxLength: 1000}
+        peritoId:
+          type: [string, "null"]
+          format: uuid
+          description: Solo se admite cuando resultado es inspeccion.
+    Asignacion:
+      type: object
+      additionalProperties: false
+      required: [id, siniestroId, tipo, destino, estado, asignadaEn, cerradaEn]
+      properties:
+        id: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        tipo: {type: string, enum: [perito, cola]}
+        destino:
+          type: string
+          description: UUID del perito o nombre de la cola (revision, inspeccion, fraude).
+        estado: {type: string, enum: [activa, cerrada]}
+        asignadaEn: {type: string, format: date-time}
+        cerradaEn: {type: [string, "null"], format: date-time}
+        estadoSiniestro: {$ref: "#/components/schemas/Estado"}
+    Decision:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - siniestroId
+        - operacionId
+        - origen
+        - actor
+        - resultado
+        - estadoAnterior
+        - estadoNuevo
+        - transiciones
+        - reglas
+        - motivo
+        - decididaEn
+        - asignacion
+      properties:
+        id: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        operacionId:
+          type: string
+          format: uuid
+          description: evaluacionId en decisiones automaticas o Idempotency-Key en humanas.
+        origen: {type: string, enum: [automatica, humana]}
+        actor:
+          type: object
+          additionalProperties: false
+          required: [tipo, id]
+          properties:
+            tipo: {type: string, enum: [sistema, revisor]}
+            id: {type: [string, "null"], format: uuid}
+        resultado:
+          type: string
+          enum: [aprobado, inspeccion, revision, bloqueado_fraude, rechazado]
+        estadoAnterior: {$ref: "#/components/schemas/Estado"}
+        estadoNuevo: {$ref: "#/components/schemas/Estado"}
+        transiciones:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [de, a, secuencia]
+            properties:
+              de: {$ref: "#/components/schemas/Estado"}
+              a: {$ref: "#/components/schemas/Estado"}
+              secuencia: {type: integer, minimum: 2}
+        reglas:
+          type: object
+          required: [politica, version, aplicada, evaluacion]
+          properties:
+            politica: {type: string}
+            version: {type: integer, minimum: 1}
+            aplicada: {type: string}
+            evaluacion:
+              type: array
+              items: {$ref: "#/components/schemas/ReglaEvaluada"}
+            motivoEvaluacion: {type: string}
+        motivo: {type: string}
+        decididaEn: {type: string, format: date-time}
+        asignacion:
+          oneOf:
+            - {$ref: "#/components/schemas/Asignacion"}
+            - {type: "null"}
+    Problema:
+      type: object
+      required: [type, title, status, code, correlationId]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}
+  responses:
+    Decision:
+      description: Decision durable (201 nueva, 200 reintento con la decision existente)
+      headers:
+        X-Correlation-ID: {schema: {type: string, format: uuid}}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Decision"}
+    Asignaciones:
+      description: Asignaciones activas del destino en orden de llegada
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [tipo, destino, asignaciones]
+            properties:
+              tipo: {type: string, enum: [perito, cola]}
+              destino: {type: string}
+              asignaciones:
+                type: array
+                items: {$ref: "#/components/schemas/Asignacion"}
+    Problema:
+      description: Rechazo seguro
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}
