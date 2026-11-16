@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
+from polizas.domain.cancelacion import ConfirmacionCancelacion
 from polizas.domain.emision import EvidenciaEmision
 from polizas.domain.modificacion import (
     CambioNoPermitido,
@@ -20,6 +21,11 @@ from polizas.domain.modificacion import (
     SolicitudModificacion,
 )
 from polizas.domain.renovacion import SolicitudRenovacion
+from polizas.infrastructure.cancelaciones import (
+    LiquidacionCambio,
+    PolizaNoCancelable,
+    RepositorioCancelaciones,
+)
 from polizas.infrastructure.modificaciones import (
     ImpactoCambio,
     PolizaNoModificable,
@@ -66,6 +72,7 @@ def create_app(
     app.extensions["polizas_repository"] = repositorio
     app.extensions["polizas_renovaciones"] = renovaciones
     modificaciones = RepositorioModificaciones(sesiones)
+    cancelaciones = RepositorioCancelaciones(sesiones)
 
     @app.before_request
     def autenticar() -> tuple[Response, int] | None:
@@ -146,6 +153,24 @@ def create_app(
         )
         return jsonify(resultado), 201 if nueva else 200
 
+    @app.get("/v1/polizas/<uuid:poliza_id>/cancelacion")
+    def consultar_cancelacion(poliza_id: UUID) -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La consulta no admite parametros ni cuerpo.")
+        return jsonify(cancelaciones.consultar(poliza_id, _cliente(), reloj()))
+
+    @app.post("/v1/polizas/<uuid:poliza_id>/cancelaciones")
+    def cancelar(poliza_id: UUID) -> tuple[Response, int]:
+        if request.args:
+            raise ValueError("La cancelacion no admite parametros.")
+        cliente_id = _cliente()
+        clave = UUID(request.headers.get("Idempotency-Key", ""))
+        confirmacion = ConfirmacionCancelacion.model_validate(request.get_json())
+        resultado, nueva = cancelaciones.cancelar(
+            poliza_id, cliente_id, clave, confirmacion, str(g.correlation_id), reloj()
+        )
+        return jsonify(resultado), 201 if nueva else 200
+
     @app.cli.command("conciliar-renovaciones")
     def conciliar_renovaciones() -> None:
         print(f"renovaciones_conciliadas={renovaciones.conciliar_pendientes()}")
@@ -179,6 +204,16 @@ def create_app(
         return jsonify(
             error="poliza_no_modificable", motivo=error.motivo, correlationId=g.correlation_id
         ), 422
+
+    @app.errorhandler(PolizaNoCancelable)
+    def no_cancelable(error: PolizaNoCancelable) -> tuple[Response, int]:
+        return jsonify(
+            error="poliza_no_cancelable", motivo=error.motivo, correlationId=g.correlation_id
+        ), 422
+
+    @app.errorhandler(LiquidacionCambio)
+    def liquidacion_cambio(_: LiquidacionCambio) -> tuple[Response, int]:
+        return jsonify(error="liquidacion_cambio", correlationId=g.correlation_id), 409
 
     @app.errorhandler(CambioNoPermitido)
     def cambio_no_permitido(error: CambioNoPermitido) -> tuple[Response, int]:

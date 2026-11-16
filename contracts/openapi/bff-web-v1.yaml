@@ -1636,6 +1636,90 @@ paths:
           $ref: "#/components/responses/ReglaNegocio"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/cancelacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta si la poliza se puede cancelar y la liquidacion resultante
+      operationId: consultarCancelacionPoliza
+      description: |
+        HU35 (SOL-321). El cliente se deriva del JWT; no admite query ni cuerpo. Solo los
+        productos de vigencia mensual se cancelan, mientras esten vigentes, no terminen hoy y
+        no tengan una renovacion con pago pendiente. Si es cancelable, `liquidacion` informa la
+        fecha efectiva (la cobertura termina ese mismo dia), las coberturas que finalizan, la
+        devolucion proporcional de los dias no usados, la devolucion de periodos renovados que
+        aun no inician y los valores pendientes, con `liquidacionHash` para confirmar. Una
+        poliza ya cancelada responde `motivo: poliza_cancelada` con la `cancelacion`
+        registrada, de modo que el cliente puede recuperar el resultado.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad, liquidacion y cancelacion registrada
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoCancelacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/cancelaciones:
+    post:
+      tags: [Polizas]
+      summary: Confirma la cancelacion de la poliza
+      operationId: confirmarCancelacionPoliza
+      description: |
+        HU35 (SOL-321) y ASR-AUD-01. Exige `confirma: true`, el motivo y el
+        `liquidacionHash` consultado. Recalcula la liquidacion y, si coincide, cancela la
+        poliza en una sola transaccion: la cobertura termina en la fecha efectiva y la poliza
+        deja de admitir renovaciones, modificaciones y cobros posteriores. Si la liquidacion
+        cambio responde `409 liquidacion_cambio`; si ya no es cancelable, `422
+        poliza_no_cancelable` con `motivo`. El actor, la fecha y el motivo quedan auditados,
+        igual que los rechazos. 201 = cancelacion nueva; 200 = reintento con la misma
+        Idempotency-Key. Un 503 no confirma ni descarta: se debe reintentar con la misma
+        clave. La devolucion es simulada (`simulada: true`).
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmacionCancelacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve la cancelacion registrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelacionPoliza"
+        "201":
+          description: Poliza cancelada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
     bearerAuth:
@@ -1864,6 +1948,7 @@ components:
         motivo:
           enum:
             - producto_no_modificable
+            - poliza_cancelada
             - poliza_programada
             - poliza_vencida
             - fin_de_vigencia
@@ -2031,6 +2116,176 @@ components:
         fin:
           type: string
           format: date
+    LiquidacionCancelacion:
+      type: object
+      additionalProperties: false
+      description: |
+        Efectos economicos de cancelar hoy. `devolucion` = `devolucionProporcional` (prima
+        mensual vigente por `diasNoUsados` / `diasPeriodo`) + `devolucionPeriodosAnulados`.
+        Los periodos se pagan por anticipado, por lo que `valorPendiente` es cero.
+      required:
+        - fechaEfectiva
+        - finCobertura
+        - coberturasFinalizadas
+        - periodoActual
+        - periodosAnulados
+        - primaMensual
+        - diasPeriodo
+        - diasNoUsados
+        - devolucionProporcional
+        - devolucionPeriodosAnulados
+        - devolucion
+        - valorPendiente
+        - reglaVersion
+        - liquidacionHash
+      properties:
+        fechaEfectiva:
+          type: string
+          format: date
+        finCobertura:
+          type: string
+          format: date
+        coberturasFinalizadas:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre]
+            properties:
+              codigo:
+                type: string
+                pattern: "^[a-z_]{1,40}$"
+              nombre:
+                type: string
+        periodoActual:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        periodosAnulados:
+          type: array
+          description: Periodos renovados y pagados que aun no inician.
+          items:
+            type: object
+            additionalProperties: false
+            required: [inicio, fin, prima]
+            properties:
+              inicio:
+                type: string
+                format: date
+              fin:
+                type: string
+                format: date
+              prima:
+                $ref: "#/components/schemas/MontoCop"
+        primaMensual:
+          $ref: "#/components/schemas/MontoCop"
+        diasPeriodo:
+          type: integer
+          minimum: 1
+        diasNoUsados:
+          type: integer
+          minimum: 0
+        devolucionProporcional:
+          $ref: "#/components/schemas/MontoCop"
+        devolucionPeriodosAnulados:
+          $ref: "#/components/schemas/MontoCop"
+        devolucion:
+          $ref: "#/components/schemas/MontoCop"
+        valorPendiente:
+          $ref: "#/components/schemas/MontoCop"
+        reglaVersion:
+          type: string
+        liquidacionHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    MotivoCancelacion:
+      enum: [ya_no_la_necesito, costo, cambio_de_aseguradora, insatisfaccion, otro]
+    CancelacionPoliza:
+      type: object
+      additionalProperties: false
+      description: Cancelacion academica registrada; `simulada` siempre es true.
+      required:
+        - id
+        - polizaId
+        - estado
+        - motivoCancelacion
+        - fechaEfectiva
+        - liquidacion
+        - confirmadaEn
+        - simulada
+      properties:
+        id:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        estado:
+          const: cancelada
+        motivoCancelacion:
+          $ref: "#/components/schemas/MotivoCancelacion"
+        fechaEfectiva:
+          type: string
+          format: date
+        liquidacion:
+          $ref: "#/components/schemas/LiquidacionCancelacion"
+        confirmadaEn:
+          type: string
+          format: date-time
+        simulada:
+          const: true
+    EstadoCancelacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - estado
+        - vigencia
+        - cancelable
+        - motivo
+        - liquidacion
+        - cancelacion
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        estado:
+          enum: [activa, cancelada]
+        vigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        cancelable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_cancelable
+            - poliza_cancelada
+            - poliza_programada
+            - poliza_vencida
+            - fin_de_vigencia
+            - renovacion_en_curso
+            - null
+        liquidacion:
+          oneOf:
+            - $ref: "#/components/schemas/LiquidacionCancelacion"
+            - type: "null"
+        cancelacion:
+          oneOf:
+            - $ref: "#/components/schemas/CancelacionPoliza"
+            - type: "null"
+    ConfirmacionCancelacion:
+      type: object
+      additionalProperties: false
+      required: [confirma, motivoCancelacion, liquidacionHash]
+      properties:
+        confirma:
+          const: true
+        motivoCancelacion:
+          $ref: "#/components/schemas/MotivoCancelacion"
+        liquidacionHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     CoberturaRenovacion:
       type: object
       additionalProperties: false
@@ -2128,7 +2383,10 @@ components:
         estado:
           enum: [pendiente, renovada, rechazada]
         motivo:
-          enum: [pago_rechazado, null]
+          enum: [pago_rechazado, poliza_cancelada, null]
+          description: |
+            `poliza_cancelada` si la poliza se cancelo mientras el pago estaba pendiente;
+            en ese caso no se cobra ni se extiende la vigencia.
         finAnterior:
           type: string
           format: date
@@ -2184,6 +2442,7 @@ components:
         motivo:
           enum:
             - producto_no_renovable
+            - poliza_cancelada
             - poliza_programada
             - poliza_vencida
             - fuera_de_ventana
@@ -4467,7 +4726,7 @@ components:
           format: date
         estado:
           type: string
-          enum: [programada, vigente, vencida]
+          enum: [programada, vigente, vencida, cancelada]
         simulada:
           type: boolean
           const: true

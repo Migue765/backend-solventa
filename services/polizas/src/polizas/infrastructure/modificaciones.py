@@ -61,7 +61,11 @@ class RepositorioModificaciones:
         with self.sesiones() as sesion:
             poliza = _poliza(sesion, poliza_id, cliente_id)
             motivo = motivo_no_modificable(
-                poliza.tipo, poliza.fecha_inicio, poliza.fecha_fin, _hoy(ahora)
+                poliza.tipo,
+                poliza.fecha_inicio,
+                poliza.fecha_fin,
+                _hoy(ahora),
+                cancelada=poliza.estado == "cancelada",
             )
             respuesta: dict[str, object] = {
                 "polizaId": str(poliza.poliza_id),
@@ -198,7 +202,13 @@ class RepositorioModificaciones:
     ) -> tuple[dict[str, object], PolizaModel, Condiciones]:
         poliza = _poliza(sesion, poliza_id, cliente_id)
         hoy = _hoy(ahora)
-        motivo = motivo_no_modificable(poliza.tipo, poliza.fecha_inicio, poliza.fecha_fin, hoy)
+        motivo = motivo_no_modificable(
+            poliza.tipo,
+            poliza.fecha_inicio,
+            poliza.fecha_fin,
+            hoy,
+            cancelada=poliza.estado == "cancelada",
+        )
         if motivo is not None:
             raise PolizaNoModificable(motivo)
         version, actuales = condiciones_vigentes(sesion, poliza)

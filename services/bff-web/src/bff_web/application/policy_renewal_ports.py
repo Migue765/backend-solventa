@@ -1,6 +1,11 @@
 from typing import Protocol
 from uuid import UUID
 
+from bff_web.domain.policy_cancellation import (
+    Cancellation,
+    CancellationConfirmation,
+    CancellationState,
+)
 from bff_web.domain.policy_modification import (
     ModificationConfirmation,
     ModificationImpact,
@@ -47,3 +52,18 @@ class PolicyModificationGateway(Protocol):
         confirmation: ModificationConfirmation,
         correlation_id: str,
     ) -> tuple[ModificationResult, int]: ...
+
+
+class PolicyCancellationGateway(Protocol):
+    def get_state(
+        self, policy_id: UUID, client_id: UUID, correlation_id: str
+    ) -> CancellationState: ...
+
+    def cancel(
+        self,
+        policy_id: UUID,
+        client_id: UUID,
+        idempotency_key: UUID,
+        confirmation: CancellationConfirmation,
+        correlation_id: str,
+    ) -> tuple[Cancellation, int]: ...

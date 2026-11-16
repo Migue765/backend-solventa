@@ -134,6 +134,7 @@ def _raise_renewal_error(error: HTTPError, payload: dict[str, Any]) -> None:
         reason = payload.get("motivo")
         if reason in {
             "producto_no_renovable",
+            "poliza_cancelada",
             "poliza_programada",
             "poliza_vencida",
             "fuera_de_ventana",

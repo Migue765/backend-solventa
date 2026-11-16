@@ -18,6 +18,7 @@ REGLA_MODIFICACION = "academica-modificacion-v1"
 
 MotivoNoModificable = Literal[
     "producto_no_modificable",
+    "poliza_cancelada",
     "poliza_programada",
     "poliza_vencida",
     "fin_de_vigencia",
@@ -64,10 +65,12 @@ class ConfirmacionModificacion(SolicitudModificacion):
 
 
 def motivo_no_modificable(
-    tipo: str, inicio: date, fin: date, hoy: date
+    tipo: str, inicio: date, fin: date, hoy: date, *, cancelada: bool = False
 ) -> MotivoNoModificable | None:
     if tipo not in PRODUCTOS:
         return "producto_no_modificable"
+    if cancelada:
+        return "poliza_cancelada"
     if hoy < inicio:
         return "poliza_programada"
     if hoy > fin:

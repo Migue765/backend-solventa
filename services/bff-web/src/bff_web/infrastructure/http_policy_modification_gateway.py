@@ -19,6 +19,7 @@ from bff_web.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewal
 
 NOT_MODIFIABLE = {
     "producto_no_modificable",
+    "poliza_cancelada",
     "poliza_programada",
     "poliza_vencida",
     "fin_de_vigencia",
