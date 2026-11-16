@@ -11,7 +11,20 @@ from werkzeug.test import TestResponse
 
 PASSWORD = "Solventa123!"
 ISSUER = "https://api.solventa.test"
-CLAIMS = {"iss", "sub", "aud", "iat", "exp", "jti", "scope", "rol", "nombre", "correo", "client_id"}
+CLAIMS = {
+    "iss",
+    "sub",
+    "aud",
+    "iat",
+    "exp",
+    "jti",
+    "sid",
+    "scope",
+    "rol",
+    "nombre",
+    "correo",
+    "client_id",
+}
 
 
 def body(response: TestResponse) -> dict[str, Any]:

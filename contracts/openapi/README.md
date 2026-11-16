@@ -4,6 +4,8 @@ Esta carpeta contiene los contratos HTTP públicos y versionados de Solventa.
 
 - `bff-web-v1.yaml`: contrato consumido por la aplicación web.
 - `bff-movil-v1.yaml`: contrato consumido por la aplicación móvil.
+- `modificacion-poliza-movil-v1.yaml`: modificación versionada de pólizas para la app móvil,
+  referenciada desde `bff-movil-v1.yaml`.
 - `identidad-v1.yaml`: registro de usuarios y emisión de tokens JWT (OAuth 2.0, RS256). Lo
   consumen los BFF y el API Gateway, que valida los tokens con el JWKS publicado.
 

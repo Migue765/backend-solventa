@@ -31,8 +31,15 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `GET`    | `/movil/v1/notificaciones`     | Sí     | Lista las notificaciones entregadas del cliente    |
 | `GET`    | `/movil/v1/notificaciones/preferencias` | Sí | Consulta preferencias por tipo y canal       |
 | `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
+| `GET`    | `/movil/v1/polizas/{id}/modificacion` | Sí | Versión vigente y cambios permitidos |
+| `POST`   | `/movil/v1/polizas/{id}/modificaciones/simulacion` | Sí | Impacto en prima, coberturas y vigencia |
+| `POST`   | `/movil/v1/polizas/{id}/modificaciones` | Sí | Confirma el cambio y crea una versión |
 | `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
 | `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
+| `GET`    | `/movil/v1/polizas` | Sí | Lista las pólizas del cliente con sesión activa |
+| `GET`    | `/movil/v1/polizas/{polizaId}` | Sí | Detalle vigente de una póliza propia (404 si es ajena) |
+| `GET`    | `/movil/v1/polizas/{polizaId}/renovacion` | Sí | Consulta elegibilidad y condiciones de renovación |
+| `POST`   | `/movil/v1/polizas/{polizaId}/renovaciones` | Sí | Acepta y paga la renovación de forma idempotente |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |
 
 El access token dura 1 hora y el refresh token es opaco, de un solo uso y rota en cada
@@ -67,12 +74,35 @@ deriva `X-Cliente-ID` del JWT y nunca acepta un cliente indicado por la aplicaci
 Requieren `NOTIFICACIONES_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración o
 ante una respuesta interna no válida devuelven `503` sin inventar una lista vacía.
 
+## Modificación de pólizas
+
+Las rutas `/movil/v1/polizas/{id}/modificacion(es)` delegan en Pólizas, que valida
+campos permitidos, calcula el impacto y versiona el cambio de forma atómica. El BFF
+deriva `X-Cliente-ID` del JWT, exige `confirma: true` con la versión y el hash
+simulados, y reenvía `Idempotency-Key` al confirmar. Los errores incluyen `accion`
+(`ajustar_cambios`, `simular_de_nuevo`, `consultar_poliza`, `nueva_operacion`,
+`reintentar` o `reintentar_misma_clave`) para que la app recupere el flujo sin
+cambios parciales. Requieren `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin
+configuración responden 503. Ver `contracts/openapi/modificacion-poliza-movil-v1.yaml`.
+
 ## Asistencias
 
 Las rutas `/movil/v1/prestadores/consulta` y `/movil/v1/asistencias` delegan al
 servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
 `Idempotency-Key` al registrar. Requieren `ASISTENCIAS_SERVICE_URL` e
 `INTERNAL_API_TOKEN`; una caída interna devuelve 503 y no simula un registro.
+
+## Renovación de pólizas
+
+`GET /movil/v1/polizas/{polizaId}/renovacion` y `POST /movil/v1/polizas/{polizaId}/renovaciones`
+exponen la renovación central del servicio de Pólizas (HU39/SOL-320 sobre SOL-317); el BFF no
+evalúa reglas propias. Exigen JWT del canal móvil con rol y scope `cliente`, derivan
+`X-Cliente-ID` del token y reenvían `Idempotency-Key`. La consulta devuelve nueva vigencia,
+coberturas, prima, condiciones y `condicionesHash`; la confirmación exige
+`aceptaCondiciones: true` con ese hash. `201` es un resultado definitivo (`renovada` o
+`rechazada`), `200` un reintento con la misma clave sin nuevo cobro y `202` una renovación
+`pendiente` identificable por `id`. Ante `503` la app debe reintentar con la misma clave.
+Requieren `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración responden 503.
 
 ## Configuración de identidad
 
@@ -85,6 +115,7 @@ servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                                        | Timeout hacia identidad y JWKS |
 | `NOTIFICACIONES_SERVICE_URL` | vacía                                      | URL interna de Notificaciones  |
 | `ASISTENCIAS_SERVICE_URL`     | vacía                                      | URL interna de Asistencias     |
+| `POLIZAS_SERVICE_URL`         | vacía                                      | URL interna de Pólizas         |
 | `INTERNAL_API_TOKEN`         | vacía                                      | Credencial entre servicios     |
 
 ## Ejecución
