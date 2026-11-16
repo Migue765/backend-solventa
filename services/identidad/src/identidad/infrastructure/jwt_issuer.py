@@ -2,7 +2,7 @@ import base64
 import hashlib
 from datetime import datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import jwt
 from cryptography.hazmat.primitives import serialization
@@ -49,7 +49,14 @@ class RsaJwtIssuer:
     def jwks(self) -> dict[str, Any]:
         return {"keys": [dict(self._jwk)]}
 
-    def issue(self, user: User, client_id: str, issued_at: datetime, expires_at: datetime) -> str:
+    def issue(
+        self,
+        user: User,
+        client_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+        session_id: UUID | None = None,
+    ) -> str:
         claims = {
             "iss": self._issuer,
             "sub": str(user.user_id),
@@ -65,6 +72,8 @@ class RsaJwtIssuer:
         }
         if user.role in {"asesor", "socio"}:
             claims["socios"] = list(user.partner_ids)
+        if session_id is not None:
+            claims["sid"] = str(session_id)
         try:
             return jwt.encode(
                 claims,

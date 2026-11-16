@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import UUID
 
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -102,7 +103,9 @@ class SqlRefreshTokenRepository:
                     )
                 )
                 session.commit()
-                return RotationResult(RotationOutcome.ROTATED, current.usuario_id)
+                return RotationResult(
+                    RotationOutcome.ROTATED, current.usuario_id, current.family_id
+                )
 
             if current is None or current.client_id != client_id:
                 session.rollback()
@@ -122,6 +125,19 @@ class SqlRefreshTokenRepository:
             if current is not None:
                 self._revoke_family(session, current.family_id, now)
                 session.commit()
+
+    def is_session_active(self, family_id: UUID, now: datetime) -> bool:
+        with self._sessions() as session:
+            token = session.scalar(
+                select(Token.token_hash)
+                .where(
+                    Token.family_id == family_id,
+                    Token.revocado_en.is_(None),
+                    Token.expira_en > now,
+                )
+                .limit(1)
+            )
+            return token is not None
 
     @staticmethod
     def _revoke_family(session: Session, family_id: Any, now: datetime) -> None:

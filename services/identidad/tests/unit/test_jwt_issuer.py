@@ -49,6 +49,18 @@ def test_issued_token_header_and_claims(private_key_pem: str) -> None:
     claims = jwt.decode(token, options={"verify_signature": False})
     assert claims["sub"] == str(USER.user_id)
     assert claims["exp"] - claims["iat"] == 3600
+    assert "sid" not in claims
+
+
+def test_issued_token_carries_session_id(private_key_pem: str) -> None:
+    issuer = RsaJwtIssuer(private_key_pem, "https://x", "aud")
+    now = datetime.now(UTC)
+    session_id = uuid4()
+
+    token = issuer.issue(USER, "movil", now, now + timedelta(hours=1), session_id)
+
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["sid"] == str(session_id)
 
 
 def test_advisor_token_contains_scope_and_authorized_partners(private_key_pem: str) -> None:
