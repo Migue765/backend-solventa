@@ -123,9 +123,27 @@ class NotificationRepository:
                 .limit(1)
                 .with_for_update(skip_locked=True)
             )
-            model = session.scalar(statement)
-            if model is None:
-                return None
+            while True:
+                model = session.scalar(statement)
+                if model is None:
+                    return None
+                # La preferencia pudo cambiar entre la programación y el despacho.
+                if model.canal in self._enabled_channels(
+                    session, model.cliente_id, _notification_type(model.tipo)
+                ):
+                    break
+                model.estado = "omitida"
+                model.ultimo_error = "preferencia_deshabilitada"
+                session.add(
+                    DeliveryAttemptModel(
+                        intento_id=uuid4(),
+                        notificacion_id=model.notificacion_id,
+                        intentado_en=instant,
+                        resultado="omitida",
+                        error=model.ultimo_error,
+                    )
+                )
+                session.flush()
             reservation_id = uuid4()
             model.estado = "procesando"
             model.intentos += 1
@@ -206,6 +224,58 @@ class NotificationRepository:
                 for model in models
             ]
 
+    def trace(self, event_id: UUID) -> dict[str, object] | None:
+        with Session(self._engine) as session:
+            event = session.get(NotificationEventModel, event_id)
+            if event is None:
+                return None
+            notifications = session.scalars(
+                select(NotificationModel)
+                .where(NotificationModel.evento_id == event_id)
+                .order_by(NotificationModel.programada_en, NotificationModel.canal)
+            ).all()
+            attempts: dict[UUID, list[DeliveryAttemptModel]] = {}
+            for attempt in session.scalars(
+                select(DeliveryAttemptModel)
+                .where(
+                    DeliveryAttemptModel.notificacion_id.in_(
+                        [item.notificacion_id for item in notifications]
+                    )
+                )
+                .order_by(DeliveryAttemptModel.intentado_en, DeliveryAttemptModel.intento_id)
+            ):
+                attempts.setdefault(attempt.notificacion_id, []).append(attempt)
+            return {
+                "eventoId": str(event.evento_id),
+                "tipo": event.tipo,
+                "clienteId": str(event.cliente_id),
+                "ocurridoEn": _iso(event.ocurrido_en),
+                "recibidoEn": _iso(event.recibido_en),
+                "resultado": event.resultado,
+                "notificaciones": [
+                    {
+                        "notificacionId": str(item.notificacion_id),
+                        "tipo": item.tipo,
+                        "canal": item.canal,
+                        "recurso": {"tipo": item.recurso_tipo, "id": str(item.recurso_id)},
+                        "programadaEn": _iso(item.programada_en),
+                        "estado": item.estado,
+                        "intentos": item.intentos,
+                        "entregadaEn": _optional_iso(item.entregada_en),
+                        "ultimoError": item.ultimo_error,
+                        "historial": [
+                            {
+                                "intentadoEn": _iso(attempt.intentado_en),
+                                "resultado": attempt.resultado,
+                                "error": attempt.error,
+                            }
+                            for attempt in attempts.get(item.notificacion_id, [])
+                        ],
+                    }
+                    for item in notifications
+                ],
+            }
+
     def preferences(self, client_id: UUID) -> list[dict[str, object]]:
         with Session(self._engine) as session:
             stored = {
@@ -273,6 +343,10 @@ def _iso(value: datetime | None) -> str:
     if value is None:
         raise RuntimeError("La notificación entregada no tiene fecha.")
     return _utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _optional_iso(value: datetime | None) -> str | None:
+    return None if value is None else _iso(value)
 
 
 def _notification_type(value: str) -> NotificationType:

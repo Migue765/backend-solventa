@@ -212,6 +212,32 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/PagoParametrico"}
         default: {$ref: "#/components/responses/Problema"}
+  /notificaciones/publicacion:
+    post:
+      operationId: publicarNotificacionesSiniestros
+      description: >
+        Publica en Notificaciones el outbox transaccional de cambios de estado visibles
+        al cliente y de pagos parametricos confirmados. Cada evento conserva un eventoId
+        determinista, por lo que un reintento no duplica avisos.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200":
+          description: Resultado del lote de publicacion
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [publicadas, fallidas]
+                properties:
+                  publicadas: {type: integer, minimum: 0}
+                  fallidas: {type: integer, minimum: 0}
+        default: {$ref: "#/components/responses/Problema"}
 components:
   securitySchemes:
     internalToken:

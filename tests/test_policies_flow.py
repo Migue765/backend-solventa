@@ -19,6 +19,7 @@ from alembic.config import Config
 from bff_web.domain.auth import User
 from cotizacion.app import create_app as quote_app
 from cotizacion.application.pagos import ProcesarPagoSimulado
+from cotizacion.application.ports import PolizaEmitida
 from cotizacion.config import Config as QuoteConfig
 from cotizacion.domain.errors import ResultadoPagoAmbiguoError, ServicioPolizasNoDisponibleError
 from cotizacion.domain.pago import PagoSimuladoPendiente
@@ -146,7 +147,7 @@ def test_automatic_recovery_after_lost_ack_without_another_payment_post(
 ) -> None:
     client, quotes, _ = automatic_policy_runtime
     gateway = quotes.application.extensions["polizas"]
-    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    original: Callable[[dict[str, object], str], PolizaEmitida] = gateway.emitir
     lost = False
     worker_calls: list[str] = []
     payment_posts: list[str] = []
@@ -156,15 +157,15 @@ def test_automatic_recovery_after_lost_ack_without_another_payment_post(
         if request.method == "POST" and request.path.endswith("/pago-simulado"):
             payment_posts.append(request.path)
 
-    def lose_one_ack(evidence: dict[str, object], correlation: str) -> UUID:
+    def lose_one_ack(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         nonlocal lost
-        policy_id = original(evidence, correlation)
+        policy = original(evidence, correlation)
         if current_thread().name == "conciliacion-emision-academica":
             worker_calls.append(str(evidence["pagoId"]))
         elif not lost:
             lost = True
             raise ServicioPolizasNoDisponibleError()
-        return policy_id
+        return policy
 
     monkeypatch.setattr(gateway, "emitir", lose_one_ack)
     started = monotonic()
@@ -203,11 +204,11 @@ def test_worker_and_manual_recovery_converge_without_duplicates(
 ) -> None:
     client, quotes, _ = automatic_policy_runtime
     gateway = quotes.application.extensions["polizas"]
-    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    original: Callable[[dict[str, object], str], PolizaEmitida] = gateway.emitir
     gate, lock = Barrier(2), Lock()
     first = True
 
-    def race(evidence: dict[str, object], correlation: str) -> UUID:
+    def race(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         nonlocal first
         with lock:
             fail = first
@@ -257,7 +258,7 @@ def test_restart_resumes_persisted_eligibility_without_new_payment(
     gateway = app.extensions["polizas"]
     original = gateway.emitir
 
-    def lose_ack(evidence: dict[str, object], correlation: str) -> UUID:
+    def lose_ack(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         original(evidence, correlation)
         raise ServicioPolizasNoDisponibleError()
 
@@ -605,7 +606,7 @@ def test_lost_emission_acknowledgement_retries_without_duplicate_policy(
     policies = quotes.application.extensions["polizas_test_app"]
     original = gateway.emitir
 
-    def lose_response(evidence: dict[str, object], correlation_id: str) -> UUID:
+    def lose_response(evidence: dict[str, object], correlation_id: str) -> PolizaEmitida:
         with factory() as session:
             paid: PagoSimuladoModel = session.scalars(select(PagoSimuladoModel)).one()
             assert str(paid.pago_id) == evidence["pagoId"]

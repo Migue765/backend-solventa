@@ -68,7 +68,7 @@ from cotizacion.infrastructure.persistence.repositorio_reglas import (
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cotizacion.infrastructure.publicador_notificaciones import (
     NotificationHttpSender,
-    PaymentNotificationPublisher,
+    OutboxNotificationPublisher,
 )
 from cotizacion.infrastructure.tarificador_por_regla import TarificadorPorRegla
 
@@ -113,7 +113,7 @@ def create_app(config: Config | None = None) -> Flask:
         config.pago_simulado_resultado,
         conciliar_emision=config.conciliacion_emision_habilitada,
         publicador_notificaciones=(
-            PaymentNotificationPublisher(
+            OutboxNotificationPublisher(
                 sesiones,
                 NotificationHttpSender(config.notificaciones_url, config.internal_api_token),
             )

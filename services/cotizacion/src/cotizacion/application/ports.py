@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -111,14 +111,20 @@ class ReservaEmision:
     intentos: int
 
 
+@dataclass(frozen=True)
+class PolizaEmitida:
+    poliza_id: UUID
+    fecha_fin: date
+
+
 class RepositorioEmision(Protocol):
     def evidencia_emision(self, pago: PagoSimulado) -> dict[str, object] | None: ...
 
-    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None: ...
+    def marcar_emitida(self, pago: PagoSimulado, poliza: PolizaEmitida) -> None: ...
 
 
 class EmisorPolizas(Protocol):
-    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> UUID: ...
+    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> PolizaEmitida: ...
 
 
 class PerfilRiesgoGateway(Protocol):

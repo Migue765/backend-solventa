@@ -1,14 +1,14 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http.client import HTTPException
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.infrastructure.persistence.models import (
@@ -19,16 +19,26 @@ from cotizacion.infrastructure.persistence.models import (
 logger = logging.getLogger(__name__)
 
 
+EventType = Literal["pago_confirmado", "poliza_emitida"]
+OUTBOX_TYPES: dict[str, tuple[EventType, str, str]] = {
+    "PagoSimuladoConfirmado": ("pago_confirmado", "pago", "pagoId"),
+    "PolizaAcademicaEmitida": ("poliza_emitida", "poliza", "polizaId"),
+}
+
+
 @dataclass(frozen=True)
-class PaymentNotification:
+class OutboxNotification:
     event_id: UUID
+    event_type: EventType
     client_id: UUID
-    payment_id: UUID
+    resource_type: str
+    resource_id: UUID
     occurred_at: datetime
+    end_date: date | None = None
 
 
 class NotificationSender(Protocol):
-    def send(self, notification: PaymentNotification) -> bool: ...
+    def send(self, notification: OutboxNotification) -> bool: ...
 
 
 class NotificationHttpSender:
@@ -37,17 +47,17 @@ class NotificationHttpSender:
         self._internal_token = internal_token
         self._timeout_seconds = timeout_seconds
 
-    def send(self, notification: PaymentNotification) -> bool:
-        body = json.dumps(
-            {
-                "eventoId": str(notification.event_id),
-                "tipo": "pago_confirmado",
-                "clienteId": str(notification.client_id),
-                "ocurridoEn": _iso(notification.occurred_at),
-                "recurso": {"tipo": "pago", "id": str(notification.payment_id)},
-            },
-            separators=(",", ":"),
-        ).encode()
+    def send(self, notification: OutboxNotification) -> bool:
+        event: dict[str, object] = {
+            "eventoId": str(notification.event_id),
+            "tipo": notification.event_type,
+            "clienteId": str(notification.client_id),
+            "ocurridoEn": _iso(notification.occurred_at),
+            "recurso": {"tipo": notification.resource_type, "id": str(notification.resource_id)},
+        }
+        if notification.end_date is not None:
+            event["fechaFin"] = notification.end_date.isoformat()
+        body = json.dumps(event, separators=(",", ":")).encode()
         request = Request(
             self._url,
             method="POST",
@@ -78,7 +88,7 @@ class NotificationHttpSender:
             return False
 
 
-class PaymentNotificationPublisher:
+class OutboxNotificationPublisher:
     def __init__(
         self,
         sessions: sessionmaker[Session],
@@ -96,7 +106,14 @@ class PaymentNotificationPublisher:
                     SuscripcionModel.suscripcion_id == OutboxEventoModel.agregado_id,
                 )
                 .where(
-                    OutboxEventoModel.tipo == "PagoSimuladoConfirmado",
+                    or_(
+                        OutboxEventoModel.tipo == "PagoSimuladoConfirmado",
+                        # Las emisiones previas a la fecha de fin no pueden programar avisos.
+                        and_(
+                            OutboxEventoModel.tipo == "PolizaAcademicaEmitida",
+                            OutboxEventoModel.payload["fechaFin"].as_string().is_not(None),
+                        ),
+                    ),
                     OutboxEventoModel.publicado_en.is_(None),
                 )
                 .order_by(OutboxEventoModel.creado_en, OutboxEventoModel.evento_id)
@@ -106,11 +123,15 @@ class PaymentNotificationPublisher:
                 return False
             event, client_id = row
             event.intentos += 1
-            notification = PaymentNotification(
+            event_type, resource_type, id_field = OUTBOX_TYPES[event.tipo]
+            notification = OutboxNotification(
                 event.evento_id,
+                event_type,
                 client_id,
-                _payment_id(event.payload),
+                resource_type,
+                _uuid(event.payload, id_field),
                 _utc(event.creado_en),
+                _end_date(event.payload) if event_type == "poliza_emitida" else None,
             )
 
         if not self._sender.send(notification):
@@ -128,11 +149,18 @@ class PaymentNotificationPublisher:
         return True
 
 
-def _payment_id(payload: dict[str, object]) -> UUID:
-    value = payload.get("pagoId")
+def _uuid(payload: dict[str, object], field: str) -> UUID:
+    value = payload.get(field)
     if not isinstance(value, str):
-        raise ValueError("El evento de pago no contiene pagoId.")
+        raise ValueError(f"El evento no contiene {field}.")
     return UUID(value)
+
+
+def _end_date(payload: dict[str, object]) -> date:
+    value = payload.get("fechaFin")
+    if not isinstance(value, str):
+        raise ValueError("El evento de poliza no contiene fechaFin.")
+    return date.fromisoformat(value)
 
 
 def _utc(value: datetime) -> datetime:
