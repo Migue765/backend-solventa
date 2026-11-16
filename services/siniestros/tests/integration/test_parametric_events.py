@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from flask import Flask
 from siniestros.app import create_app
-from siniestros.domain import Config
+from siniestros.domain import Config, Problem
 from siniestros.domain.pagos_parametricos import (
     CasoPagoParametrico,
     RespuestaPagoAmbigua,
@@ -29,6 +30,7 @@ from siniestros.models import (
     ParametricPaymentAttempt,
     ParametricPaymentEffect,
     ParametricQueueState,
+    ParametricRule,
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -285,6 +287,58 @@ def test_backpressure_no_pierde_aceptados_y_libera_capacidad(tmp_path: Path) -> 
 
     assert process(app).get_json()["procesados"] == 1
     assert receive(app, second).status_code == 202
+
+
+def test_backpressure_concurrente_de_varios_productores_no_excede_capacidad(
+    tmp_path: Path,
+) -> None:
+    capacity = 10
+    app = configured_app(tmp_path, capacity=capacity)
+    batches = [[event() for _ in range(3)] for _ in range(8)]
+
+    def send(batch: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
+        response = receive(app, *batch)
+        return response.status_code, cast(dict[str, object], response.get_json())
+
+    with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+        results = list(executor.map(send, batches))
+
+    accepted = [batch for batch, (status, _) in zip(batches, results, strict=True) if status == 202]
+    rejected = [batch for batch, (status, _) in zip(batches, results, strict=True) if status == 429]
+    assert len(accepted) + len(rejected) == len(batches)
+    assert 1 <= len(accepted) <= capacity // 3
+    for status, body in results:
+        if status == 202:
+            assert body["aceptados"] == 3 and body["duplicados"] == 0
+        else:
+            assert body["code"] == "backpressure"
+
+    accepted_ids = {item["eventoId"] for batch in accepted for item in batch}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored_ids = set(session.scalars(select(ParametricEvent.evento_id)))
+        state = session.get(ParametricQueueState, 1)
+        assert state is not None
+        assert stored_ids == accepted_ids
+        assert state.pendientes == len(accepted_ids) <= capacity
+
+    for _ in range(len(batches)):
+        if not rejected:
+            break
+        assert process(app).status_code == 200
+        rejected = [batch for batch in rejected if receive(app, *batch).status_code == 429]
+    assert not rejected
+    assert process(app).status_code == 200
+
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricEvent)) == 24
+        pending = session.scalar(
+            select(func.count())
+            .select_from(ParametricEvent)
+            .where(ParametricEvent.estado == "pendiente")
+        )
+        state = session.get(ParametricQueueState, 1)
+        assert pending == 0
+        assert state is not None and state.pendientes == 0
 
 
 def test_fuente_debe_estar_identificada_y_autenticada(app: Flask) -> None:
@@ -572,14 +626,157 @@ def test_hu31_conserva_rechazo_definitivo_sin_marcar_siniestro_pagado(app: Flask
         assert claim is not None and claim.estado == "aprobado"
 
 
-def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
+def test_hu31_failover_cierra_intento_huerfano_y_no_repite_efecto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    clock = [datetime.now(UTC)]
+    crashed = ProcesadorPagosParametricos(repository, reloj=lambda: clock[0])
+    replica = ProcesadorPagosParametricos(repository, reloj=lambda: clock[0])
+
+    assert crashed._incorporar(10) == 1
+    reservation = crashed._reservar()
+    assert reservation is not None
+    payment_id, _, _, stale_token, stale_number = reservation
+
+    assert replica.procesar(10)["confirmados"] == 0
+    clock[0] += timedelta(seconds=31)
+    assert replica.procesar(10) == {
+        "casosIncorporados": 0,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+
+    with pytest.raises(Problem) as conflict:
+        crashed._finalizar(payment_id, stale_token, stale_number, ResultadoProveedorPago.CONFIRMADO)
+    assert conflict.value.status == 409
+    assert conflict.value.code == "reserva_pago_conflictiva"
+
+    detail = replica.detalle(UUID(case["casoId"]))
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert [(item["numero"], item["estado"], item["codigo"]) for item in attempts] == [
+        (1, "ambiguo", "lease_vencido"),
+        (2, "confirmado", None),
+    ]
+    assert all(item["finalizadoEn"] is not None for item in attempts)
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+        orphans = session.scalar(
+            select(func.count())
+            .select_from(ParametricPaymentAttempt)
+            .where(ParametricPaymentAttempt.estado == "en_proceso")
+        )
+        assert orphans == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("beneficiarioId", lambda: str(uuid4()), "beneficiario_invalido"),
+        ("indemnizacion", lambda: {"monto": "999999.00", "moneda": "COP"}, "monto_invalido"),
+        ("indemnizacion", lambda: {"monto": "250000.00", "moneda": "USD"}, "monto_invalido"),
+        ("polizaId", lambda: str(uuid4()), "poliza_invalida"),
+        ("eventoId", lambda: str(uuid4()), "evento_no_asociado"),
+        ("reglaVersion", lambda: 2, "origen_no_validado"),
+    ],
+    ids=["beneficiario", "monto", "moneda", "poliza", "evento", "version"],
+)
+def test_hu31_valida_caso_contra_version_de_regla_persistida(
+    app: Flask,
+    field: str,
+    value: Callable[[], object],
+    code: str,
+) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        stored.payload = {**stored.payload, field: value()}
+
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        assert stored.rechazado_en is not None
+        assert stored.ultimo_error == code
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "aprobado"
+
+
+def test_hu31_rechaza_caso_si_la_version_persistida_no_respalda_el_monto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored_rule = session.scalar(
+            select(ParametricRule).where(ParametricRule.regla_id == case["reglaId"])
+        )
+        assert stored_rule is not None
+        stored_rule.monto_indemnizacion = None
+
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None and stored.ultimo_error == "monto_invalido"
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+
+
+def test_hu31_consulta_por_siniestro_reconstruye_evento_regla_e_intentos(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+    client = app.test_client()
+
+    by_case = client.get(
+        f"/internal/v1/pagos-parametricos/casos/{case['casoId']}",
+        headers=INTERNAL_HEADERS,
+    )
+    by_claim = client.get(
+        f"/internal/v1/pagos-parametricos/siniestros/{case['siniestroId']}",
+        headers=INTERNAL_HEADERS,
+    )
+    missing = client.get(
+        f"/internal/v1/pagos-parametricos/siniestros/{uuid4()}",
+        headers=INTERNAL_HEADERS,
+    )
+    unauthenticated = client.get(f"/internal/v1/pagos-parametricos/siniestros/{uuid4()}")
+
+    assert by_claim.status_code == by_case.status_code == 200
+    assert by_claim.get_json() == by_case.get_json()
+    assert missing.status_code == 404
+    assert missing.get_json()["code"] == "pago_parametrico_no_encontrado"
+    assert unauthenticated.status_code == 401
+    payment = by_claim.get_json()
+    assert payment["evento"] == {
+        "fuente": SOURCE,
+        "eventoId": case["eventoId"],
+        "ocurridoEn": OCCURRED.isoformat().replace("+00:00", "Z"),
+        "recibidoEn": payment["evento"]["recibidoEn"],
+    }
+    assert payment["beneficiarioId"] == case["beneficiarioId"]
+    assert payment["indemnizacion"] == case["indemnizacion"]
+
+    schemas = load_internal_contract()["components"]["schemas"]["PagoParametrico"]
+    assert set(payment) <= set(schemas["properties"])
+    assert set(schemas["required"]) <= set(payment)
+    for field in ("evento", "regla", "indemnizacion"):
+        nested = schemas["properties"][field]
+        assert nested["additionalProperties"] is False
+        assert set(payment[field]) == set(nested["required"]) == set(nested["properties"])
+
+
+def load_internal_contract() -> dict:
     contract_path = (
         Path(__file__).resolve().parents[4]
         / "contracts"
         / "openapi"
         / "eventos-parametricos-internal-v1.yaml"
     )
-    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    return cast(dict, yaml.safe_load(contract_path.read_text(encoding="utf-8")))
+
+
+def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
+    contract = load_internal_contract()
 
     reception = contract["paths"]["/eventos-parametricos/recepcion"]["post"]
     assert reception["responses"]["429"]
@@ -594,5 +791,6 @@ def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     assert "/pagos-parametricos/procesamiento" in contract["paths"]
     assert "/pagos-parametricos/conciliacion" in contract["paths"]
     assert "/pagos-parametricos/casos/{casoId}" in contract["paths"]
+    assert "/pagos-parametricos/siniestros/{siniestroId}" in contract["paths"]
     required_rule_fields = contract["components"]["schemas"]["Regla"]["required"]
     assert {"beneficiarioId", "montoIndemnizacion", "moneda"} <= set(required_rule_fields)
