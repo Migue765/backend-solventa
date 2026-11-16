@@ -32,6 +32,7 @@ module = [
     "tests.test_hu44_exception_process_http",
     "tests.jmeter.local_stack", "tests.jmeter.run",
     "tests.claims_local_stack",
+    "tests.test_mobile_policy_modification_flow",
     "tests.test_claims_evidence_flow",
     "tests.test_claims_sync_results",
     "tests.test_policy_renewal_flow",
