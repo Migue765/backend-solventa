@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
+from siniestros.domain.decision import DecisionRevision, ResultadoEvaluacion
 from siniestros.domain.estado import SiniestroNoIntegro
 from siniestros.domain.parametricos import (
     ConfirmacionCaso,
@@ -17,6 +18,7 @@ from siniestros.domain.parametricos import (
     LoteEventosParametricos,
     ReglaParametrica,
 )
+from siniestros.infrastructure.decisiones import ServicioDecisiones
 from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
@@ -40,6 +42,8 @@ def create_app(config: Config | None = None) -> Flask:
     pagos_parametricos = ProcesadorPagosParametricos(repo)
     app.extensions["eventos_parametricos_repository"] = parametricos
     app.extensions["pagos_parametricos_processor"] = pagos_parametricos
+    decisiones = ServicioDecisiones(repo)
+    app.extensions["decisiones_siniestro_service"] = decisiones
 
     @app.before_request
     def authorize() -> None:
@@ -149,6 +153,37 @@ def create_app(config: Config | None = None) -> Flask:
     def consultar_pago_parametrico(caso_id: UUID) -> Response:
         empty()
         return jsonify(pagos_parametricos.detalle(caso_id))
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones/automatica")
+    def decidir_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        evaluacion = ResultadoEvaluacion.model_validate(body())
+        registro, status = decisiones.decidir_automaticamente(
+            siniestro_id, evaluacion, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones/revision")
+    def revisar_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        entrada = DecisionRevision.model_validate(body())
+        registro, status = decisiones.decidir_revision(
+            siniestro_id, operation(), entrada, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones")
+    def consultar_decisiones(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(decisiones.consultar(siniestro_id))
+
+    @app.get("/internal/v1/colas-revision/<cola>/asignaciones")
+    def asignaciones_cola(cola: str) -> Response:
+        empty()
+        return jsonify(decisiones.asignaciones("cola", cola))
+
+    @app.get("/internal/v1/peritos/<uuid:perito_id>/asignaciones")
+    def asignaciones_perito(perito_id: UUID) -> Response:
+        empty()
+        return jsonify(decisiones.asignaciones("perito", str(perito_id)))
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:
