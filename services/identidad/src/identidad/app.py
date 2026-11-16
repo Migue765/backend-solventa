@@ -10,7 +10,16 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from identidad.api import advisors, biometrics, consents, health, oauth, users, wellknown
+from identidad.api import (
+    advisors,
+    biometrics,
+    consents,
+    health,
+    oauth,
+    session_state,
+    users,
+    wellknown,
+)
 from identidad.api.schemas import RegisterRequest
 from identidad.application.biometric_service import BiometricService
 from identidad.application.ports import LoginAttemptLimiter
@@ -126,6 +135,7 @@ def create_app(
     app.register_blueprint(consents.bp)
     app.register_blueprint(advisors.bp)
     app.register_blueprint(biometrics.bp)
+    app.register_blueprint(session_state.bp)
 
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)

@@ -389,6 +389,50 @@ sin datos del caso. Fallo de red, timeout (0,8 s), credencial interna ausente, r
 incoherente o respuesta fuera de contrato devuelven `503` con `Retry-After`, nunca un
 estado ni un historial vacio. El BFF no calcula transiciones; solo valida la respuesta.
 
+### Renovacion de poliza (SOL-317, HU33)
+
+`GET /v1/clientes/me/polizas/{polizaId}/renovacion` y
+`POST /v1/clientes/me/polizas/{polizaId}/renovaciones` requieren JWT del canal Web, rol y
+scope `cliente`; el cliente procede del principal y se envia a Polizas como `X-Cliente-ID`
+(`POLIZAS_SERVICE_URL` + `INTERNAL_API_TOKEN`). GET no admite query ni cuerpo y devuelve
+elegibilidad, oferta y ultimo intento. POST exige `Idempotency-Key` UUID y
+`{aceptaCondiciones:true, condicionesHash}`; el BFF valida la aceptacion explicita y no
+calcula reglas, vigencias ni primas.
+
+El BFF propaga `201`/`200`/`202` (pendiente, con `Retry-After`) solo si la respuesta
+corresponde a la poliza, al hash aceptado y al estado informado. `404 poliza_no_encontrada`,
+`422 poliza_no_renovable` (con `motivo`) y `409` (`condiciones_cambiaron`,
+`idempotencia_conflictiva`, `renovacion_en_curso` con `renovacionId`) se publican como
+problemas. Timeout (0,8 s en consulta, 5 s en renovacion), credencial ausente o respuesta
+fuera de contrato devuelven `503`: no confirma ni descarta la renovacion, y se debe
+reintentar con la misma clave. Reglas y recuperacion: `services/polizas/README.md`.
+
+### Modificacion versionada de poliza (SOL-319, HU34)
+
+`GET /v1/clientes/me/polizas/{polizaId}/modificacion`,
+`POST .../modificaciones/simulacion` y `POST .../modificaciones` requieren JWT del canal Web,
+rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. El BFF valida que
+solo se envien `versionBase`, `plan` y `coberturasOpcionales` (y en la confirmacion
+`confirma:true` e `impactoHash` con `Idempotency-Key`), y que las respuestas sean coherentes:
+historial ordenado que inicia en la version vigente, diferencia mensual igual a la resta de
+primas y endoso que avanza exactamente una version con el hash confirmado. Los rechazos se
+publican como problemas: `422 poliza_no_modificable` (`motivo`), `cambio_no_permitido`
+(`campo`) y `sin_cambios`, y `409` `version_desactualizada` (`versionActual`),
+`impacto_cambio` e `idempotencia_conflictiva`. Un `503` no confirma ni descarta la
+modificacion. Reglas: `services/polizas/README.md`.
+
+### Cancelacion de poliza (SOL-321, HU35)
+
+`GET /v1/clientes/me/polizas/{polizaId}/cancelacion` y `POST .../cancelaciones` requieren JWT
+del canal Web, rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. GET
+devuelve elegibilidad, fecha efectiva, coberturas que terminan, devolucion y valor pendiente.
+POST exige `Idempotency-Key` UUID y `{confirma:true, motivoCancelacion, liquidacionHash}`. El
+BFF valida que la liquidacion sea coherente (devolucion = proporcional + periodos anulados) y
+que la cancelacion corresponda a la poliza, al hash y al motivo confirmados. Los rechazos se
+publican como problemas: `422 poliza_no_cancelable` (`motivo`) y `409` `liquidacion_cambio` e
+`idempotencia_conflictiva`. Un `503` no confirma ni descarta la cancelacion; se reintenta con
+la misma clave. Reglas: `services/polizas/README.md`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
@@ -554,6 +598,7 @@ para validar la vigencia con el reloj del servidor.
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
 | `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
+| `POLIZAS_SERVICE_URL`       | Sin valor; devuelve 503 | Servicio de polizas (renovacion)                     |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.

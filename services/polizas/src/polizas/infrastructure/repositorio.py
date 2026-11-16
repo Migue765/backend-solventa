@@ -82,6 +82,10 @@ def _serializar(poliza: PolizaModel, ahora: datetime) -> dict[str, object]:
         "tipo": poliza.tipo,
         "fechaInicio": poliza.fecha_inicio.isoformat(),
         "fechaFin": poliza.fecha_fin.isoformat(),
-        "estado": estado_vigencia(poliza.fecha_inicio, poliza.fecha_fin, ahora),
+        "estado": (
+            "cancelada"
+            if poliza.estado == "cancelada"
+            else estado_vigencia(poliza.fecha_inicio, poliza.fecha_fin, ahora)
+        ),
         "simulada": True,
     }
