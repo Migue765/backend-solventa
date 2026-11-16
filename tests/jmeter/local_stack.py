@@ -189,6 +189,7 @@ class LocalStack:
                         quote_service_url=quotes,
                         profiling_service_url=profile,
                         claims_service_url=claims,
+                        policies_service_url=policies,
                         internal_api_token=self.internal_token,
                         encrypted_login_enabled=self.encrypted_login_enabled,
                     )

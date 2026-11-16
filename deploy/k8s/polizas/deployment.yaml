@@ -40,6 +40,8 @@ spec:
                 secretKeyRef:
                   name: polizas-runtime
                   key: POLIZAS_DATABASE_URL
+            - name: PAGO_RENOVACION_SIMULADO
+              value: confirmado
           resources:
             requests:
               cpu: 100m
