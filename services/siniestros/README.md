@@ -428,6 +428,45 @@ decision existente sin duplicar aprobacion ni asignacion; con otro contenido res
 `GET /internal/v1/peritos/{peritoId}/asignaciones`; la auditoria del caso con
 `GET /internal/v1/siniestros/{id}/decisiones`.
 
+
+## HU29: deteccion de patrones sospechosos
+
+El motor de fraude (ASR-FRD-01) vive en `siniestros.domain.fraude` (reglas puras) y
+`siniestros.infrastructure.fraude` (persistencia, enrutamiento y continuidad). Se ejecuta
+en linea, sin pasos manuales, al registrar un aviso (`POST /v1/siniestros`, origen
+`registro`) y al confirmar una evidencia (origen `evidencia`). Su contrato es
+`contracts/openapi/fraude-internal-v1.yaml`.
+
+- Reglas versionadas: `POST /internal/v1/reglas-fraude` registra versiones inmutables con
+  `senal`, `operador`, `umbral`, `peso`, `motivo` y vigencia. Se aplica la mayor version
+  vigente de cada regla; repetir el contenido responde 200 y reutilizar la version con
+  otro contenido responde 409.
+- Senales calculadas: `horas_reporte_tras_evento`, `siniestros_cliente_90_dias`,
+  `siniestros_poliza_30_dias`, `evidencias_confirmadas`, `evidencias_duplicadas` (mismo
+  digest confirmado en otro siniestro) y `evidencias_sin_ubicacion`. La deteccion manual
+  `POST /internal/v1/siniestros/{id}/deteccion-fraude` acepta senales externas
+  adicionales; las calculadas son reservadas.
+- Resultado explicable: el puntaje suma los pesos de las reglas activadas (maximo 100).
+  Desde `FRAUDE_UMBRAL_SOSPECHA` el caso es `sospechoso` y desde
+  `FRAUDE_UMBRAL_PRIORIDAD_ALTA` su prioridad es `alta`. Cada evaluacion guarda senales,
+  evidencia, reglas con version, version del motor, motivo, duracion y correlacion, y se
+  consulta con `GET /internal/v1/siniestros/{id}/deteccion-fraude`. Si senales y reglas
+  no cambiaron, se reutiliza la ultima evaluacion.
+- Bloqueo y revision humana: un resultado sospechoso crea o actualiza el caso de
+  revision, mueve el siniestro `reportado`/`en_evaluacion` a `en_revision` (registrando el
+  paso obligatorio `en_evaluacion` de HU27) con su historial y queda en
+  `POST /internal/v1/revision-fraude/pendientes`, ordenado por
+  prioridad, puntaje y antiguedad con el contexto del siniestro. Si la deteccion supera
+  `FRAUDE_PRESUPUESTO_MS` se audita `fuera_de_presupuesto`.
+- Continuidad: si el motor falla, el aviso se registra igual; se guarda un resultado
+  `indeterminado`, se audita `deteccion_fraude_incidente` y se aplica
+  `FRAUDE_POLITICA_CONTINUIDAD`: `revision_humana` (por defecto, prioridad media) o
+  `continuar`.
+
+Variables: `FRAUDE_UMBRAL_SOSPECHA` (50), `FRAUDE_UMBRAL_PRIORIDAD_ALTA` (80),
+`FRAUDE_POLITICA_CONTINUIDAD` (`revision_humana`) y `FRAUDE_PRESUPUESTO_MS` (1000,
+maximo 1000).
+
 ## Errores
 
 | HTTP | `code` |

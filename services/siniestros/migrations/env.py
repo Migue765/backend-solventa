@@ -1,6 +1,7 @@
 import os
 
 from alembic import context
+from siniestros.infrastructure import fraude as _fraude  # noqa: F401
 from siniestros.infrastructure.models import Base
 from sqlalchemy import create_engine, pool
 
