@@ -173,9 +173,9 @@ En cada arranque se migran Identidad, Cotizacion, Polizas, Siniestros,
 Notificaciones y Asistencias con sus historiales Alembic existentes en esquemas
 distintos. Perfilamiento reutiliza su inicializacion existente, solo sobre
 esquema nuevo; `create_all` no es una migracion de datos existentes. Se repite
-la inicializacion para comprobar que no colisionan los historiales. Son 60 tablas
-de los seis dominios web mas 3 de Asistencias (63 en total), sin contar las tablas
-Alembic. Siniestros incluye 14 tablas tras `0006_decisiones_siniestro`.
+la inicializacion para comprobar que no colisionan los historiales. Son 66 tablas
+de los seis dominios web mas 3 de Asistencias (69 en total), sin contar las tablas
+Alembic. Siniestros incluye 20 tablas tras `0009_evaluacion_siniestros`.
 Notificaciones y Asistencias quedan preparadas en SQL sin arrancar sus APIs
 porque no las necesita este recorrido web.
 
