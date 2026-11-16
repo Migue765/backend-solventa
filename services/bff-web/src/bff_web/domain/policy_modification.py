@@ -9,7 +9,11 @@ from bff_web.domain.policy_renewal import Hash, Period, Premium, UtcDatetime
 Plan = Literal["esencial", "integral", "premium"]
 CoverageCode = Annotated[str, Field(pattern=r"^[a-z_]{1,40}$")]
 NotModifiableReason = Literal[
-    "producto_no_modificable", "poliza_programada", "poliza_vencida", "fin_de_vigencia"
+    "producto_no_modificable",
+    "poliza_cancelada",
+    "poliza_programada",
+    "poliza_vencida",
+    "fin_de_vigencia",
 ]
 
 

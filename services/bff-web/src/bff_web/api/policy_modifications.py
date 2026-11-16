@@ -27,6 +27,7 @@ bp.after_request(private)
 
 NOT_MODIFIABLE_DETAILS = {
     "producto_no_modificable": "Este producto se contrata por fechas y no admite modificaciones.",
+    "poliza_cancelada": "La poliza fue cancelada y no admite modificaciones.",
     "poliza_programada": "La poliza aun no inicia su vigencia.",
     "poliza_vencida": "La poliza ya vencio y no admite modificaciones.",
     "fin_de_vigencia": "La poliza termina hoy; los cambios aplicarian fuera de la vigencia.",

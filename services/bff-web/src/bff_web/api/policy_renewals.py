@@ -25,6 +25,7 @@ CONFLICT_DETAILS = {
 }
 NOT_RENEWABLE_DETAILS = {
     "producto_no_renovable": "Este producto se contrata por fechas y no admite renovacion.",
+    "poliza_cancelada": "La poliza fue cancelada y no admite renovacion.",
     "poliza_programada": "La poliza aun no inicia su vigencia.",
     "poliza_vencida": "La poliza ya vencio; contrata una nueva cobertura.",
     "fuera_de_ventana": "La renovacion se habilita en los 15 dias previos al vencimiento.",

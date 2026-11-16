@@ -15,7 +15,11 @@ from pydantic import (
 UtcDatetime = Annotated[AwareDatetime, AfterValidator(lambda value: value.astimezone(UTC))]
 Hash = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 NonRenewableReason = Literal[
-    "producto_no_renovable", "poliza_programada", "poliza_vencida", "fuera_de_ventana"
+    "producto_no_renovable",
+    "poliza_cancelada",
+    "poliza_programada",
+    "poliza_vencida",
+    "fuera_de_ventana",
 ]
 
 
@@ -67,7 +71,7 @@ class Renewal(_Strict):
     renewal_id: UUID = Field(alias="id")
     policy_id: UUID = Field(alias="polizaId")
     state: Literal["pendiente", "renovada", "rechazada"] = Field(alias="estado")
-    reason: Literal["pago_rechazado"] | None = Field(alias="motivo")
+    reason: Literal["pago_rechazado", "poliza_cancelada"] | None = Field(alias="motivo")
     previous_end: date = Field(alias="finAnterior")
     new_period: Period = Field(alias="nuevaVigencia")
     coverages: tuple[Coverage, ...] = Field(alias="coberturas", min_length=1)

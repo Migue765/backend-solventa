@@ -123,6 +123,33 @@ ya no es el simulado; la clave primaria `(poliza_id, version)` hace que, entre c
 concurrentes, solo una avance la version. `201` endoso nuevo; `200` misma clave y solicitud;
 `409 idempotencia_conflictiva` si la clave se reutiliza con otra solicitud.
 
+## Cancelacion (HU35, SOL-321)
+
+Componente Ciclo de Vida. Toda confirmacion, aceptada o rechazada, queda en
+`auditoria_polizas` (`accion=cancelacion`) con actor, fecha, motivo y detalle.
+
+**Reglas `academica-cancelacion-v1`** (`domain/cancelacion.py`):
+- Cancelables: los productos mensuales con la poliza vigente y sin terminar hoy
+  (`producto_no_cancelable`, `poliza_programada`, `poliza_vencida`, `fin_de_vigencia`,
+  `poliza_cancelada`). Una renovacion pendiente bloquea la cancelacion
+  (`renovacion_en_curso`).
+- La cobertura termina el dia de la confirmacion (`fechaEfectiva = finCobertura = hoy`) y
+  finalizan todas las coberturas de la version vigente.
+- Devolucion simulada = prima mensual vigente x dias no usados / dias del periodo actual
+  (redondeo a peso), mas la prima completa de los periodos renovados que aun no inician.
+  `valorPendiente` es siempre 0 porque la prima se cobra por anticipado; no se revierte ningun
+  pago real.
+
+`GET /v1/polizas/{id}/cancelacion`: estado, elegibilidad (`cancelable`, `motivo`), liquidacion
+con `liquidacionHash` y, si ya fue cancelada, la `cancelacion`. `POST .../cancelaciones` con
+`Idempotency-Key` y `{confirma:true, motivoCancelacion, liquidacionHash}` recalcula la
+liquidacion y, si coincide, en una transaccion marca la poliza `cancelada` (conserva la
+vigencia original como historico), guarda la cancelacion (unica por poliza) y la auditoria.
+`409 liquidacion_cambio` si la
+liquidacion cambio; `201` nueva; `200` misma clave y solicitud; `409 idempotencia_conflictiva`
+si la clave se reutiliza con otra solicitud. Una poliza cancelada no se renueva ni se modifica
+(`poliza_cancelada`), y una renovacion pendiente que se resuelva despues se rechaza sin cobro.
+
 ## Integracion y recuperacion
 
 Cotizacion activa emision con `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`.

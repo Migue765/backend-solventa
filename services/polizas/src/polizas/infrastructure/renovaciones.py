@@ -90,7 +90,13 @@ class RepositorioRenovaciones:
         hoy = ahora.astimezone(UTC).date()
         with self.sesiones() as sesion:
             poliza = _poliza(sesion, poliza_id, cliente_id)
-            motivo = motivo_no_renovable(poliza.tipo, poliza.fecha_inicio, poliza.fecha_fin, hoy)
+            motivo = motivo_no_renovable(
+                poliza.tipo,
+                poliza.fecha_inicio,
+                poliza.fecha_fin,
+                hoy,
+                cancelada=poliza.estado == "cancelada",
+            )
             ultima = sesion.scalars(
                 select(RenovacionModel)
                 .where(RenovacionModel.poliza_id == poliza_id)
@@ -162,7 +168,11 @@ class RepositorioRenovaciones:
     ) -> UUID:
         poliza = _poliza(sesion, poliza_id, cliente_id)
         motivo = motivo_no_renovable(
-            poliza.tipo, poliza.fecha_inicio, poliza.fecha_fin, ahora.astimezone(UTC).date()
+            poliza.tipo,
+            poliza.fecha_inicio,
+            poliza.fecha_fin,
+            ahora.astimezone(UTC).date(),
+            cancelada=poliza.estado == "cancelada",
         )
         if motivo is not None:
             raise PolizaNoRenovable(motivo)
@@ -204,6 +214,19 @@ class RepositorioRenovaciones:
                 return _serializar(renovacion)
             prima = renovacion.condiciones["prima"]
             assert isinstance(prima, dict)
+            poliza = sesion.get(PolizaModel, renovacion.poliza_id)
+            cancelada = poliza is not None and poliza.estado == "cancelada"
+        if cancelada:
+            # Una poliza cancelada nunca genera cobros ni extensiones posteriores.
+            with self.sesiones.begin() as sesion:
+                renovacion = sesion.get(RenovacionModel, renovacion_id)
+                assert renovacion is not None
+                if renovacion.estado == "pago_pendiente":
+                    renovacion.estado = "rechazada"
+                    renovacion.motivo = "poliza_cancelada"
+                    renovacion.reserva_periodo = None
+                    renovacion.actualizada_en = datetime.now(UTC)
+                return _serializar(renovacion)
         try:
             resultado = self.pasarela.cobrar(
                 renovacion_id, str(prima["monto"]), str(prima["moneda"])
@@ -235,6 +258,7 @@ class RepositorioRenovaciones:
                 .where(
                     PolizaModel.poliza_id == renovacion.poliza_id,
                     PolizaModel.fecha_fin == renovacion.fin_anterior,
+                    PolizaModel.estado == "activa",
                 )
                 .values(fecha_fin=renovacion.nuevo_fin)
             )

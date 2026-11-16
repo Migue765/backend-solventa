@@ -421,6 +421,18 @@ publican como problemas: `422 poliza_no_modificable` (`motivo`), `cambio_no_perm
 `impacto_cambio` e `idempotencia_conflictiva`. Un `503` no confirma ni descarta la
 modificacion. Reglas: `services/polizas/README.md`.
 
+### Cancelacion de poliza (SOL-321, HU35)
+
+`GET /v1/clientes/me/polizas/{polizaId}/cancelacion` y `POST .../cancelaciones` requieren JWT
+del canal Web, rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. GET
+devuelve elegibilidad, fecha efectiva, coberturas que terminan, devolucion y valor pendiente.
+POST exige `Idempotency-Key` UUID y `{confirma:true, motivoCancelacion, liquidacionHash}`. El
+BFF valida que la liquidacion sea coherente (devolucion = proporcional + periodos anulados) y
+que la cancelacion corresponda a la poliza, al hash y al motivo confirmados. Los rechazos se
+publican como problemas: `422 poliza_no_cancelable` (`motivo`) y `409` `liquidacion_cambio` e
+`idempotencia_conflictiva`. Un `503` no confirma ni descarta la cancelacion; se reintenta con
+la misma clave. Reglas: `services/polizas/README.md`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.

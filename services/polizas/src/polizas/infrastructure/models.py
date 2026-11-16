@@ -22,6 +22,8 @@ class PolizaModel(Base):
     emitida_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     evidencia_hash: Mapped[str] = mapped_column(String(64))
     regla_version: Mapped[str] = mapped_column(String(40))
+    # activa o cancelada; la cancelacion es definitiva y conserva las fechas originales.
+    estado: Mapped[str] = mapped_column(String(20), default="activa", server_default="activa")
 
 
 class RenovacionModel(Base):
@@ -92,8 +94,26 @@ class EndosoModel(Base):
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class CancelacionModel(Base):
+    """Cancelacion definitiva; la unicidad por poliza impide registrar dos cancelaciones."""
+
+    __tablename__ = "cancelaciones"
+    __table_args__ = (UniqueConstraint("cliente_id", "idempotency_key"),)
+
+    cancelacion_id: Mapped[UUID] = mapped_column(primary_key=True)
+    poliza_id: Mapped[UUID] = mapped_column(unique=True)
+    cliente_id: Mapped[UUID]
+    idempotency_key: Mapped[UUID]
+    solicitud_hash: Mapped[str] = mapped_column(String(64))
+    motivo: Mapped[str] = mapped_column(String(40))
+    liquidacion: Mapped[dict[str, object]] = mapped_column(JSON)
+    liquidacion_hash: Mapped[str] = mapped_column(String(64))
+    fecha_efectiva: Mapped[date]
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AuditoriaPolizaModel(Base):
-    """Registro append-only de intentos de modificacion confirmados y rechazados."""
+    """Registro append-only de modificaciones y cancelaciones confirmadas y rechazadas."""
 
     __tablename__ = "auditoria_polizas"
 

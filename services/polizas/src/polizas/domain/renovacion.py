@@ -19,15 +19,20 @@ VENTANA_DIAS = 15
 
 MotivoNoRenovable = Literal[
     "producto_no_renovable",
+    "poliza_cancelada",
     "poliza_programada",
     "poliza_vencida",
     "fuera_de_ventana",
 ]
 
 
-def motivo_no_renovable(tipo: str, inicio: date, fin: date, hoy: date) -> MotivoNoRenovable | None:
+def motivo_no_renovable(
+    tipo: str, inicio: date, fin: date, hoy: date, *, cancelada: bool = False
+) -> MotivoNoRenovable | None:
     if tipo not in PRODUCTOS:
         return "producto_no_renovable"
+    if cancelada:
+        return "poliza_cancelada"
     if hoy < inicio:
         return "poliza_programada"
     if hoy > fin:
