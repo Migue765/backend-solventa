@@ -64,6 +64,18 @@ class HttpIdentityGateway:
     def revoke(self, refresh_token: str, correlation_id: str) -> None:
         self._post("/oauth/revoke", {"refresh_token": refresh_token}, correlation_id)
 
+    def session_active(self, session_id: UUID, internal_token: str, correlation_id: str) -> bool:
+        try:
+            payload = self._request(
+                "GET", f"/v1/sesiones/{session_id}", None, internal_token, correlation_id, 200
+            )
+        except IdentityRejectedError as error:
+            raise IdentityUnavailableError() from error
+        active = payload.get("activa")
+        if payload.get("sesionId") != str(session_id) or not isinstance(active, bool):
+            raise IdentityUnavailableError()
+        return active
+
     def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
         return self._request("POST", path, body, None, correlation_id)
 

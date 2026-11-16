@@ -32,10 +32,17 @@ class RefreshTokenRepository(Protocol):
 
     def revoke_family(self, token_hash: str, now: datetime) -> None: ...
 
+    def is_session_active(self, family_id: UUID, now: datetime) -> bool: ...
+
 
 class AccessTokenIssuer(Protocol):
     def issue(
-        self, user: User, client_id: str, issued_at: datetime, expires_at: datetime
+        self,
+        user: User,
+        client_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+        session_id: UUID | None = None,
     ) -> str: ...
 
 

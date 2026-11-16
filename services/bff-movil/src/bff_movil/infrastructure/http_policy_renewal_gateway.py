@@ -79,6 +79,21 @@ class HttpPolicyRenewalGateway:
             raise RenewalServiceUnavailableError()
         return renewal, status
 
+    def list_policies(self, client_id: UUID, correlation_id: str) -> dict[str, Any]:
+        return self._query("/v1/clientes/me/polizas", client_id, correlation_id)
+
+    def get_policy(self, policy_id: UUID, client_id: UUID, correlation_id: str) -> dict[str, Any]:
+        return self._query(f"/v1/clientes/me/polizas/{policy_id}", client_id, correlation_id)
+
+    def _query(self, path: str, client_id: UUID, correlation_id: str) -> dict[str, Any]:
+        try:
+            payload, status = self._call("GET", path, client_id, correlation_id)
+        except (RenewalConflictError, PolicyNotRenewableError) as error:
+            raise RenewalServiceUnavailableError() from error
+        if status != 200 or not isinstance(payload, dict):
+            raise RenewalServiceUnavailableError()
+        return payload
+
     def _call(
         self,
         method: str,

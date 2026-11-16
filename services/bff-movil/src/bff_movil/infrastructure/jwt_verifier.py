@@ -128,6 +128,7 @@ class JwtVerifier:
                 client_id=self._client_id,
                 scope=str(claims.get("scope", "")),
                 expires_at=datetime.fromtimestamp(claims["exp"], UTC),
+                session_id=UUID(claims["sid"]) if "sid" in claims else None,
             )
         except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:
             raise InvalidAccessTokenError() from error

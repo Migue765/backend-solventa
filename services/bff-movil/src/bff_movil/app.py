@@ -10,13 +10,14 @@ from bff_movil.api import (
     claims,
     health,
     notifications,
+    policies,
     policy_renewals,
     sessions,
     users,
 )
 from bff_movil.application.biometric_ports import BiometricGateway
-from bff_movil.application.policy_renewal_ports import PolicyRenewalGateway
-from bff_movil.application.ports import IdentityGateway, TokenVerifier
+from bff_movil.application.policy_renewal_ports import PolicyQueryGateway, PolicyRenewalGateway
+from bff_movil.application.ports import IdentityGateway, SessionStateGateway, TokenVerifier
 from bff_movil.config import Config
 from bff_movil.domain.auth import CHANNEL
 from bff_movil.domain.errors import IdentityUnavailableError
@@ -32,15 +33,23 @@ def create_app(
     token_verifier: TokenVerifier | None = None,
     biometric_gateway: BiometricGateway | None = None,
     policy_renewal_gateway: PolicyRenewalGateway | None = None,
+    session_state_gateway: SessionStateGateway | None = None,
+    policy_query_gateway: PolicyQueryGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
 
     app.extensions["bff_config"] = active_config
+    policies_gateway = HttpPolicyRenewalGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
     app.extensions["biometric_gateway"] = biometric_gateway or HttpIdentityGateway(
         active_config.identity_url, active_config.identity_timeout_seconds
     )
     app.extensions["clock"] = lambda: datetime.now(UTC)
+    app.extensions["session_state_gateway"] = session_state_gateway or HttpIdentityGateway(
+        active_config.identity_url, active_config.identity_timeout_seconds
+    )
     app.extensions["identity_gateway"] = identity_gateway or HttpIdentityGateway(
         active_config.identity_url,
         active_config.identity_timeout_seconds,
@@ -53,9 +62,8 @@ def create_app(
         audience=active_config.jwt_audience,
         client_id=CHANNEL,
     )
-    app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or HttpPolicyRenewalGateway(
-        active_config.policies_service_url, active_config.internal_api_token
-    )
+    app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or policies_gateway
+    app.extensions["policy_query_gateway"] = policy_query_gateway or policies_gateway
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
@@ -64,6 +72,7 @@ def create_app(
     app.register_blueprint(claims.bp)
     app.register_blueprint(notifications.bp)
     app.register_blueprint(assistance.bp)
+    app.register_blueprint(policies.bp)
     app.register_blueprint(policy_renewals.bp)
 
     @app.before_request
