@@ -14,6 +14,7 @@ from siniestros.domain import ClaimInput, Config, Problem, UploadInput
 from siniestros.domain.decision import DecisionRevision, ResultadoEvaluacion
 from siniestros.domain.estado import SiniestroNoIntegro
 from siniestros.domain.fraude import ConfiguracionFraude
+from siniestros.domain.indemnizaciones import SolicitudIndemnizacion
 from siniestros.domain.parametricos import (
     ConfirmacionCaso,
     LimiteProcesamiento,
@@ -22,6 +23,7 @@ from siniestros.domain.parametricos import (
 )
 from siniestros.infrastructure.decisiones import ServicioDecisiones
 from siniestros.infrastructure.fraude import MotorFraude
+from siniestros.infrastructure.indemnizaciones import ServicioIndemnizaciones
 from siniestros.infrastructure.notificaciones import (
     EnviadorNotificacionesHttp,
     PublicadorNotificaciones,
@@ -47,10 +49,12 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
     estados = RepositorioSiniestros(repo.sessions)
     parametricos = RepositorioEventosParametricos(repo, config)
     pagos_parametricos = ProcesadorPagosParametricos(repo)
+    indemnizaciones = ServicioIndemnizaciones(repo)
     app.extensions["eventos_parametricos_repository"] = parametricos
     app.extensions["pagos_parametricos_processor"] = pagos_parametricos
     decisiones = ServicioDecisiones(repo)
     app.extensions["decisiones_siniestro_service"] = decisiones
+    app.extensions["indemnizaciones_service"] = indemnizaciones
     motor_fraude = MotorFraude(repo, fraude or ConfiguracionFraude.from_environment())
     app.extensions["motor_fraude"] = motor_fraude
     registrar_rutas_fraude(app, motor_fraude)
@@ -216,6 +220,31 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
         if publicador is None:
             raise Problem(503, "notificaciones_no_configuradas")
         return jsonify(publicador.publicar(entrada.limite))
+
+    @app.post("/internal/v1/siniestros/<uuid:claim_id>/indemnizacion")
+    def solicitar_indemnizacion(claim_id: UUID) -> tuple[Response, int]:
+        registro, status = indemnizaciones.solicitar(
+            claim_id,
+            operation(),
+            SolicitudIndemnizacion.model_validate(body()),
+            g.correlation_id,
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:claim_id>/indemnizacion")
+    def consultar_indemnizacion(claim_id: UUID) -> Response:
+        empty()
+        return jsonify(indemnizaciones.detalle(claim_id))
+
+    @app.post("/internal/v1/indemnizaciones/procesamiento")
+    def procesar_indemnizaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(indemnizaciones.procesar(entrada.limite))
+
+    @app.post("/internal/v1/indemnizaciones/conciliacion")
+    def conciliar_indemnizaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(indemnizaciones.procesar(entrada.limite))
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:
