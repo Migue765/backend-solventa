@@ -23,6 +23,14 @@ entrega otra notificación; el mismo identificador con datos diferentes responde
 El evento origen se conserva incluso cuando las preferencias deshabilitan todos los
 canales.
 
+Productores actuales:
+
+- Cotización: `pago_confirmado` y `poliza_emitida` con `fechaFin` (outbox del pago y
+  conciliador);
+- Siniestros: `siniestro_estado_cambiado` (cambios visibles desde `en_evaluacion`) y
+  `pago_parametrico_ejecutado` (outbox `outbox_notificaciones` y CronJob de
+  publicación).
+
 ## Preferencias, programación y entrega
 
 Los tipos configurables son `pagos`, `siniestros`, `vencimientos` y `renovaciones`.
@@ -39,6 +47,11 @@ Una póliza emitida programa:
 periódicamente por el programador del entorno. Cada intento queda registrado. Los
 fallos se reintentan con espera exponencial hasta `NOTIFICATION_MAX_ATTEMPTS` (5 por
 defecto); luego quedan en estado `fallida` con el último error.
+
+Las preferencias se vuelven a consultar al reservar cada entrega: si el cliente
+deshabilitó el canal después de programarla (por ejemplo, un vencimiento a 30 días),
+la notificación queda `omitida` con `preferencia_deshabilitada` y el intento se
+registra sin entregarla.
 
 Cada reserva de entrega vence a los cinco minutos. Una reserva abandonada se registra
 como `reserva_expirada` y vuelve a pendiente mientras conserve intentos. Los adaptadores
@@ -60,6 +73,11 @@ Las tablas son:
 
 La creación del evento y sus notificaciones ocurre en una transacción. La migración
 inicial es `0001_notificaciones`.
+
+`GET /v1/eventos/{eventoId}/trazabilidad` (credencial interna) devuelve el evento
+origen y, por cada notificación, tipo, canal, programación, estado, intentos y el
+detalle de cada intento de entrega. No incluye el contenido del mensaje. Responde `404`
+si el evento no existe.
 
 ## Configuración
 

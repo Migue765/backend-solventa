@@ -224,3 +224,89 @@ def test_event_rejects_naive_timestamp(client: FlaskClient, auth_headers: dict[s
     payload["ocurridoEn"] = datetime(2026, 3, 10, 11, 0).isoformat()
     response = client.post("/v1/eventos", json=payload, headers=auth_headers)
     assert response.status_code == 422
+
+
+def test_scheduled_notice_is_omitted_when_preference_changes_before_dispatch(
+    client: FlaskClient,
+    clock: MutableClock,
+    gateway: FakeDeliveryGateway,
+    auth_headers: dict[str, str],
+) -> None:
+    headers = client_headers(auth_headers)
+    payload = event("poliza_emitida", fechaFin="2026-05-10")
+    client.post("/v1/eventos", json=payload, headers=auth_headers)
+    client.put(
+        "/v1/notificaciones/preferencias",
+        json={"preferencias": [{"tipo": "renovaciones", "canal": "in_app", "habilitada": False}]},
+        headers=headers,
+    )
+
+    clock.now = datetime.fromisoformat("2026-05-03T00:00:00+00:00")
+    dispatched = client.post("/v1/despachos", headers=auth_headers)
+
+    assert dispatched.get_json() == {"entregasConfirmadas": 1}
+    assert [item.type for item in gateway.deliveries] == ["vencimientos"]
+    trace = client.get(f"/v1/eventos/{payload['eventoId']}/trazabilidad", headers=auth_headers)
+    states = {item["tipo"]: item for item in trace.get_json()["notificaciones"]}
+    assert states["renovaciones"]["estado"] == "omitida"
+    assert states["renovaciones"]["intentos"] == 0
+    assert states["renovaciones"]["historial"] == [
+        {
+            "intentadoEn": "2026-05-03T00:00:00Z",
+            "resultado": "omitida",
+            "error": "preferencia_deshabilitada",
+        }
+    ]
+    assert states["vencimientos"]["estado"] == "entregada"
+
+
+def test_event_trace_reports_origin_channels_and_every_attempt(
+    client: FlaskClient,
+    clock: MutableClock,
+    gateway: FakeDeliveryGateway,
+    auth_headers: dict[str, str],
+) -> None:
+    payload = event("siniestro_estado_cambiado", estado="aprobado")
+    gateway.results.append(DeliveryResult(False, "proveedor_temporalmente_no_disponible"))
+    client.post("/v1/eventos", json=payload, headers=auth_headers)
+    clock.now += timedelta(minutes=5)
+    client.post("/v1/despachos", headers=auth_headers)
+
+    response = client.get(f"/v1/eventos/{payload['eventoId']}/trazabilidad", headers=auth_headers)
+    missing = client.get(f"/v1/eventos/{uuid4()}/trazabilidad", headers=auth_headers)
+    unauthorized = client.get(f"/v1/eventos/{payload['eventoId']}/trazabilidad")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    body = response.get_json()
+    notification = body.pop("notificaciones")[0]
+    assert body == {
+        "eventoId": payload["eventoId"],
+        "tipo": "siniestro_estado_cambiado",
+        "clienteId": str(CLIENT_ID),
+        "ocurridoEn": "2026-03-10T11:00:00Z",
+        "recibidoEn": "2026-03-10T12:00:00Z",
+        "resultado": "generado",
+    }
+    assert notification.pop("notificacionId")
+    assert notification == {
+        "tipo": "siniestros",
+        "canal": "in_app",
+        "recurso": {"tipo": "siniestro", "id": str(RESOURCE_ID)},
+        "programadaEn": "2026-03-10T12:00:00Z",
+        "estado": "entregada",
+        "intentos": 2,
+        "entregadaEn": "2026-03-10T12:05:00Z",
+        "ultimoError": None,
+        "historial": [
+            {
+                "intentadoEn": "2026-03-10T12:00:00Z",
+                "resultado": "pendiente",
+                "error": "proveedor_temporalmente_no_disponible",
+            },
+            {"intentadoEn": "2026-03-10T12:05:00Z", "resultado": "entregada", "error": None},
+        ],
+    }
+    assert missing.status_code == 404
+    assert missing.get_json()["code"] == "evento_no_encontrado"
+    assert unauthorized.status_code == 401
