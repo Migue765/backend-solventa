@@ -1,10 +1,10 @@
-﻿"""HU26: reglas versionadas y trazabilidad de evaluaciones automaticas."""
+"""HU26: reglas versionadas y trazabilidad de evaluaciones automaticas."""
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0007_evaluacion_siniestros"
-down_revision = "0006_decisiones_siniestro"
+revision = "0009_evaluacion_siniestros"
+down_revision = "0008_outbox_notificaciones"
 branch_labels = None
 depends_on = None
 
