@@ -15,6 +15,7 @@ KNOWN_REJECTIONS = frozenset(
         "credenciales_invalidas",
         "refresh_invalido",
         "correo_ya_registrado",
+        "documento_ya_registrado",
         "demasiados_intentos",
     }
 )
@@ -41,6 +42,39 @@ class HttpIdentityGateway:
             correlation_id,
         )
         return _user_from_json(_mapping(payload, "usuario"))
+
+    def registration_challenge(self, correlation_id: str) -> dict[str, object]:
+        return self._get("/v1/usuarios/desafio", correlation_id, internal=False)
+
+    def encrypted_register(self, payload: dict[str, object], correlation_id: str) -> User:
+        result = self._post("/v1/usuarios", payload, correlation_id)
+        data = _mapping(result, "usuario")
+        try:
+            for key in (
+                "id",
+                "nombre",
+                "correo",
+                "rol",
+                "tipoDocumento",
+                "numeroDocumento",
+                "telefono",
+                "fechaNacimiento",
+            ):
+                _text(data.get(key))
+        except ValueError as error:
+            raise IdentityUnavailableError() from error
+        user = _user_from_json(data)
+        if (
+            user.role != "cliente"
+            or user.email.casefold() != str(payload["correo"]).casefold()
+            or user.document_type != payload["tipoDocumento"]
+            or user.identification != str(payload["numeroDocumento"]).strip().upper()
+            or user.phone != payload["telefono"]
+            or user.birth_date is None
+            or user.birth_date.isoformat() != payload["fechaNacimiento"]
+        ):
+            raise IdentityUnavailableError()
+        return user
 
     def login(self, email: str, password: str, correlation_id: str) -> TokenSet:
         payload = self._post(

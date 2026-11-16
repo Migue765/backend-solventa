@@ -57,6 +57,18 @@ variable "kms_key_arn" {
   type        = string
 }
 
+variable "permissions_boundary_arn" {
+  description = "Boundary externa del servicio Cotizacion; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
+variable "alb_permissions_boundary_arn" {
+  description = "Boundary externa del controlador ALB, separada de aplicaciones; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Tags comunes."
   type        = map(string)

@@ -72,11 +72,15 @@ run "legacy_defaults" {
   assert {
     condition = (
       aws_s3_bucket.artifacts.force_destroy &&
+      length(aws_security_group.deploy) == 1 &&
       aws_vpc_security_group_egress_rule.deploy_all.ip_protocol == "-1" &&
       aws_vpc_security_group_egress_rule.deploy_all.from_port == null &&
       aws_vpc_security_group_egress_rule.deploy_all.to_port == null &&
       length(aws_vpc_security_group_egress_rule.deploy_http) == 0 &&
-      length(data.aws_iam_policy_document.codebuild_restricted_assume) == 0
+      length(data.aws_iam_policy_document.codebuild_restricted_assume) == 0 &&
+      aws_iam_role.build.permissions_boundary == null &&
+      aws_iam_role.deploy.permissions_boundary == null &&
+      aws_iam_role.pipeline.permissions_boundary == null
     )
     error_message = "Los defaults deben conservar bucket, direcciones y red de los consumidores existentes."
   }
@@ -90,6 +94,57 @@ run "legacy_defaults" {
     )
     error_message = "Los defaults deben conservar el trust y los permisos previos."
   }
+}
+
+run "external_boundary" {
+  command = plan
+
+  variables {
+    permissions_boundary_arn = "arn:aws:iam::111122223333:policy/test-external-boundary"
+  }
+
+  assert {
+    condition = alltrue([
+      for role in [aws_iam_role.build, aws_iam_role.deploy, aws_iam_role.pipeline] :
+      role.permissions_boundary == var.permissions_boundary_arn
+    ])
+    error_message = "Los tres roles CI deben llevar la boundary externa sin crearla ni cambiar trust/egress."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.deploy_all.ip_protocol == "-1" &&
+      jsondecode(aws_iam_role.deploy.assume_role_policy) == jsondecode(data.aws_iam_policy_document.codebuild_assume.json)
+    )
+    error_message = "Adjuntar la boundary no debe activar restrict_service_access implicitamente."
+  }
+}
+
+run "claims_evidence_bucket" {
+  command = plan
+
+  variables {
+    service_name               = "siniestros"
+    siniestros_evidence_bucket = "solventa-test-siniestros-evidencias-111122223333"
+  }
+
+  assert {
+    condition = one([
+      for item in aws_codebuild_project.deploy.environment[0].environment_variable :
+      item.value if item.name == "SINIESTROS_EVIDENCIAS_BUCKET"
+    ]) == var.siniestros_evidence_bucket
+    error_message = "CodeBuild debe renderizar el bucket recibido, no el de otra cuenta."
+  }
+}
+
+run "claims_requires_bucket" {
+  command = plan
+
+  variables {
+    service_name = "siniestros"
+  }
+
+  expect_failures = [var.siniestros_evidence_bucket]
 }
 
 run "restricted_access" {
@@ -121,7 +176,7 @@ run "restricted_access" {
       aws_vpc_security_group_egress_rule.deploy_http[0].from_port == 80 &&
       aws_vpc_security_group_egress_rule.deploy_http[0].to_port == 80 &&
       aws_vpc_security_group_ingress_rule.cluster_from_deploy.from_port == 443 &&
-      aws_vpc_security_group_ingress_rule.cluster_from_deploy.referenced_security_group_id == aws_security_group.deploy.id
+      aws_vpc_security_group_ingress_rule.cluster_from_deploy.referenced_security_group_id == aws_security_group.deploy[0].id
     )
     error_message = "La instancia restringida debe proteger S3 y abrir solo TCP 443/80, sin entrada al build."
   }
@@ -129,7 +184,7 @@ run "restricted_access" {
   assert {
     condition = (
       toset(one([for s in data.aws_iam_policy_document.deploy.statement : s if s.sid == "CrearInterfaces"]).resources) == toset(concat(
-        ["arn:aws:ec2:us-east-2:111122223333:network-interface/*", aws_security_group.deploy.arn],
+        ["arn:aws:ec2:us-east-2:111122223333:network-interface/*", aws_security_group.deploy[0].arn],
         local.subnet_arns,
       )) &&
       toset(one([for s in data.aws_iam_policy_document.deploy.statement : s if s.sid == "EliminarInterfaces"]).resources) == toset(["arn:aws:ec2:us-east-2:111122223333:network-interface/*"]) &&
@@ -164,5 +219,28 @@ run "restricted_access" {
       ]))
     )
     error_message = "Conservar namespace propio, aprobacion, disparadores pausados y ausencia de permisos IAM/PassRole."
+  }
+}
+
+run "precreated_security_group" {
+  command = plan
+
+  variables {
+    existing_security_group_id = "sg-0123456789abcdef2"
+    restrict_service_access    = true
+  }
+
+  assert {
+    condition = (
+      length(aws_security_group.deploy) == 0 &&
+      aws_vpc_security_group_egress_rule.deploy_all.security_group_id == var.existing_security_group_id &&
+      aws_vpc_security_group_ingress_rule.cluster_from_deploy.referenced_security_group_id == var.existing_security_group_id &&
+      aws_codebuild_project.deploy.vpc_config[0].security_group_ids == toset([var.existing_security_group_id]) &&
+      contains(
+        one([for s in data.aws_iam_policy_document.deploy.statement : s if s.sid == "CrearInterfaces"]).resources,
+        "arn:aws:ec2:us-east-2:111122223333:security-group/${var.existing_security_group_id}"
+      )
+    )
+    error_message = "Reutilizar exactamente el SG externo en red y policy ENI sin crear otro."
   }
 }

@@ -9,6 +9,10 @@ Clock = Callable[[], datetime]
 
 
 class IdentityGateway(Protocol):
+    def registration_challenge(self, correlation_id: str) -> dict[str, object]: ...
+
+    def encrypted_register(self, payload: dict[str, object], correlation_id: str) -> User: ...
+
     def login_challenge(self, correlation_id: str) -> dict[str, object]: ...
 
     def encrypted_login(

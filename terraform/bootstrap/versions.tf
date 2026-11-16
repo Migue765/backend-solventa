@@ -11,8 +11,9 @@ terraform {
 
 # Bootstrap usa estado LOCAL (no hay backend remoto todavia).
 provider "aws" {
-  region  = var.aws_region
-  profile = var.aws_profile
+  region              = var.aws_region
+  profile             = var.aws_profile
+  allowed_account_ids = [var.account_id]
 
   default_tags {
     tags = var.tags

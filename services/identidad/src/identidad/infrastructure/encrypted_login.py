@@ -3,7 +3,7 @@ import json
 import re
 import secrets
 from datetime import UTC, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from jwcrypto import jwe, jwk
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -64,11 +64,11 @@ class EncryptedLogin:
         self._client = client
         self._clock = clock
 
-    def challenge(self) -> dict[str, object]:
+    def challenge(self, purpose: Literal["login", "register"] = "login") -> dict[str, object]:
         expires = self._clock() + timedelta(seconds=TTL_SECONDS)
         challenge_id = secrets.token_urlsafe(32)
         if not self._client.set(
-            PREFIX + challenge_id, expires.timestamp(), ex=TTL_SECONDS, nx=True
+            self._prefix(purpose) + challenge_id, expires.timestamp(), ex=TTL_SECONDS, nx=True
         ):
             raise RedisError("No fue posible guardar el desafío.")
         public_key = json.loads(self._key.export_public())
@@ -85,7 +85,13 @@ class EncryptedLogin:
             "expiraEn": expires.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         }
 
-    def decrypt_and_consume(self, email: str, compact: str) -> str:
+    @staticmethod
+    def _prefix(purpose: Literal["login", "register"]) -> str:
+        return PREFIX if purpose == "login" else "identidad:register-challenge:"
+
+    def decrypt_and_consume(
+        self, email: str, compact: str, purpose: Literal["login", "register"] = "login"
+    ) -> str:
         try:
             if len(compact) > 8192 or not COMPACT_PATTERN.fullmatch(compact):
                 raise ValueError("Invalid compact JWE")
@@ -94,7 +100,7 @@ class EncryptedLogin:
                 base64.urlsafe_b64decode(protected + "=" * (-len(protected) % 4)),
                 object_pairs_hook=_unique_object,
             )
-            if header != self._header:
+            if header != {**self._header, "typ": f"solventa-{purpose}+jwe"}:
                 raise ValueError("Invalid protected header")
             envelope = jwe.JWE(algs=["RSA-OAEP-256", "A256GCM"])
             envelope.deserialize(compact, key=self._key)
@@ -109,7 +115,7 @@ class EncryptedLogin:
             raise InvalidEnvelopeError() from error
 
         # GETDEL is atomic across workers; never consume before authenticated envelope validation.
-        expires = cast(str | None, self._client.getdel(PREFIX + payload.desafioId))
+        expires = cast(str | None, self._client.getdel(self._prefix(purpose) + payload.desafioId))
         if expires is None or float(expires) <= self._clock().timestamp():
             raise InvalidEnvelopeError()
         return payload.contrasena

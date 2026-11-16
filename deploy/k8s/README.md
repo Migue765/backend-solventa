@@ -1,5 +1,8 @@
 # Manifiestos Kubernetes - cotizacion
 
+Para reconstruir una cuenta vacia seguir [ARRANQUE-VACIO.md](ARRANQUE-VACIO.md).
+Los procedimientos historicos de retirada mas abajo no aplican a ese arranque.
+
 ## Perfil academico de bajo consumo
 
 Las nueve APIs (`bff-movil`, `bff-web`, `cotizacion`, `identidad`, `perfilamiento`,
@@ -76,8 +79,12 @@ Los manifiestos `serviceaccount`, `deployment` y `targetgroupbinding` usan varia
 
 ## Orden de aplicacion
 
-Prerrequisito: `terraform apply` de `terraform/environments/prod/primary` (instala AWS Load Balancer Controller y metrics-server)
-y `kubectl` apuntando al cluster (`terraform output kubeconfig_command`).
+Prerrequisito: infraestructura `terraform/environments/prod/primary` y despues
+`terraform/environments/prod/addons` (AWS Load Balancer Controller y metrics-server),
+con planes y ejecucion autorizados. Para una cuenta nueva seguir primero el
+[procedimiento de reconstruccion](../../terraform/environments/prod/primary/README.md#preparacion-y-primer-despliegue):
+state nuevo, bases/Secrets y Deployment semilla sin pods antes de migrar.
+Apuntar `kubectl` al cluster aprobado (`terraform output kubeconfig_command`).
 
 ```bash
 cd terraform/environments/prod/primary
@@ -115,23 +122,23 @@ Verificacion: `kubectl -n cotizacion get pods,hpa,targetgroupbinding` y `curl "$
 
 ## Secreto `cotizacion-db` (DATABASE_URL)
 
-El deployment lee `DATABASE_URL` del Secret `cotizacion-db`. Las credenciales viven en Secrets Manager
-(`terraform output db_secret_arn`, generado por RDS). Opciones:
-
-- Recomendada: External Secrets Operator o Secrets Store CSI Driver sincronizando el secreto de Secrets Manager
-  (el rol IRSA del servicio ya puede leerlo). No se instala por Terraform en dev.
-- Manual (dev), con una identidad que tenga acceso al secreto:
+El Deployment lee `DATABASE_URL` del Secret `cotizacion-db`. Para el destino nuevo,
+preparar un usuario de aplicacion aislado, no copiar las credenciales master
+generadas por RDS. Las imagenes usan psycopg3: DSN `postgresql+psycopg://`,
+con TLS/CA y caracteres de password codificados para URL.
+Un operador autorizado entrega el DSN por un archivo privado nuevo, fuera de Git:
 
 ```bash
-SECRET=$(aws secretsmanager get-secret-value --secret-id "$(terraform output -raw db_secret_arn)" \
-  --query SecretString --output text --profile tesis --region us-east-2)
-DB_USER=$(echo "$SECRET" | jq -r .username)
-DB_PASS=$(echo "$SECRET" | jq -r .password | jq -sRr @uri)
-kubectl -n cotizacion create secret generic cotizacion-db \
-  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/solventa_prod"
+set -euo pipefail
+: "${CONTEXT:?}" "${DATABASE_URL_FILE:?}"
+kubectl --context "$CONTEXT" -n cotizacion create secret generic cotizacion-db \
+  --from-file=DATABASE_URL="$DATABASE_URL_FILE" --dry-run=client -o yaml |
+  kubectl --context "$CONTEXT" -n cotizacion apply -f -
 ```
 
-Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.
+No imprimir el archivo/YAML ni usar `set -x`. Si rota la contrasena hay que
+sincronizar el Secret. External Secrets/CSI no estan instalados por este cambio;
+su instalacion no es un prerrequisito implicitamente autorizado.
 
 ## Notas de operacion
 

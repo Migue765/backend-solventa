@@ -20,7 +20,7 @@ output "master_user_secret_arn" {
 
 output "security_group_id" {
   description = "SG de la base."
-  value       = aws_security_group.db.id
+  value       = local.security_group_id
 }
 
 output "instance_arn" {

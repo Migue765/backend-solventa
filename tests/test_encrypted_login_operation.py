@@ -46,12 +46,23 @@ def test_manifests_keep_flags_off_and_key_out_of_bff() -> None:
             assert "LOGIN_ENCRYPTION_PRIVATE_KEY" not in values
 
 
-def test_only_challenge_is_public_and_throttled() -> None:
+@pytest.mark.parametrize(
+    ("name", "path"),
+    [
+        ("login_challenge", "/v1/sesiones/desafio"),
+        ("registration_challenge", "/v1/usuarios/desafio"),
+    ],
+)
+def test_challenges_are_public_and_throttled(name: str, path: str) -> None:
     terraform = (ROOT / "terraform/modules/api-gateway/main.tf").read_text()
-    route = terraform.split('resource "aws_apigatewayv2_route" "login_challenge" {')[1]
-    assert 'route_key          = "GET /v1/sesiones/desafio"' in route.split("\n}")[0]
+    route = terraform.split(f'resource "aws_apigatewayv2_route" "{name}" {{')[1]
+    assert f'route_key          = "GET {path}"' in route.split("\n}")[0]
     assert 'authorization_type = "NONE"' in route.split("\n}")[0]
-    assert "route_key              = aws_apigatewayv2_route.login_challenge.route_key" in terraform
+    stage = terraform.split('resource "aws_apigatewayv2_stage" "default" {')[1]
+    settings = stage.split(f"route_key              = aws_apigatewayv2_route.{name}.route_key")[1]
+    settings = settings.split("\n  }")[0]
+    assert "throttling_rate_limit  = var.auth_throttling_rate_limit" in settings
+    assert "throttling_burst_limit = var.auth_throttling_burst_limit" in settings
     for name in ("v1", "movil"):
         protected = terraform.split(f'resource "aws_apigatewayv2_route" "{name}" {{')[1]
         assert 'authorization_type = "JWT"' in protected.split("\n}")[0]

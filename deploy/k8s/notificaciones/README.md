@@ -1,5 +1,8 @@
 # Despliegue de Notificaciones
 
+Para una cuenta vacia seguir primero [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+bases/Secrets nuevos, migraciones y dependencias antes del cutover.
+
 Servicio interno (`http://notificaciones.notificaciones.svc.cluster.local:8080`), sin
 ruta publica ni TargetGroupBinding. Lo llaman BFF Movil (bandeja y preferencias) y,
 si se activa, Cotizacion (pagos confirmados). `terraform/environments/prod/primary/notificaciones.tf`
@@ -29,12 +32,13 @@ como `proveedor_no_configurado` hasta que exista un adaptador.
    obtiene secretos.
 4. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
    estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
-   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   y la configuracion nueva exige aprobacion manual antes de Deploy. Aprobar solo
+   con los prerrequisitos verificados. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml`, `deployment.yaml` y el CronJob.
 
 ```bash
 aws codepipeline start-pipeline-execution \
-  --name solventa-prod-notificaciones --region us-east-2 \
+  --name solventa-prod-notificaciones --profile "$AWS_PROFILE" --region us-east-2 \
   --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
 ```
 
