@@ -26,6 +26,7 @@ from polizas.infrastructure.cancelaciones import (
     PolizaNoCancelable,
     RepositorioCancelaciones,
 )
+from polizas.infrastructure.consultas import RepositorioConsultas
 from polizas.infrastructure.modificaciones import (
     ImpactoCambio,
     PolizaNoModificable,
@@ -73,6 +74,7 @@ def create_app(
     app.extensions["polizas_renovaciones"] = renovaciones
     modificaciones = RepositorioModificaciones(sesiones)
     cancelaciones = RepositorioCancelaciones(sesiones)
+    consultas = RepositorioConsultas(sesiones)
 
     @app.before_request
     def autenticar() -> tuple[Response, int] | None:
@@ -108,6 +110,18 @@ def create_app(
             raise ValueError("La emision no admite parametros.")
         evidencia = EvidenciaEmision.model_validate(request.get_json())
         return jsonify(repositorio.emitir(evidencia, datetime.now(UTC)))
+
+    @app.get("/v1/clientes/me/polizas")
+    def listar_cliente() -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La consulta no admite parametros ni cuerpo.")
+        return jsonify(polizas=consultas.listar(_cliente(), reloj()))
+
+    @app.get("/v1/clientes/me/polizas/<uuid:poliza_id>")
+    def detalle_cliente(poliza_id: UUID) -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La consulta no admite parametros ni cuerpo.")
+        return jsonify(consultas.detalle(poliza_id, _cliente(), reloj()))
 
     @app.get("/v1/polizas/<uuid:poliza_id>/renovacion")
     def consultar_renovacion(poliza_id: UUID) -> Response:
