@@ -321,7 +321,8 @@ consulta o confirmacion no crea otro siniestro ni caso. Un caso pendiente signif
 ### Notificaciones (HU22)
 
 En la misma transaccion que registra un cambio de estado visible para el cliente
-(`en_evaluacion` en adelante) o confirma un pago parametrico, Siniestros encola en
+(`en_evaluacion` en adelante, incluidas las decisiones de aprobacion o enrutamiento)
+o confirma un pago parametrico, Siniestros encola en
 `outbox_notificaciones` un evento `siniestro_estado_cambiado` o
 `pago_parametrico_ejecutado` con identificador determinista (siniestro y secuencia, o
 pago). Solo guarda cliente, recurso, estado y fecha; no copia importes, cuentas ni
