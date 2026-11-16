@@ -33,6 +33,8 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
 | `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
 | `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
+| `GET`    | `/movil/v1/polizas` | Sí | Lista las pólizas del cliente con sesión activa |
+| `GET`    | `/movil/v1/polizas/{polizaId}` | Sí | Detalle vigente de una póliza propia (404 si es ajena) |
 | `GET`    | `/movil/v1/polizas/{polizaId}/renovacion` | Sí | Consulta elegibilidad y condiciones de renovación |
 | `POST`   | `/movil/v1/polizas/{polizaId}/renovaciones` | Sí | Acepta y paga la renovación de forma idempotente |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |

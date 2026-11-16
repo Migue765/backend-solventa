@@ -10,6 +10,7 @@ tags:
   - name: Sesiones
   - name: Notificaciones
   - name: Asistencias
+  - name: Polizas
   - name: Renovaciones
 paths:
   /v1/prestadores/consulta:
@@ -159,6 +160,63 @@ paths:
     $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
   /v1/sesiones/biometria:
     $ref: "./biometria-v1.yaml#/paths/~1sesiones"
+  /v1/polizas:
+    get:
+      tags: [Polizas]
+      summary: Lista las pólizas del cliente autenticado
+      description: >-
+        Devuelve solo las pólizas de la identidad del JWT, ordenadas por emisión
+        descendente. Requiere rol y scope `cliente` y una sesión activa (claim `sid`);
+        una sesión cerrada o vencida responde 401 `sesion_invalida`. Sin pólizas
+        responde 200 con lista vacía. No admite parámetros ni cuerpo.
+      operationId: listarPolizas
+      responses:
+        "200":
+          description: Pólizas del cliente (puede ser vacía)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListaPolizas"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}:
+    get:
+      tags: [Polizas]
+      summary: Consulta el detalle actual de una póliza del cliente
+      description: >-
+        Recalcula estado y condiciones vigentes en cada consulta. Una póliza ajena
+        responde igual que una inexistente (404) para no confirmar su existencia.
+      operationId: consultarPoliza
+      parameters:
+        - name: polizaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Detalle vigente de la póliza
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetallePoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/PolizaNoEncontrada"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -327,6 +385,18 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problema"
+    AccesoDenegado:
+      description: El token no corresponde a un cliente del canal móvil
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    PolizaNoEncontrada:
+      description: La póliza no existe o no pertenece al cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
     DemasiadasSolicitudes:
       description: Se superó el límite de intentos permitido
       headers:
@@ -452,6 +522,120 @@ components:
         refreshToken:
           type: string
           maxLength: 2048
+    ResumenPoliza:
+      type: object
+      additionalProperties: false
+      required: [id, numero, producto, estado, vigencia, coberturaPrincipal, simulada]
+      properties:
+        id:
+          type: string
+          format: uuid
+        numero:
+          type: string
+          example: POL-20260115-1A2B3C4D
+        producto:
+          type: object
+          additionalProperties: false
+          required: [tipo, nombre]
+          properties:
+            tipo:
+              type: string
+            nombre:
+              type: string
+        estado:
+          type: string
+          enum: [programada, vigente, vencida]
+        vigencia:
+          type: object
+          additionalProperties: false
+          required: [inicio, fin]
+          properties:
+            inicio:
+              type: string
+              format: date
+            fin:
+              type: string
+              format: date
+        coberturaPrincipal:
+          type: object
+          additionalProperties: false
+          required: [codigo, nombre]
+          properties:
+            codigo:
+              type: string
+            nombre:
+              type: string
+        simulada:
+          type: boolean
+          description: Póliza académica, sin efecto contractual real.
+    ListaPolizas:
+      type: object
+      additionalProperties: false
+      required: [polizas]
+      properties:
+        polizas:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResumenPoliza"
+    CoberturaPoliza:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre, descripcion, opcional, incluida]
+      properties:
+        codigo:
+          type: string
+        nombre:
+          type: string
+        descripcion:
+          type: string
+        opcional:
+          type: boolean
+        incluida:
+          type: boolean
+    DetallePoliza:
+      allOf:
+        - $ref: "#/components/schemas/ResumenPoliza"
+        - type: object
+          required:
+            [suscripcionId, emitidaEn, version, plan, coberturas, prima, condiciones, consultadaEn]
+          properties:
+            suscripcionId:
+              type: string
+              format: uuid
+            emitidaEn:
+              type: string
+              format: date-time
+            version:
+              type: [integer, "null"]
+              description: Versión vigente de condiciones; null en productos por fechas.
+            plan:
+              type: [string, "null"]
+            coberturas:
+              type: array
+              items:
+                $ref: "#/components/schemas/CoberturaPoliza"
+            prima:
+              oneOf:
+                - type: "null"
+                - type: object
+                  additionalProperties: false
+                  required: [monto, moneda, periodicidad]
+                  properties:
+                    monto:
+                      type: string
+                      description: Decimal serializado como texto.
+                    moneda:
+                      type: string
+                    periodicidad:
+                      type: string
+                      enum: [mensual]
+            condiciones:
+              type: array
+              items:
+                type: string
+            consultadaEn:
+              type: string
+              format: date-time
     Problema:
       type: object
       required: [type, title, status, detail, code, correlationId]

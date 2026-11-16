@@ -45,6 +45,17 @@ cliente, ordenadas por emision descendente. No admite cuerpo ni otros
 parametros. Todas las respuestas incluyen `Cache-Control: no-store` y
 `X-Correlation-ID`. `/health` solo comprueba el proceso; no demuestra integracion.
 
+## Consulta de polizas del cliente (HU37, SOL-316)
+
+`GET /v1/clientes/me/polizas` y `GET /v1/clientes/me/polizas/{polizaId}` exigen
+el token interno y `X-Cliente-ID` (lo deriva el BFF del JWT). La lista devuelve
+`{polizas:[...]}` con numero, producto, estado (`programada|vigente|vencida`),
+vigencia y cobertura principal; sin polizas responde `200` con lista vacia. El
+detalle agrega suscripcion, emision, condiciones vigentes (version, plan,
+coberturas, prima) recalculadas en cada consulta y `consultadaEn`. Una poliza
+ajena responde igual que una inexistente: `404 poliza_no_encontrada`. No admiten
+parametros ni cuerpo (`400`).
+
 ## Renovacion academica (HU33, SOL-317)
 
 Componente Ciclo de Vida de Polizas (`renovar()` del modelo de dominio). Aplica
