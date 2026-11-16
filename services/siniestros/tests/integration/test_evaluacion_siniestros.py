@@ -189,7 +189,7 @@ def test_evaluacion_aplica_reglas_y_deja_el_caso_en_evaluacion(
         "requiereInspeccion": False,
         "requiereRevisionHumana": False,
         "fraude": {"nivel": "bajo", "bloqueante": False},
-        "reglas": [],
+        "reglas": [{"reglaId": "TRATAMIENTO_POR_DEFECTO", "version": 1, "resultado": "aprobacion"}],
         "motivo": "Cumple las condiciones para aprobacion automatica.",
     }
     assert historial_estados(app, siniestro_id) == ["reportado", "en_evaluacion"]
@@ -316,7 +316,67 @@ def test_sin_reglas_vigentes_queda_pendiente_de_revision(app: Flask, client: Fla
     assert body["resultado"] == "pendiente_revision"
     assert body["reglasVersion"] is None
     assert body["reglasAplicadas"][0]["codigo"] == "SIN_REGLAS_VIGENTES"
-    assert body["decisionAutomatica"]["reglas"] == []
+    assert body["decisionAutomatica"]["reglas"] == [
+        {"reglaId": "SIN_REGLAS_VIGENTES", "version": 1, "resultado": "revision_humana"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("cambios", "cuerpo", "estado", "destino"),
+    [
+        ({}, None, "aprobado", None),
+        ({"dias": 45}, None, "en_inspeccion", "inspeccion"),
+        ({"ubicacion": False}, None, "en_revision", "revision"),
+        (
+            {},
+            {"senalesFraude": [{"codigo": "DUPLICADA", "nivel": "alto", "fuente": "fraude"}]},
+            "en_revision",
+            "fraude",
+        ),
+    ],
+)
+def test_decision_automatica_es_consumida_por_hu27(
+    app: Flask,
+    client: FlaskClient,
+    cambios: dict[str, Any],
+    cuerpo: dict[str, Any] | None,
+    estado: str,
+    destino: str | None,
+) -> None:
+    publicar_reglas(client)
+    siniestro_id = registrar(app, **cambios)
+    decision = evaluar(client, siniestro_id, cuerpo).get_json()["decisionAutomatica"]
+
+    respuesta = client.post(
+        f"/internal/v1/siniestros/{siniestro_id}/decisiones/automatica",
+        json=decision,
+        headers=HEADERS,
+    )
+
+    assert respuesta.status_code == 201, respuesta.get_json()
+    resultado = respuesta.get_json()
+    assert (resultado["estadoAnterior"], resultado["estadoNuevo"]) == ("en_evaluacion", estado)
+    asignacion = resultado["asignacion"]
+    assert (asignacion and asignacion["destino"]) == destino
+    assert historial_estados(app, siniestro_id) == ["reportado", "en_evaluacion", estado]
+
+
+def test_pendiente_sin_reglas_vigentes_se_enruta_a_revision(
+    app: Flask, client: FlaskClient
+) -> None:
+    publicar_reglas(client, vigenteDesde="2099-01-01T00:00:00Z")
+    siniestro_id = registrar(app)
+    decision = evaluar(client, siniestro_id).get_json()["decisionAutomatica"]
+
+    respuesta = client.post(
+        f"/internal/v1/siniestros/{siniestro_id}/decisiones/automatica",
+        json=decision,
+        headers=HEADERS,
+    )
+
+    assert respuesta.status_code == 201, respuesta.get_json()
+    assert respuesta.get_json()["estadoNuevo"] == "en_revision"
+    assert respuesta.get_json()["asignacion"]["destino"] == "revision"
 
 
 def test_usa_la_version_vigente_mas_reciente(app: Flask, client: FlaskClient) -> None:

@@ -13,6 +13,8 @@ from siniestros.domain.evaluacion import (
     FRAUDE_NIVEL,
     SIN_REGLAS_VIGENTES,
     SINIESTRO_NO_INTEGRO,
+    TRATAMIENTO_POR_DEFECTO,
+    VERSION_REGLAS_SISTEMA,
     ConjuntoReglasEvaluacion,
     EntradasEvaluacion,
     ResultadoEvaluacion,
@@ -34,6 +36,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 NIVELES_TEXTO = {0: "bajo", 1: "bajo", 2: "medio", 3: "alto"}
+MAXIMO_MOTIVO_DECISION = 1000
 
 
 class ProveedorSenalesFraude(Protocol):
@@ -355,6 +358,20 @@ def decision_automatica(evaluacion: EvaluacionSiniestroModel) -> dict[str, Any] 
     if evaluacion.resultado == "informacion_insuficiente":
         return None
     nivel = int(evaluacion.entradas.get("nivelFraude", 0))
+    version = evaluacion.reglas_version or VERSION_REGLAS_SISTEMA
+    reglas = [
+        {"reglaId": regla["codigo"], "version": version, "resultado": regla["tratamiento"]}
+        for regla in evaluacion.reglas_aplicadas
+    ] or [
+        {
+            "reglaId": TRATAMIENTO_POR_DEFECTO,
+            "version": version,
+            "resultado": evaluacion.tratamiento,
+        }
+    ]
+    motivo = evaluacion.motivo
+    if len(motivo) > MAXIMO_MOTIVO_DECISION:
+        motivo = motivo[: MAXIMO_MOTIVO_DECISION - 3] + "..."
     return {
         "evaluacionId": evaluacion.id,
         "evaluadoEn": _instante(evaluacion.evaluada_en),
@@ -367,19 +384,8 @@ def decision_automatica(evaluacion: EvaluacionSiniestroModel) -> dict[str, Any] 
                 regla["codigo"] == FRAUDE_NIVEL for regla in evaluacion.reglas_aplicadas
             ),
         },
-        "reglas": (
-            []
-            if evaluacion.reglas_version is None
-            else [
-                {
-                    "reglaId": regla["codigo"],
-                    "version": evaluacion.reglas_version,
-                    "resultado": regla["tratamiento"],
-                }
-                for regla in evaluacion.reglas_aplicadas
-            ]
-        ),
-        "motivo": evaluacion.motivo,
+        "reglas": reglas,
+        "motivo": motivo,
     }
 
 

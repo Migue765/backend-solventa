@@ -40,7 +40,7 @@ CAMPOS_TEXTO = frozenset({"tipoEvento"})
 CAMPOS_BOOLEANOS = frozenset({"senalesFraudeDisponibles"})
 
 CodigoRegla = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]{0,49}$")]
-Motivo = Annotated[str, StringConstraints(min_length=1, max_length=300)]
+Motivo = Annotated[str, StringConstraints(min_length=10, max_length=300)]
 TextoRegla = Annotated[str, StringConstraints(min_length=1, max_length=100)]
 
 
@@ -91,7 +91,8 @@ class ConjuntoReglasEvaluacion(Input):
     nivelFraudeRevisionHumana: NivelFraude | None = "medio"
     tratamientoPorDefecto: Tratamiento
     motivoPorDefecto: Motivo
-    reglas: list[ReglaEvaluacion] = Field(default_factory=list, max_length=100)
+    # HU27 acepta hasta 50 reglas por decision: 49 publicadas mas FRAUDE_NIVEL.
+    reglas: list[ReglaEvaluacion] = Field(default_factory=list, max_length=49)
 
     @model_validator(mode="after")
     def codigos_unicos(self) -> Self:
@@ -158,9 +159,19 @@ FRAUDE_NIVEL = "FRAUDE_NIVEL"
 SIN_REGLAS_VIGENTES = "SIN_REGLAS_VIGENTES"
 FALLO_EVALUADOR = "FALLO_EVALUADOR"
 SINIESTRO_NO_INTEGRO = "SINIESTRO_NO_INTEGRO"
+TRATAMIENTO_POR_DEFECTO = "TRATAMIENTO_POR_DEFECTO"
 CODIGOS_RESERVADOS = frozenset(
-    {INFORMACION_MINIMA, FRAUDE_NIVEL, SIN_REGLAS_VIGENTES, FALLO_EVALUADOR, SINIESTRO_NO_INTEGRO}
+    {
+        INFORMACION_MINIMA,
+        FRAUDE_NIVEL,
+        SIN_REGLAS_VIGENTES,
+        FALLO_EVALUADOR,
+        SINIESTRO_NO_INTEGRO,
+        TRATAMIENTO_POR_DEFECTO,
+    }
 )
+# Version de las reglas de sistema (codigos reservados) cuando no hay conjunto vigente.
+VERSION_REGLAS_SISTEMA = 1
 MOTIVOS_PENDIENTE = {
     SIN_REGLAS_VIGENTES: "No hay una version de reglas vigente; el caso queda pendiente de "
     "revision humana.",

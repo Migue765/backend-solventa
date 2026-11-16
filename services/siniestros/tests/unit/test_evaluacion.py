@@ -1,17 +1,22 @@
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from siniestros.domain.decision import ResultadoEvaluacion as ResultadoDecision
 from siniestros.domain.evaluacion import (
     FRAUDE_NIVEL,
     INFORMACION_MINIMA,
+    TRATAMIENTO_POR_DEFECTO,
     ConjuntoReglasEvaluacion,
     EntradasEvaluacion,
     SenalFraude,
     evaluar,
     nivel_fraude,
 )
+from siniestros.infrastructure.evaluacion import decision_automatica
+from siniestros.infrastructure.modelos_evaluacion import EvaluacionSiniestroModel
 
 
 def conjunto(**cambios: Any) -> ConjuntoReglasEvaluacion:
@@ -138,7 +143,7 @@ def test_rechaza_reglas_con_tipos_incompatibles(regla: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         conjunto(
             reglas=[
-                {**regla, "codigo": "R1", "tratamiento": "inspeccion", "motivo": "Motivo."},
+                {**regla, "codigo": "R1", "tratamiento": "inspeccion", "motivo": "Motivo valido."},
             ]
         )
 
@@ -156,6 +161,45 @@ def test_rechaza_codigos_duplicados_o_reservados() -> None:
         conjunto(reglas=[regla, regla])
     with pytest.raises(ValidationError):
         conjunto(reglas=[{**regla, "codigo": FRAUDE_NIVEL}])
+    with pytest.raises(ValidationError):
+        conjunto(reglas=[{**regla, "codigo": TRATAMIENTO_POR_DEFECTO}])
+
+
+def test_limites_compatibles_con_la_decision_de_hu27() -> None:
+    regla = {
+        "campo": "cantidadEvidencias",
+        "operador": "gte",
+        "valor": 0,
+        "tratamiento": "inspeccion",
+        "motivo": "Motivo valido de la regla.",
+    }
+    with pytest.raises(ValidationError):
+        conjunto(reglas=[{**regla, "codigo": "R1", "motivo": "Corto."}])
+    with pytest.raises(ValidationError):
+        conjunto(motivoPorDefecto="Corto.")
+    with pytest.raises(ValidationError):
+        conjunto(reglas=[{**regla, "codigo": f"R{indice}"} for indice in range(50)])
+
+    reglas = conjunto(reglas=[{**regla, "codigo": f"R{indice}"} for indice in range(49)])
+    modelo = EvaluacionSiniestroModel(
+        id=str(uuid4()),
+        reglas_version=1,
+        resultado="decidido",
+        tratamiento="inspeccion",
+        requiere_revision_humana=False,
+        entradas={"nivelFraude": 0},
+        reglas_aplicadas=[
+            {"codigo": r.codigo, "tratamiento": r.tratamiento, "motivo": r.motivo}
+            for r in evaluar(reglas, entradas()).reglas_aplicadas
+        ],
+        motivo="x" * 1500,
+        evaluada_en=datetime(2026, 11, 1, tzinfo=UTC),
+    )
+
+    decision = ResultadoDecision.model_validate(decision_automatica(modelo))
+
+    assert len(decision.reglas) == 49
+    assert len(decision.motivo) == 1000 and decision.requiereInspeccion
 
 
 def test_vigencia_se_normaliza_a_utc() -> None:

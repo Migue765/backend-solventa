@@ -431,7 +431,11 @@ resultante, la fecha y la correlacion.
   `pendiente_revision` y nunca se aprueba.
 
 La evaluacion solo mueve el siniestro de `reportado` a `en_evaluacion`. HU27 aprueba o
-enruta usando `decisionAutomatica`, que es `null` cuando falta informacion.
+enruta usando `decisionAutomatica`, que es `null` cuando falta informacion. Ese cuerpo se
+envia tal cual a `POST /internal/v1/siniestros/{siniestroId}/decisiones/automatica`:
+`reglas` siempre trae al menos una entrada (`TRATAMIENTO_POR_DEFECTO` si ninguna aplica y
+version de sistema 1 sin conjunto vigente). Por eso cada conjunto admite hasta 49 reglas y
+los motivos tienen al menos 10 caracteres; el motivo combinado se recorta a 1000.
 
 Los endpoints internos son:
 
