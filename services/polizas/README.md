@@ -45,6 +45,122 @@ cliente, ordenadas por emision descendente. No admite cuerpo ni otros
 parametros. Todas las respuestas incluyen `Cache-Control: no-store` y
 `X-Correlation-ID`. `/health` solo comprueba el proceso; no demuestra integracion.
 
+## Consulta de polizas del cliente (HU37, SOL-316)
+
+`GET /v1/clientes/me/polizas` y `GET /v1/clientes/me/polizas/{polizaId}` exigen
+el token interno y `X-Cliente-ID` (lo deriva el BFF del JWT). La lista devuelve
+`{polizas:[...]}` con numero, producto, estado (`programada|vigente|vencida`),
+vigencia y cobertura principal; sin polizas responde `200` con lista vacia. El
+detalle agrega suscripcion, emision, condiciones vigentes (version, plan,
+coberturas, prima) recalculadas en cada consulta y `consultadaEn`. Una poliza
+ajena responde igual que una inexistente: `404 poliza_no_encontrada`. No admiten
+parametros ni cuerpo (`400`).
+
+## Renovacion academica (HU33, SOL-317)
+
+Componente Ciclo de Vida de Polizas (`renovar()` del modelo de dominio). Aplica
+ASR-EMI-01 (la vigencia solo cambia con aceptacion y pago confirmados),
+ASR-FIN-01 (un solo cobro por renovacion) y ASR-AUD-01 (instantanea de condiciones).
+Las rutas exigen el token interno y `X-Cliente-ID`; el BFF Web lo deriva del JWT.
+
+**Reglas `academica-renovacion-v1`:**
+- Renovables: `automotive`, `life`, `device-protection`, `payment-protection` y
+  `mortgage-life` (vigencia mensual). Viaje, vuelo y clima se contratan por fechas:
+  `producto_no_renovable`.
+- Ventana: desde 15 dias antes de `fechaFin` hasta `fechaFin`, solo con la poliza
+  vigente (`poliza_programada`, `poliza_vencida`, `fuera_de_ventana`).
+- Nueva vigencia contigua: inicia el dia siguiente al fin actual y dura un mes
+  calendario con la misma regla de la emision. No se crea otra poliza: se extiende
+  `fechaFin` de la misma poliza y el periodo queda en `renovaciones`.
+- Prima: tarifa academica fija por producto (por ejemplo, vida 25.000 COP). Polizas
+  no conserva el perfil de riesgo de la emision, asi que no recalcula la prima con
+  Perfilamiento ni Cotizacion. Coberturas y condiciones son las del catalogo.
+
+`GET /v1/polizas/{polizaId}/renovacion` devuelve `renovable`, `motivo`, `ventana`,
+`vigenciaActual`, la `oferta` (nueva vigencia, coberturas, prima, condiciones,
+`requierePago`, `reglaVersion`, `condicionesHash`) y el `ultimoIntento`.
+Una poliza inexistente o de otro cliente responde `404 poliza_no_encontrada`.
+
+`POST /v1/polizas/{polizaId}/renovaciones` con `Idempotency-Key` (UUID) y
+`{aceptaCondiciones:true, condicionesHash}`:
+
+1. Valida propietario y elegibilidad (`422 poliza_no_renovable` con `motivo`) y
+   que el hash coincida con la oferta vigente (`409 condiciones_cambiaron`).
+2. Registra el intento `pago_pendiente` con la instantanea de condiciones **antes**
+   del cobro. `reserva_periodo` (unica) admite una sola renovacion activa por periodo:
+   otra clave responde `409 renovacion_en_curso` con `renovacionId`.
+3. Cobra con el simulador (`PAGO_RENOVACION_SIMULADO=confirmado|rechazado`). El efecto
+   se guarda en `pagos_renovacion` con la renovacion como clave primaria: un reintento
+   consulta el mismo efecto y nunca cobra dos veces.
+4. Con pago confirmado extiende `fechaFin` con un `UPDATE` condicionado al fin anterior
+   y marca `renovada`. Con pago rechazado marca `rechazada` (`pago_rechazado`), libera
+   la reserva y la poliza queda igual. Un resultado ambiguo deja `pendiente` (202).
+
+Respuestas: `201` intento nuevo con resultado definitivo, `200` misma clave y misma
+solicitud, `202` pendiente, `409 idempotencia_conflictiva` si la clave se reutiliza con
+otra solicitud. Un pendiente se recupera repitiendo la misma clave o con
+`flask --app polizas.app conciliar-renovaciones`, que resuelve los pendientes con mas
+de 30 s; no hay worker programado.
+
+## Modificacion versionada (HU34, SOL-319)
+
+Componente Ciclo de Vida (entidad Endoso del modelo de dominio). Aplica D-09 y ASR-AUD-01:
+cada cambio crea una version inmutable y conserva las anteriores; todo intento de
+confirmacion, aceptado o rechazado, queda en `auditoria_polizas` (append-only).
+
+**Reglas `academica-modificacion-v1`** (catalogo comun en `domain/condiciones.py`):
+- Modificables: los cinco productos mensuales, con la poliza vigente y sin terminar hoy
+  (`producto_no_modificable`, `poliza_programada`, `poliza_vencida`, `fin_de_vigencia`).
+- Campos autorizados: `plan` (esencial 1,00; integral 1,15; premium 1,30) y las coberturas
+  opcionales del producto, cada una con recargo mensual. Las obligatorias no se pueden
+  retirar; pedir una no autorizada responde `422 cambio_no_permitido` con `campo`. Cualquier
+  otro campo es `400`.
+- Prima mensual = (base + recargos de opcionales incluidas) x factor del plan. La version 1
+  (emision) es plan esencial con todas las coberturas y coincide con la tarifa de renovacion.
+- El cambio es efectivo desde el dia siguiente; la vigencia no cambia. El impacto informa la
+  diferencia mensual y el ajuste prorrateado por los dias restantes.
+- La renovacion (SOL-317) conserva el plan y las coberturas de la version vigente.
+
+`GET /v1/polizas/{id}/modificacion`: `versionActual`, `historial` (descendente), `opciones` y
+elegibilidad. `POST .../modificaciones/simulacion` con `{versionBase, plan,
+coberturasOpcionales}` calcula el impacto (`impactoHash`) sin persistir; `422 sin_cambios` si
+no hay diferencias y `409 version_desactualizada` (con `versionActual`) si la base no es la
+vigente.
+
+`POST .../modificaciones` con `Idempotency-Key` y `{..., confirma:true, impactoHash}` recalcula
+el impacto y, si coincide, crea en una transaccion el endoso, la version 1 de emision cuando
+aun no existe, la nueva version y su registro de auditoria. `409 impacto_cambio` si el impacto
+ya no es el simulado; la clave primaria `(poliza_id, version)` hace que, entre confirmaciones
+concurrentes, solo una avance la version. `201` endoso nuevo; `200` misma clave y solicitud;
+`409 idempotencia_conflictiva` si la clave se reutiliza con otra solicitud.
+
+## Cancelacion (HU35, SOL-321)
+
+Componente Ciclo de Vida. Toda confirmacion, aceptada o rechazada, queda en
+`auditoria_polizas` (`accion=cancelacion`) con actor, fecha, motivo y detalle.
+
+**Reglas `academica-cancelacion-v1`** (`domain/cancelacion.py`):
+- Cancelables: los productos mensuales con la poliza vigente y sin terminar hoy
+  (`producto_no_cancelable`, `poliza_programada`, `poliza_vencida`, `fin_de_vigencia`,
+  `poliza_cancelada`). Una renovacion pendiente bloquea la cancelacion
+  (`renovacion_en_curso`).
+- La cobertura termina el dia de la confirmacion (`fechaEfectiva = finCobertura = hoy`) y
+  finalizan todas las coberturas de la version vigente.
+- Devolucion simulada = prima mensual vigente x dias no usados / dias del periodo actual
+  (redondeo a peso), mas la prima completa de los periodos renovados que aun no inician.
+  `valorPendiente` es siempre 0 porque la prima se cobra por anticipado; no se revierte ningun
+  pago real.
+
+`GET /v1/polizas/{id}/cancelacion`: estado, elegibilidad (`cancelable`, `motivo`), liquidacion
+con `liquidacionHash` y, si ya fue cancelada, la `cancelacion`. `POST .../cancelaciones` con
+`Idempotency-Key` y `{confirma:true, motivoCancelacion, liquidacionHash}` recalcula la
+liquidacion y, si coincide, en una transaccion marca la poliza `cancelada` (conserva la
+vigencia original como historico), guarda la cancelacion (unica por poliza) y la auditoria.
+`409 liquidacion_cambio` si la
+liquidacion cambio; `201` nueva; `200` misma clave y solicitud; `409 idempotencia_conflictiva`
+si la clave se reutiliza con otra solicitud. Una poliza cancelada no se renueva ni se modifica
+(`poliza_cancelada`), y una renovacion pendiente que se resuelva despues se rechaza sin cobro.
+
 ## Integracion y recuperacion
 
 Cotizacion activa emision con `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`.

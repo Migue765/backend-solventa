@@ -44,6 +44,7 @@ class RotationOutcome(Enum):
 class RotationResult:
     outcome: RotationOutcome
     user_id: UUID | None = None
+    family_id: UUID | None = None
 
 
 @dataclass(frozen=True)

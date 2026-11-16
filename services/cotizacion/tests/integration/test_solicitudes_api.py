@@ -16,6 +16,10 @@ from cotizacion.infrastructure.persistence.models import (
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+# Margen de dos días: los datos se calculan al importar el módulo y la suite
+# puede cruzar la medianoche antes de que el servicio valide "inicio > hoy".
+INICIO_CLIMA = date.today() + timedelta(days=2)
+
 DATOS_PRODUCTO = {
     "automotive": {"vehiclePlate": "ABC123"},
     "travel": {
@@ -37,8 +41,8 @@ DATOS_PRODUCTO = {
     "parametric-weather": {
         "location": "Medellín, Antioquia",
         "weatherEvent": "heavy-rain",
-        "startDate": (date.today() + timedelta(days=1)).isoformat(),
-        "endDate": (date.today() + timedelta(days=30)).isoformat(),
+        "startDate": INICIO_CLIMA.isoformat(),
+        "endDate": (INICIO_CLIMA + timedelta(days=29)).isoformat(),
         "insuredAmount": "10000000",
     },
     "payment-protection": {
@@ -69,8 +73,8 @@ DATOS_INVALIDOS = {
     "parametric-weather": {
         "location": "Medellín, Antioquia",
         "weatherEvent": "snow",
-        "startDate": (date.today() + timedelta(days=1)).isoformat(),
-        "endDate": (date.today() + timedelta(days=30)).isoformat(),
+        "startDate": INICIO_CLIMA.isoformat(),
+        "endDate": (INICIO_CLIMA + timedelta(days=29)).isoformat(),
         "insuredAmount": "10000000",
     },
     "payment-protection": {
@@ -735,7 +739,7 @@ def test_rechaza_campos_extra_faltantes_o_de_otro_ramo(client, producto_id, erro
         ("parametric-weather", {"endDate": "2026-2-3"}),
         ("parametric-weather", {"startDate": date.today().isoformat()}),
         ("parametric-weather", {"endDate": date.today().isoformat()}),
-        ("parametric-weather", {"endDate": (date.today() + timedelta(days=367)).isoformat()}),
+        ("parametric-weather", {"endDate": (INICIO_CLIMA + timedelta(days=366)).isoformat()}),
         ("parametric-weather", {"insuredAmount": "0"}),
         ("parametric-weather", {"insuredAmount": "-1"}),
         ("parametric-weather", {"insuredAmount": "1.5"}),
@@ -768,7 +772,7 @@ def test_acepta_limites_de_monto_y_periodo_climatico(client, monto) -> None:
                 **DATOS_PRODUCTO["parametric-weather"],
                 "location": "x" * 120,
                 "insuredAmount": monto,
-                "endDate": (date.today() + timedelta(days=366)).isoformat(),
+                "endDate": (INICIO_CLIMA + timedelta(days=365)).isoformat(),
             },
         ),
         headers={"Idempotency-Key": str(uuid4())},

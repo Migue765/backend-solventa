@@ -17,6 +17,7 @@ tags:
   - name: Asesores
   - name: Socios
   - name: Siniestros
+  - name: Polizas
 paths:
   /v1/siniestros:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
@@ -1447,6 +1448,302 @@ paths:
           $ref: "#/components/responses/NoEncontrado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/renovacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta la elegibilidad y las condiciones de renovacion de una poliza
+      operationId: consultarRenovacionPoliza
+      description: |
+        HU33 (SOL-317). El cliente se deriva exclusivamente del JWT; no admite query ni cuerpo.
+        Solo los productos de vigencia mensual son renovables, desde 15 dias antes del fin y
+        mientras la poliza este vigente. Si es renovable devuelve la oferta con nueva vigencia
+        contigua, coberturas, prima, condiciones y `condicionesHash`, que el cliente debe aceptar
+        explicitamente. `ultimoIntento` permite recuperar un resultado pendiente o rechazado.
+        Una poliza inexistente o de otro cliente responde el mismo 404.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad y oferta de renovacion
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ElegibilidadRenovacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/renovaciones:
+    post:
+      tags: [Polizas]
+      summary: Confirma la renovacion aceptada y procesa su pago simulado
+      operationId: renovarPoliza
+      description: |
+        HU33 (SOL-317), ASR-EMI-01 y ASR-FIN-01. Exige `aceptaCondiciones: true` y el
+        `condicionesHash` de la oferta vigente; si las condiciones cambiaron responde 409
+        `condiciones_cambiaron`. El intento se registra antes del cobro simulado y la nueva
+        vigencia solo se registra con el pago confirmado, sin crear otra poliza. Un pago
+        rechazado conserva la poliza original y deja el intento como `rechazada`. Si el
+        resultado del pago es ambiguo responde 202 `pendiente`: repetir con la misma
+        Idempotency-Key recupera el mismo intento y nunca genera un segundo cobro. Otra clave
+        para el mismo periodo responde 409 `renovacion_en_curso` con `renovacionId`.
+        201 = intento nuevo con resultado definitivo; 200 = reintento con la misma clave.
+        Un 503 no confirma ni descarta la renovacion: se debe reintentar con la misma clave.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudRenovacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el resultado registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "201":
+          description: Renovacion registrada como renovada o rechazada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "202":
+          description: Pago ambiguo; la renovacion queda pendiente de conciliacion
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenovacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/modificacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta la version vigente, el historial y los cambios permitidos
+      operationId: consultarModificacionPoliza
+      description: |
+        HU34 (SOL-319). El cliente se deriva del JWT; no admite query ni cuerpo. Solo los
+        productos de vigencia mensual son modificables mientras la poliza este vigente y no
+        termine hoy. Los unicos campos modificables son `plan` y las coberturas opcionales
+        listadas en `opciones`; las obligatorias siempre se conservan. `historial` contiene
+        todas las versiones, de la mas reciente a la mas antigua; la version 1 corresponde a
+        las condiciones de emision.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Version vigente, historial y opciones
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoModificacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/modificaciones/simulacion:
+    post:
+      tags: [Polizas]
+      summary: Calcula el impacto de una modificacion sin aplicarla
+      operationId: simularModificacionPoliza
+      description: |
+        HU34 (SOL-319). Valida los cambios y devuelve el impacto en prima (mensual y
+        prorrateada), coberturas y vigencia, con `impactoHash` para confirmar. No persiste.
+        `422 cambio_no_permitido` (con `campo`) si se pide una cobertura no autorizada y
+        `422 sin_cambios` si la propuesta es igual a la vigente. `409 version_desactualizada`
+        (con `versionActual`) si `versionBase` no es la vigente.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudModificacion"
+      responses:
+        "200":
+          description: Impacto de la modificacion propuesta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImpactoModificacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/modificaciones:
+    post:
+      tags: [Polizas]
+      summary: Confirma la modificacion y persiste una nueva version de la poliza
+      operationId: confirmarModificacionPoliza
+      description: |
+        HU34 (SOL-319), D-09 y ASR-AUD-01. Exige `confirma: true` y el `impactoHash` de la
+        simulacion. Recalcula el impacto y, si coincide, crea en una sola transaccion el
+        endoso y la nueva version, conservando las anteriores. Si el impacto cambio responde
+        `409 impacto_cambio`; si otra modificacion avanzo la version, `409
+        version_desactualizada`. Ningun rechazo aplica cambios parciales y todos quedan
+        auditados. 201 = endoso nuevo; 200 = reintento con la misma Idempotency-Key.
+        Un 503 no confirma ni descarta: se debe reintentar con la misma clave.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmacionModificacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el endoso registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModificacionPoliza"
+        "201":
+          description: Endoso confirmado y nueva version vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModificacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/cancelacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta si la poliza se puede cancelar y la liquidacion resultante
+      operationId: consultarCancelacionPoliza
+      description: |
+        HU35 (SOL-321). El cliente se deriva del JWT; no admite query ni cuerpo. Solo los
+        productos de vigencia mensual se cancelan, mientras esten vigentes, no terminen hoy y
+        no tengan una renovacion con pago pendiente. Si es cancelable, `liquidacion` informa la
+        fecha efectiva (la cobertura termina ese mismo dia), las coberturas que finalizan, la
+        devolucion proporcional de los dias no usados, la devolucion de periodos renovados que
+        aun no inician y los valores pendientes, con `liquidacionHash` para confirmar. Una
+        poliza ya cancelada responde `motivo: poliza_cancelada` con la `cancelacion`
+        registrada, de modo que el cliente puede recuperar el resultado.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad, liquidacion y cancelacion registrada
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoCancelacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/polizas/{polizaId}/cancelaciones:
+    post:
+      tags: [Polizas]
+      summary: Confirma la cancelacion de la poliza
+      operationId: confirmarCancelacionPoliza
+      description: |
+        HU35 (SOL-321) y ASR-AUD-01. Exige `confirma: true`, el motivo y el
+        `liquidacionHash` consultado. Recalcula la liquidacion y, si coincide, cancela la
+        poliza en una sola transaccion: la cobertura termina en la fecha efectiva y la poliza
+        deja de admitir renovaciones, modificaciones y cobros posteriores. Si la liquidacion
+        cambio responde `409 liquidacion_cambio`; si ya no es cancelable, `422
+        poliza_no_cancelable` con `motivo`. El actor, la fecha y el motivo quedan auditados,
+        igual que los rechazos. 201 = cancelacion nueva; 200 = reintento con la misma
+        Idempotency-Key. Un 503 no confirma ni descarta: se debe reintentar con la misma
+        clave. La devolucion es simulada (`simulada: true`).
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmacionCancelacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve la cancelacion registrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelacionPoliza"
+        "201":
+          description: Poliza cancelada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
 components:
   securitySchemes:
     bearerAuth:
@@ -1455,6 +1752,13 @@ components:
       bearerFormat: JWT
       description: Access token JWT RS256 emitido por identidad (dura 1 hora).
   parameters:
+    PolizaId:
+      name: polizaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     SolicitudId:
       name: solicitudId
       in: path
@@ -1555,6 +1859,647 @@ components:
           schema:
             $ref: "#/components/schemas/Problema"
   schemas:
+    MontoCop:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda]
+      properties:
+        monto:
+          type: string
+          pattern: "^-?[0-9]{1,16}$"
+        moneda:
+          const: COP
+    CoberturaPoliza:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre, descripcion, opcional, incluida]
+      properties:
+        codigo:
+          type: string
+          pattern: "^[a-z_]{1,40}$"
+        nombre:
+          type: string
+        descripcion:
+          type: string
+        opcional:
+          type: boolean
+          description: Las coberturas no opcionales siempre estan incluidas.
+        incluida:
+          type: boolean
+    VersionPoliza:
+      type: object
+      additionalProperties: false
+      required: [version, plan, coberturas, prima, efectivoDesde, origen, endosoId, creadaEn]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaPoliza"
+        prima:
+          $ref: "#/components/schemas/PrimaRenovacion"
+        efectivoDesde:
+          type: string
+          format: date
+        origen:
+          enum: [emision, modificacion]
+        endosoId:
+          type: [string, "null"]
+          format: uuid
+        creadaEn:
+          type: string
+          format: date-time
+    OpcionesModificacion:
+      type: object
+      additionalProperties: false
+      required: [planes, coberturasOpcionales]
+      properties:
+        planes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre, factor]
+            properties:
+              codigo:
+                enum: [esencial, integral, premium]
+              nombre:
+                type: string
+              factor:
+                type: string
+                pattern: "^[0-9]+\\.[0-9]{2}$"
+        coberturasOpcionales:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre, recargo]
+            properties:
+              codigo:
+                type: string
+                pattern: "^[a-z_]{1,40}$"
+              nombre:
+                type: string
+              recargo:
+                $ref: "#/components/schemas/MontoCop"
+    EstadoModificacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - vigencia
+        - modificable
+        - motivo
+        - versionActual
+        - opciones
+        - historial
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        vigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        modificable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_modificable
+            - poliza_cancelada
+            - poliza_programada
+            - poliza_vencida
+            - fin_de_vigencia
+            - null
+        versionActual:
+          oneOf:
+            - $ref: "#/components/schemas/VersionPoliza"
+            - type: "null"
+        opciones:
+          oneOf:
+            - $ref: "#/components/schemas/OpcionesModificacion"
+            - type: "null"
+        historial:
+          type: array
+          items:
+            $ref: "#/components/schemas/VersionPoliza"
+    SolicitudModificacion:
+      type: object
+      additionalProperties: false
+      required: [versionBase, plan, coberturasOpcionales]
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturasOpcionales:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z_]{1,40}$"
+    ConfirmacionModificacion:
+      type: object
+      additionalProperties: false
+      required: [versionBase, plan, coberturasOpcionales, confirma, impactoHash]
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturasOpcionales:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z_]{1,40}$"
+        confirma:
+          const: true
+        impactoHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ImpactoModificacion:
+      type: object
+      additionalProperties: false
+      required:
+        - versionBase
+        - plan
+        - coberturas
+        - coberturasAgregadas
+        - coberturasRetiradas
+        - primaAnterior
+        - primaNueva
+        - diferenciaMensual
+        - ajusteProrrateado
+        - diasRestantes
+        - efectivoDesde
+        - vigencia
+        - reglaVersion
+        - impactoHash
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          type: object
+          additionalProperties: false
+          required: [anterior, nuevo]
+          properties:
+            anterior:
+              enum: [esencial, integral, premium]
+            nuevo:
+              enum: [esencial, integral, premium]
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaPoliza"
+        coberturasAgregadas:
+          type: array
+          items:
+            type: string
+        coberturasRetiradas:
+          type: array
+          items:
+            type: string
+        primaAnterior:
+          $ref: "#/components/schemas/MontoCop"
+        primaNueva:
+          $ref: "#/components/schemas/MontoCop"
+        diferenciaMensual:
+          $ref: "#/components/schemas/MontoCop"
+        ajusteProrrateado:
+          $ref: "#/components/schemas/MontoCop"
+        diasRestantes:
+          type: integer
+          minimum: 1
+        efectivoDesde:
+          type: string
+          format: date
+        vigencia:
+          type: object
+          additionalProperties: false
+          required: [inicio, fin, cambia]
+          properties:
+            inicio:
+              type: string
+              format: date
+            fin:
+              type: string
+              format: date
+            cambia:
+              const: false
+        reglaVersion:
+          type: string
+        impactoHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ModificacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        [endosoId, polizaId, versionAnterior, versionNueva, version, impacto, creadoEn]
+      properties:
+        endosoId:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        versionAnterior:
+          type: integer
+          minimum: 1
+        versionNueva:
+          type: integer
+          minimum: 2
+        version:
+          $ref: "#/components/schemas/VersionPoliza"
+        impacto:
+          $ref: "#/components/schemas/ImpactoModificacion"
+        creadoEn:
+          type: string
+          format: date-time
+    PeriodoVigencia:
+      type: object
+      additionalProperties: false
+      required: [inicio, fin]
+      properties:
+        inicio:
+          type: string
+          format: date
+        fin:
+          type: string
+          format: date
+    LiquidacionCancelacion:
+      type: object
+      additionalProperties: false
+      description: |
+        Efectos economicos de cancelar hoy. `devolucion` = `devolucionProporcional` (prima
+        mensual vigente por `diasNoUsados` / `diasPeriodo`) + `devolucionPeriodosAnulados`.
+        Los periodos se pagan por anticipado, por lo que `valorPendiente` es cero.
+      required:
+        - fechaEfectiva
+        - finCobertura
+        - coberturasFinalizadas
+        - periodoActual
+        - periodosAnulados
+        - primaMensual
+        - diasPeriodo
+        - diasNoUsados
+        - devolucionProporcional
+        - devolucionPeriodosAnulados
+        - devolucion
+        - valorPendiente
+        - reglaVersion
+        - liquidacionHash
+      properties:
+        fechaEfectiva:
+          type: string
+          format: date
+        finCobertura:
+          type: string
+          format: date
+        coberturasFinalizadas:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre]
+            properties:
+              codigo:
+                type: string
+                pattern: "^[a-z_]{1,40}$"
+              nombre:
+                type: string
+        periodoActual:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        periodosAnulados:
+          type: array
+          description: Periodos renovados y pagados que aun no inician.
+          items:
+            type: object
+            additionalProperties: false
+            required: [inicio, fin, prima]
+            properties:
+              inicio:
+                type: string
+                format: date
+              fin:
+                type: string
+                format: date
+              prima:
+                $ref: "#/components/schemas/MontoCop"
+        primaMensual:
+          $ref: "#/components/schemas/MontoCop"
+        diasPeriodo:
+          type: integer
+          minimum: 1
+        diasNoUsados:
+          type: integer
+          minimum: 0
+        devolucionProporcional:
+          $ref: "#/components/schemas/MontoCop"
+        devolucionPeriodosAnulados:
+          $ref: "#/components/schemas/MontoCop"
+        devolucion:
+          $ref: "#/components/schemas/MontoCop"
+        valorPendiente:
+          $ref: "#/components/schemas/MontoCop"
+        reglaVersion:
+          type: string
+        liquidacionHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    MotivoCancelacion:
+      enum: [ya_no_la_necesito, costo, cambio_de_aseguradora, insatisfaccion, otro]
+    CancelacionPoliza:
+      type: object
+      additionalProperties: false
+      description: Cancelacion academica registrada; `simulada` siempre es true.
+      required:
+        - id
+        - polizaId
+        - estado
+        - motivoCancelacion
+        - fechaEfectiva
+        - liquidacion
+        - confirmadaEn
+        - simulada
+      properties:
+        id:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        estado:
+          const: cancelada
+        motivoCancelacion:
+          $ref: "#/components/schemas/MotivoCancelacion"
+        fechaEfectiva:
+          type: string
+          format: date
+        liquidacion:
+          $ref: "#/components/schemas/LiquidacionCancelacion"
+        confirmadaEn:
+          type: string
+          format: date-time
+        simulada:
+          const: true
+    EstadoCancelacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - estado
+        - vigencia
+        - cancelable
+        - motivo
+        - liquidacion
+        - cancelacion
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        estado:
+          enum: [activa, cancelada]
+        vigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        cancelable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_cancelable
+            - poliza_cancelada
+            - poliza_programada
+            - poliza_vencida
+            - fin_de_vigencia
+            - renovacion_en_curso
+            - null
+        liquidacion:
+          oneOf:
+            - $ref: "#/components/schemas/LiquidacionCancelacion"
+            - type: "null"
+        cancelacion:
+          oneOf:
+            - $ref: "#/components/schemas/CancelacionPoliza"
+            - type: "null"
+    ConfirmacionCancelacion:
+      type: object
+      additionalProperties: false
+      required: [confirma, motivoCancelacion, liquidacionHash]
+      properties:
+        confirma:
+          const: true
+        motivoCancelacion:
+          $ref: "#/components/schemas/MotivoCancelacion"
+        liquidacionHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    CoberturaRenovacion:
+      type: object
+      additionalProperties: false
+      required: [nombre, descripcion]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+        descripcion:
+          type: string
+          minLength: 1
+    PrimaRenovacion:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda, periodicidad]
+      properties:
+        monto:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+          description: Valor entero en pesos, como texto para no perder precision.
+        moneda:
+          const: COP
+        periodicidad:
+          const: mensual
+    OfertaRenovacion:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - producto
+        - finAnterior
+        - nuevaVigencia
+        - coberturas
+        - prima
+        - condiciones
+        - requierePago
+        - reglaVersion
+        - condicionesHash
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        producto:
+          type: string
+        finAnterior:
+          type: string
+          format: date
+        nuevaVigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaRenovacion"
+        prima:
+          $ref: "#/components/schemas/PrimaRenovacion"
+        condiciones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        requierePago:
+          type: boolean
+        reglaVersion:
+          type: string
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    RenovacionPoliza:
+      type: object
+      additionalProperties: false
+      description: Intento de renovacion academica; `simulada` siempre es true.
+      required:
+        - id
+        - polizaId
+        - estado
+        - motivo
+        - finAnterior
+        - nuevaVigencia
+        - coberturas
+        - prima
+        - condiciones
+        - condicionesHash
+        - reglaVersion
+        - creadaEn
+        - actualizadaEn
+        - simulada
+      properties:
+        id:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        estado:
+          enum: [pendiente, renovada, rechazada]
+        motivo:
+          enum: [pago_rechazado, poliza_cancelada, null]
+          description: |
+            `poliza_cancelada` si la poliza se cancelo mientras el pago estaba pendiente;
+            en ese caso no se cobra ni se extiende la vigencia.
+        finAnterior:
+          type: string
+          format: date
+        nuevaVigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaRenovacion"
+        prima:
+          $ref: "#/components/schemas/PrimaRenovacion"
+        condiciones:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        reglaVersion:
+          type: string
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        simulada:
+          const: true
+    ElegibilidadRenovacion:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - vigenciaActual
+        - renovable
+        - motivo
+        - ventana
+        - oferta
+        - ultimoIntento
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        vigenciaActual:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        renovable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_renovable
+            - poliza_cancelada
+            - poliza_programada
+            - poliza_vencida
+            - fuera_de_ventana
+            - null
+        ventana:
+          type: object
+          additionalProperties: false
+          required: [desde, hasta]
+          properties:
+            desde:
+              type: string
+              format: date
+            hasta:
+              type: string
+              format: date
+        oferta:
+          oneOf:
+            - $ref: "#/components/schemas/OfertaRenovacion"
+            - type: "null"
+        ultimoIntento:
+          oneOf:
+            - $ref: "#/components/schemas/RenovacionPoliza"
+            - type: "null"
+    SolicitudRenovacion:
+      type: object
+      additionalProperties: false
+      required: [aceptaCondiciones, condicionesHash]
+      properties:
+        aceptaCondiciones:
+          const: true
+        condicionesHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
     EstadoSiniestro:
       type: object
       additionalProperties: false
@@ -3853,7 +4798,7 @@ components:
           format: date
         estado:
           type: string
-          enum: [programada, vigente, vencida]
+          enum: [programada, vigente, vencida, cancelada]
         simulada:
           type: boolean
           const: true
@@ -4141,5 +5086,19 @@ components:
             $ref: "#/components/schemas/ErrorCampo"
         operacion:
           $ref: "#/components/schemas/EstadoOperacionInformacion"
+        motivo:
+          type: string
+          description: Motivo de negocio de `poliza_no_renovable`.
+        renovacionId:
+          type: [string, "null"]
+          format: uuid
+          description: Renovacion que ocupa el periodo en `renovacion_en_curso`.
+        campo:
+          type: string
+          description: Campo no autorizado en `cambio_no_permitido`.
+        versionActual:
+          type: integer
+          minimum: 1
+          description: Version vigente en `version_desactualizada`.
 security:
   - bearerAuth: []

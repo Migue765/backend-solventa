@@ -1,0 +1,548 @@
+openapi: 3.1.0
+info:
+  title: Solventa modificacion de poliza movil
+  version: 1.0.0
+  description: |
+    HU40 (SOL-323). Modificacion versionada de polizas desde la aplicacion movil. El BFF movil
+    deriva el cliente del JWT y delega las reglas, el impacto y el versionado en el servicio
+    central de Polizas (HU34, SOL-319), por lo que web y movil aplican las mismas condiciones.
+    Rutas relativas a `/movil/v1`.
+security:
+  - bearerAuth: []
+paths:
+  /polizas/{polizaId}/modificacion:
+    get:
+      tags: [Polizas]
+      summary: Consulta la version vigente, el historial y los cambios permitidos
+      operationId: consultarModificacionPolizaMovil
+      description: |
+        Requiere sesion de cliente (`scope=cliente`); no admite query ni cuerpo. Solo los
+        productos de vigencia mensual son modificables mientras la poliza este vigente y no
+        termine hoy (`modificable` y `motivo`). Los unicos campos modificables son `plan` y
+        las coberturas opcionales listadas en `opciones`; las obligatorias siempre se
+        conservan. `historial` va de la version mas reciente a la mas antigua.
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Version vigente, historial y opciones
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoModificacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /polizas/{polizaId}/modificaciones/simulacion:
+    post:
+      tags: [Polizas]
+      summary: Calcula el impacto de una modificacion sin aplicarla
+      operationId: simularModificacionPolizaMovil
+      description: |
+        Valida los cambios en el servidor y devuelve el impacto en prima (mensual y
+        prorrateada), coberturas y vigencia, con `impactoHash` para confirmar. No persiste.
+        `422 poliza_no_modificable` (con `motivo`), `422 cambio_no_permitido` (con `campo`),
+        `422 sin_cambios` y `409 version_desactualizada` (con `versionActual`).
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SolicitudModificacion"
+      responses:
+        "200":
+          description: Impacto de la modificacion propuesta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImpactoModificacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "411":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "413":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /polizas/{polizaId}/modificaciones:
+    post:
+      tags: [Polizas]
+      summary: Acepta el impacto y persiste una nueva version de la poliza
+      operationId: confirmarModificacionPolizaMovil
+      description: |
+        Exige la aceptacion explicita `confirma: true` y el `impactoHash` de la simulacion.
+        Polizas recalcula el impacto y, si coincide, crea en una sola transaccion el endoso y
+        la nueva version, conservando las anteriores. Ningun rechazo o conflicto aplica
+        cambios parciales y todos quedan auditados. 201 = endoso nuevo; 200 = reintento con
+        la misma Idempotency-Key. Un 503 no confirma ni descarta: reintenta con la misma
+        clave (`accion: reintentar_misma_clave`).
+      parameters:
+        - $ref: "#/components/parameters/PolizaId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmacionModificacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el endoso registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModificacionPoliza"
+        "201":
+          description: Endoso confirmado y nueva version vigente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModificacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "411":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "413":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "422":
+          $ref: "#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT RS256 del canal movil con `scope=cliente`.
+  parameters:
+    PolizaId:
+      name: polizaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID estable por intento de confirmacion; reutilizalo al reintentar.
+      schema:
+        type: string
+        format: uuid
+  responses:
+    SolicitudInvalida:
+      description: La solicitud no cumple el contrato
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    NoAutorizado:
+      description: El access token falta, expiro o no es valido
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    AccesoDenegado:
+      description: La sesion no corresponde a un cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    NoEncontrado:
+      description: La poliza no existe o no pertenece al cliente de la sesion
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    Conflicto:
+      description: |
+        `version_desactualizada` (consultar_poliza), `impacto_cambio` (simular_de_nuevo) o
+        `idempotencia_conflictiva` (nueva_operacion). No se aplico ningun cambio.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    ReglaNegocio:
+      description: |
+        `poliza_no_modificable` (con `motivo`), `cambio_no_permitido` (con `campo`) o
+        `sin_cambios`. No se aplico ningun cambio.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+    ServicioNoDisponible:
+      description: Polizas no esta disponible; no se confirmo ningun cambio
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemaModificacion"
+  schemas:
+    ProblemaModificacion:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string
+          format: uuid
+        motivo:
+          enum: [producto_no_modificable, poliza_programada, poliza_vencida, fin_de_vigencia]
+        campo:
+          type: string
+        versionActual:
+          type: integer
+          minimum: 1
+        accion:
+          description: Accion recuperable sugerida a la aplicacion movil.
+          enum:
+            - ajustar_cambios
+            - consultar_poliza
+            - simular_de_nuevo
+            - nueva_operacion
+            - reintentar
+            - reintentar_misma_clave
+    MontoCop:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda]
+      properties:
+        monto:
+          type: string
+          pattern: "^-?[0-9]{1,16}$"
+        moneda:
+          const: COP
+    PrimaMensual:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda, periodicidad]
+      properties:
+        monto:
+          type: string
+          pattern: "^[1-9][0-9]{0,15}$"
+        moneda:
+          const: COP
+        periodicidad:
+          const: mensual
+    PeriodoVigencia:
+      type: object
+      additionalProperties: false
+      required: [inicio, fin]
+      properties:
+        inicio:
+          type: string
+          format: date
+        fin:
+          type: string
+          format: date
+    CoberturaPoliza:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre, descripcion, opcional, incluida]
+      properties:
+        codigo:
+          type: string
+          pattern: "^[a-z_]{1,40}$"
+        nombre:
+          type: string
+        descripcion:
+          type: string
+        opcional:
+          type: boolean
+          description: Las coberturas no opcionales siempre estan incluidas.
+        incluida:
+          type: boolean
+    VersionPoliza:
+      type: object
+      additionalProperties: false
+      required: [version, plan, coberturas, prima, efectivoDesde, origen, endosoId, creadaEn]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaPoliza"
+        prima:
+          $ref: "#/components/schemas/PrimaMensual"
+        efectivoDesde:
+          type: string
+          format: date
+        origen:
+          enum: [emision, modificacion]
+        endosoId:
+          type: [string, "null"]
+          format: uuid
+        creadaEn:
+          type: string
+          format: date-time
+    OpcionesModificacion:
+      type: object
+      additionalProperties: false
+      required: [planes, coberturasOpcionales]
+      properties:
+        planes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre, factor]
+            properties:
+              codigo:
+                enum: [esencial, integral, premium]
+              nombre:
+                type: string
+              factor:
+                type: string
+                pattern: "^[0-9]+\\.[0-9]{2}$"
+        coberturasOpcionales:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre, recargo]
+            properties:
+              codigo:
+                type: string
+                pattern: "^[a-z_]{1,40}$"
+              nombre:
+                type: string
+              recargo:
+                $ref: "#/components/schemas/MontoCop"
+    EstadoModificacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        - polizaId
+        - tipo
+        - vigencia
+        - modificable
+        - motivo
+        - versionActual
+        - opciones
+        - historial
+      properties:
+        polizaId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+        vigencia:
+          $ref: "#/components/schemas/PeriodoVigencia"
+        modificable:
+          type: boolean
+        motivo:
+          enum:
+            - producto_no_modificable
+            - poliza_programada
+            - poliza_vencida
+            - fin_de_vigencia
+            - null
+        versionActual:
+          oneOf:
+            - $ref: "#/components/schemas/VersionPoliza"
+            - type: "null"
+        opciones:
+          oneOf:
+            - $ref: "#/components/schemas/OpcionesModificacion"
+            - type: "null"
+        historial:
+          type: array
+          items:
+            $ref: "#/components/schemas/VersionPoliza"
+    SolicitudModificacion:
+      type: object
+      additionalProperties: false
+      required: [versionBase, plan, coberturasOpcionales]
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturasOpcionales:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z_]{1,40}$"
+    ConfirmacionModificacion:
+      type: object
+      additionalProperties: false
+      required: [versionBase, plan, coberturasOpcionales, confirma, impactoHash]
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          enum: [esencial, integral, premium]
+        coberturasOpcionales:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z_]{1,40}$"
+        confirma:
+          const: true
+        impactoHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ImpactoModificacion:
+      type: object
+      additionalProperties: false
+      required:
+        - versionBase
+        - plan
+        - coberturas
+        - coberturasAgregadas
+        - coberturasRetiradas
+        - primaAnterior
+        - primaNueva
+        - diferenciaMensual
+        - ajusteProrrateado
+        - diasRestantes
+        - efectivoDesde
+        - vigencia
+        - reglaVersion
+        - impactoHash
+      properties:
+        versionBase:
+          type: integer
+          minimum: 1
+        plan:
+          type: object
+          additionalProperties: false
+          required: [anterior, nuevo]
+          properties:
+            anterior:
+              enum: [esencial, integral, premium]
+            nuevo:
+              enum: [esencial, integral, premium]
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CoberturaPoliza"
+        coberturasAgregadas:
+          type: array
+          items:
+            type: string
+        coberturasRetiradas:
+          type: array
+          items:
+            type: string
+        primaAnterior:
+          $ref: "#/components/schemas/MontoCop"
+        primaNueva:
+          $ref: "#/components/schemas/MontoCop"
+        diferenciaMensual:
+          $ref: "#/components/schemas/MontoCop"
+        ajusteProrrateado:
+          $ref: "#/components/schemas/MontoCop"
+        diasRestantes:
+          type: integer
+          minimum: 1
+        efectivoDesde:
+          type: string
+          format: date
+        vigencia:
+          type: object
+          additionalProperties: false
+          required: [inicio, fin, cambia]
+          properties:
+            inicio:
+              type: string
+              format: date
+            fin:
+              type: string
+              format: date
+            cambia:
+              const: false
+        reglaVersion:
+          type: string
+        impactoHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ModificacionPoliza:
+      type: object
+      additionalProperties: false
+      required:
+        [endosoId, polizaId, versionAnterior, versionNueva, version, impacto, creadoEn]
+      properties:
+        endosoId:
+          type: string
+          format: uuid
+        polizaId:
+          type: string
+          format: uuid
+        versionAnterior:
+          type: integer
+          minimum: 1
+        versionNueva:
+          type: integer
+          minimum: 2
+        version:
+          $ref: "#/components/schemas/VersionPoliza"
+        impacto:
+          $ref: "#/components/schemas/ImpactoModificacion"
+        creadoEn:
+          type: string
+          format: date-time
