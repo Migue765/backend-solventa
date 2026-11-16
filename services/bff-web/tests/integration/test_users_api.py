@@ -1,9 +1,10 @@
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from bff_web.domain.errors import IdentityUnavailableError
 from flask import Flask
-from support import USER, FakeIdentity, rejected
+from support import NOW, USER, FakeIdentity, rejected
 from werkzeug.test import TestResponse
 
 NEW_USER = {"nombre": "Ana Cliente", "correo": "Ana@Solventa.co", "contrasena": "Solventa123!"}
@@ -95,3 +96,55 @@ def test_identity_outage_is_a_503(app: Flask, identity: FakeIdentity) -> None:
 
     assert response.status_code == 503
     assert body(response)["code"] == "servicio_no_disponible"
+
+
+def encrypted_registration() -> dict[str, object]:
+    return {
+        "nombre": "Ana Cliente",
+        "correo": "ana@solventa.co",
+        "credencialCifrada": "synthetic-envelope",
+        "tipoDocumento": "cc",
+        "numeroDocumento": "1234567890",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "1990-01-01",
+        "consentimiento": {"autorizado": False, "versionTerminos": "1.0"},
+    }
+
+
+def test_encrypted_registration_forwards_fields_without_auto_login(
+    app: Flask, identity: FakeIdentity
+) -> None:
+    app.extensions["bff_config"] = replace(
+        app.extensions["bff_config"], encrypted_login_enabled=True
+    )
+    client = app.test_client()
+    assert client.get("/v1/usuarios/desafio").status_code == 200
+    response = client.post("/v1/usuarios", json=encrypted_registration())
+    assert response.status_code == 201
+    assert set(body(response)) == {"usuario"}
+    assert body(response)["usuario"]["rol"] == "cliente"
+    assert identity.calls[-1][0] == "encrypted_register"
+    forwarded = identity.calls[-1][1][0]
+    assert forwarded == encrypted_registration()
+    assert client.post("/v1/usuarios", json=NEW_USER).status_code == 400
+
+
+@pytest.mark.parametrize("invalid", ["schema", "expired", "short-key"])
+def test_registration_challenge_failure_never_falls_back(
+    app: Flask, identity: FakeIdentity, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    app.extensions["bff_config"] = replace(
+        app.extensions["bff_config"], encrypted_login_enabled=True
+    )
+    payload = FakeIdentity().registration_challenge(CID)
+    if invalid == "schema":
+        payload = {"clavePublica": {}}
+    elif invalid == "expired":
+        payload["expiraEn"] = NOW.isoformat()
+    else:
+        key = payload["clavePublica"]
+        assert isinstance(key, dict)
+        key["n"] = "test"
+    monkeypatch.setattr(identity, "registration_challenge", lambda _: payload)
+    assert app.test_client().get("/v1/usuarios/desafio").status_code == 503
+    assert identity.calls == []

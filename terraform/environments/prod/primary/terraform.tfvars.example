@@ -1,16 +1,25 @@
 # Copiar a terraform.tfvars (ignorado por el control de versiones) y ajustar.
 
-aws_region  = "us-east-2"
-aws_profile = "tesis"
+aws_region = "us-east-2"
+account_id = "396383602233"
+# Completar con el perfil real del rol de despliegue. Vacio falla la validacion.
+aws_profile = ""
+permissions_boundary_arns = {
+  network     = "" # Cluster, nodos y ALB: ARN externo real revisado.
+  ci          = "" # 27 roles CI: ARN externo real revisado distinto.
+  application = "" # Cotizacion, Identidad, Siniestros: tercer ARN externo.
+}
+# network_context es obligatorio: exportar el output real del root ../network
+# bajo esa clave a network.auto.tfvars.json. No inventar IDs ni copiar state.
 
 # Pausa temporal: sin ejecuciones por tags; las manuales siguen consumiendo minutos.
 cicd_automatic_triggers_enabled = false
 
 # OBLIGATORIO: tu IP publica /32 (curl -s https://checkip.amazonaws.com)
-public_access_cidrs = ["203.0.113.10/32"]
+public_access_cidrs = []
 
-# Debe incluir al usuario/rol que ejecuta terraform (helm usa esa identidad).
-eks_admin_principal_arns = ["arn:aws:iam::976083331509:user/Migue"]
+# Incluir el rol IAM real del perfil de despliegue; no un usuario/root ni ARN STS.
+eks_admin_principal_arns = []
 
 # Entorno academico: una replica por API. Cada t3.small admite 11 pods; nueve APIs,
 # sistema, CronJobs y rollouts necesitan tres nodos. Subir min/desired con la CLI antes
@@ -20,9 +29,13 @@ node_min_size       = 3
 node_desired_size   = 3
 node_max_size       = 3
 
-# RDS PostgreSQL (clase minima, capa gratuita)
-db_instance_class    = "db.t4g.micro"
-db_allocated_storage = 20
+# RDS PostgreSQL (confirmar precios y plan; no implica uso gratuito)
+db_instance_class       = "db.t4g.micro"
+db_allocated_storage    = 20
+db_deletion_protection  = true
+db_skip_final_snapshot  = false
+ecr_force_delete        = false
+require_manual_approval = true
 
 # Object Lock del bucket de evidencias
 object_lock_mode           = "GOVERNANCE"
@@ -30,8 +43,7 @@ object_lock_retention_days = 1
 
 # API: HTTP por defecto; para HTTPS definir certificado ACM
 api_listener_protocol = "HTTP"
-# api_certificate_arn = "arn:aws:acm:us-east-2:976083331509:certificate/xxxx"
-# api_tls_server_name = "cotizacion.internal.example.com"
+# Si se aprueba HTTPS interno, indicar ARN ACM y nombre TLS reales del destino.
 
 api_throttling_rate_limit  = 50
 api_throttling_burst_limit = 100
@@ -41,4 +53,4 @@ redis_node_type = "cache.t4g.micro"
 
 # JWT emitidos por identidad y validados por el API Gateway
 # jwt_audience         = "solventa-api"
-# cors_allowed_origins = ["https://jazmincorandes.github.io", "http://localhost:4200"]
+cors_allowed_origins = ["https://jazmincorandes.github.io"]

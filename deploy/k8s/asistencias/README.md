@@ -1,5 +1,8 @@
 # Despliegue de Asistencias
 
+Para una cuenta vacia seguir primero [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+bases/Secrets nuevos, migraciones y dependencias antes del cutover.
+
 Servicio interno (`http://asistencias.asistencias.svc.cluster.local:8080`), sin ruta
 publica ni TargetGroupBinding: solo lo llama BFF Movil. Consulta Polizas y Siniestros
 por sus URL internas, ya declaradas en `deployment.yaml`.
@@ -24,12 +27,13 @@ Medellin, solo para pruebas. No representan empresas reales.
    Asistencias no recorta el valor. El pipeline no crea ni obtiene secretos.
 4. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
    estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
-   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   y la configuracion nueva exige aprobacion manual antes de Deploy. Aprobar solo
+   con los prerrequisitos verificados. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml` y `deployment.yaml`.
 
 ```bash
 aws codepipeline start-pipeline-execution \
-  --name solventa-prod-asistencias --region us-east-2 \
+  --name solventa-prod-asistencias --profile "$AWS_PROFILE" --region us-east-2 \
   --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
 ```
 

@@ -8,6 +8,15 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "existing_security_group_ids" {
+  description = "Par ALB/VPCLink precreado en red; null conserva creacion legacy."
+  type = object({
+    alb      = string
+    vpc_link = string
+  })
+  default = null
+}
+
 variable "private_subnet_ids" {
   description = "Subnets privadas (>= 2 AZ) para el ALB interno y el VPC Link."
   type        = list(string)

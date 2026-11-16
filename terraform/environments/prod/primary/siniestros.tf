@@ -7,26 +7,29 @@ module "ecr_siniestros" {
 }
 
 module "cicd_siniestros" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  service_name              = "siniestros"
-  resource_prefix           = "${var.name_prefix}-siniestros"
-  github_connection_arn     = module.cicd.connection_arn
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  release_tag_patterns      = ["siniestros-v*"]
-  require_manual_approval   = var.require_manual_approval
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = "siniestros"
-  ecr_repository_arn        = module.ecr_siniestros.repository_arn
-  ecr_repository_url        = module.ecr_siniestros.repository_url
-  tags                      = local.tags
+  name                       = var.name_prefix
+  service_name               = "siniestros"
+  resource_prefix            = "${var.name_prefix}-siniestros"
+  github_connection_arn      = module.cicd.connection_arn
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  release_tag_patterns       = ["siniestros-v*"]
+  require_manual_approval    = var.require_manual_approval
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.siniestros
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = "siniestros"
+  ecr_repository_arn         = module.ecr_siniestros.repository_arn
+  ecr_repository_url         = module.ecr_siniestros.repository_url
+  siniestros_evidence_bucket = module.s3_siniestros_evidencias.bucket_name
+  tags                       = local.tags
 }
 
 output "siniestros_ecr_repository_url" {
@@ -37,8 +40,7 @@ output "siniestros_pipeline_name" {
   value = module.cicd_siniestros.pipeline_name
 }
 
-# Evidencias confirmadas. El pod solo guarda en disco los fragmentos de cargas en curso;
-# el nombre lo repite deploy/k8s/siniestros/deployment.yaml (SINIESTROS_EVIDENCIAS_BUCKET).
+# El pipeline renderiza el bucket de este entorno; el disco del pod solo es staging.
 module "s3_siniestros_evidencias" {
   source = "../../../modules/s3-private-bucket"
 
@@ -48,7 +50,8 @@ module "s3_siniestros_evidencias" {
 }
 
 module "iam_irsa_siniestros" {
-  source = "../../../modules/irsa-service"
+  source                   = "../../../modules/irsa-service"
+  permissions_boundary_arn = var.permissions_boundary_arns.application
 
   name                 = "${var.name_prefix}-siniestros"
   oidc_provider_arn    = module.eks.oidc_provider_arn

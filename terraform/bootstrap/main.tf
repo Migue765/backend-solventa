@@ -1,4 +1,11 @@
-data "aws_caller_identity" "current" {}
+data "aws_caller_identity" "current" {
+  lifecycle {
+    postcondition {
+      condition     = startswith(self.arn, "arn:aws:sts::${var.account_id}:assumed-role/")
+      error_message = "Bootstrap requiere un rol asumido de la cuenta autorizada; no usar root ni usuarios IAM."
+    }
+  }
+}
 
 locals {
   bucket_name = coalesce(var.state_bucket_name, "solventa-tfstate-${data.aws_caller_identity.current.account_id}")

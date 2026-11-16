@@ -29,8 +29,9 @@ data "aws_iam_policy_document" "alb_controller_assume" {
 }
 
 resource "aws_iam_role" "alb_controller" {
-  name               = "${var.name}-alb-controller"
-  assume_role_policy = data.aws_iam_policy_document.alb_controller_assume.json
+  permissions_boundary = var.alb_permissions_boundary_arn
+  name                 = "${var.name}-alb-controller"
+  assume_role_policy   = data.aws_iam_policy_document.alb_controller_assume.json
 
   tags = var.tags
 }
@@ -75,8 +76,9 @@ data "aws_iam_policy_document" "service_assume" {
 }
 
 resource "aws_iam_role" "service" {
-  name               = "${var.name}-cotizacion"
-  assume_role_policy = data.aws_iam_policy_document.service_assume.json
+  permissions_boundary = var.permissions_boundary_arn
+  name                 = "${var.name}-cotizacion"
+  assume_role_policy   = data.aws_iam_policy_document.service_assume.json
 
   tags = var.tags
 }

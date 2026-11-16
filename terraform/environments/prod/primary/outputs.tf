@@ -142,3 +142,17 @@ output "jwt_audience" {
   description = "Audiencia (aud) de los JWT (JWT_AUDIENCE)."
   value       = module.api_gateway.jwt_audience
 }
+
+output "cluster_addons" {
+  description = "Configuracion no secreta del root ../addons; no necesita leer este state."
+  value = {
+    account_id                   = var.account_id
+    aws_region                   = var.aws_region
+    aws_profile                  = var.aws_profile
+    cluster_name                 = module.eks.cluster_name
+    vpc_id                       = var.network_context.vpc_id
+    alb_controller_role_arn      = module.iam_irsa.alb_controller_role_arn
+    alb_controller_chart_version = var.alb_controller_chart_version
+    metrics_server_chart_version = var.metrics_server_chart_version
+  }
+}

@@ -1,5 +1,9 @@
 # Perfilamiento productivo y retirada de HU11
 
+Para reconstruccion vacia seguir [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md).
+`stage/retire` y las referencias de origen que siguen son mantenimiento historico:
+no sirven para inicializar la cuenta nueva ni autorizan copiar HU11 o sus secretos.
+
 `perfilamiento` tiene namespace, Deployment y Service propios. Cotizacion usa
 `http://perfilamiento.perfilamiento.svc.cluster.local:8080`. No cambia el JWT,
 las rutas publicas, las reglas de perfilamiento ni la base PostgreSQL existente.

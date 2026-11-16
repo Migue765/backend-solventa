@@ -1,0 +1,6 @@
+# Completar solo tras verificar STS y el bucket real de bootstrap.
+bucket              = "solventa-tfstate-396383602233"
+key                 = "environments/prod/network/terraform.tfstate"
+region              = "us-east-2"
+profile             = "REEMPLAZAR_POR_PERFIL_DE_ROL_ASUMIDO"
+allowed_account_ids = ["396383602233"]
