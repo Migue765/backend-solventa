@@ -60,14 +60,15 @@ class LocalStack:
         self,
         directory: Path,
         web_port: int = 0,
-        mobile_port: int = 0,
+        mobile_port: int | None = 0,
         encrypted_login_enabled: bool = False,
         conciliacion_emision_habilitada: bool = False,
     ) -> None:
         self.directory = directory
         self.encrypted_login_enabled = encrypted_login_enabled
         self.conciliacion_emision_habilitada = conciliacion_emision_habilitada
-        self.ports = {"web": web_port, "mobile": mobile_port}
+        self.ports = {"web": web_port}
+        self.mobile_port = mobile_port
         self.servers: dict[str, BaseWSGIServer] = {}
         self.threads: dict[str, threading.Thread] = {}
         self.apps: dict[str, Flask] = {}
@@ -195,11 +196,12 @@ class LocalStack:
                 ),
                 self.ports["web"],
             )
-            self.start(
-                "mobile",
-                mobile_app(MobileConfig(identity_url=identity, jwt_issuer=issuer)),
-                self.ports["mobile"],
-            )
+            if self.mobile_port is not None:
+                self.start(
+                    "mobile",
+                    mobile_app(MobileConfig(identity_url=identity, jwt_issuer=issuer)),
+                    self.mobile_port,
+                )
         except BaseException:
             self.__exit__(None, None, None)
             raise

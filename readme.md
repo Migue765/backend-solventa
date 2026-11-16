@@ -135,7 +135,50 @@ Activación en Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
 ```
 
-No se incluye un comando universal para iniciar todos los servicios porque el punto de entrada y el gestor de dependencias deben verificarse por servicio. Cada microservicio debe documentar sus propios comandos una vez implementado.
+### Web local con datos sinteticos
+
+Desde la raiz del checkout, con Python 3.12, prepara una vez estas dependencias
+versionadas (PowerShell; no necesita Docker, AWS, PostgreSQL ni Redis externos):
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\services\identidad[dev]" -e ".\services\bff-web" -e ".\services\bff-movil" -e ".\services\cotizacion" -e ".\services\perfilamiento" -e ".\services\polizas" -e ".\services\siniestros"
+.\.venv\Scripts\python.exe -m scripts.local_web --web-port 5001
+```
+
+El ultimo comando inicia BFF web, Identidad, Cotizacion, Perfilamiento, Polizas y
+Siniestros con HTTP real en loopback. El BFF queda en `http://127.0.0.1:5001/v1`;
+los servicios internos usan puertos libres. No inicia BFF movil, Asistencias ni
+Notificaciones; bff-movil se instala solo porque el harness compartido lo importa.
+El proxy web debe reenviar `/v1` sin quitarlo; la configuracion y compilacion del
+frontend corresponden a su repositorio. No expone CORS ni escucha en la red:
+otro PC debe arrancar su propio checkout, no conectar a este proceso.
+
+Antes de imprimir `ready:true`, el bootstrap crea cliente/socio sinteticos,
+consentimiento de prueba y una poliza academica; verifica login JWE, replay,
+rechazo de plaintext, portal socio, denegacion cliente, consulta por documento y
+cotizacion. Las contrasenas nuevas solo quedan en el `accountsFile` indicado;
+no se imprimen tokens ni contrasenas. El directorio tiene ACL del usuario actual
+en Windows (whoami/icacls incluidos en el sistema) o modo0700 en POSIX.
+Cada arranque usa un directorio nuevo bajo `reports/`, ignorado por Git;
+`--data-dir` permite elegir otro NUEVO y rechaza reutilizar datos existentes.
+SQLite/uploads permanecen alli para inspeccion: no se copian datos de origen.
+RSA/JWT/JWE y token interno se generan en memoria; no hay secretos preexistentes.
+
+Este es un modo sintetico explicito: fakeredis para desafios, FuenteMock para
+OpenFinance/OpenData y pago/poliza academicos. Un error API aborta el arranque;
+no se sustituye por un resultado mock. No prueba proveedores ni almacenamiento
+productivos. El registro JWE publico del frontend publicado requiere integrar
+PR114; el alta del fixture usa el contrato directo existente de Identidad, NO
+acredita ese registro publico ni vuelve develop equivalente a su HEAD479672b.
+No ejecuta Terraform ni modifica servidores, demos o instalaciones Android.
+
+Para comprobar arranque y cierre sin dejar servicios, usa
+`python -m scripts.local_web --check --web-port 0`. Para el proceso interactivo,
+Ctrl+C cierra solo sus servicios. Si `DATABASE_URL`, `DB_SCHEMA` o
+`POLIZAS_DATABASE_URL` estan definidas, el bootstrap falla: eliminalas del proceso
+de prueba, no de configuraciones compartidas. Un puerto ocupado tambien falla;
+elige otro con `--web-port` y actualiza el proxy del frontend.
 
 ## Comandos de calidad
 
