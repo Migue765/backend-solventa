@@ -1,0 +1,329 @@
+openapi: 3.1.0
+info:
+  title: Solventa evaluacion automatica de siniestros (interna)
+  version: 1.0.0
+  description: >
+    HU26 (SOL-178). Evalua los siniestros reportados con reglas versionadas y deterministas.
+    Cada evaluacion conserva entradas, version, reglas aplicadas y motivo. Con informacion
+    minima insuficiente no decide y el siniestro sigue reportado; si faltan reglas vigentes,
+    el registro no es integro o el evaluador falla, el caso queda pendiente de revision humana
+    y nunca se aprueba. La evaluacion solo mueve el siniestro de reportado a en_evaluacion; la
+    aprobacion o el enrutamiento posterior lo decide HU27 a partir de decisionAutomatica.
+servers:
+  - url: /internal/v1
+paths:
+  /reglas-evaluacion-siniestros:
+    post:
+      operationId: registrarReglasEvaluacionSiniestros
+      description: >
+        Registra una version inmutable del conjunto de reglas. Reenviar la misma version con
+        el mismo contenido responde 200; con otro contenido responde 409. Se aplica la version
+        vigente mas alta.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ConjuntoReglas"}
+      responses:
+        "201": {$ref: "#/components/responses/ReglasRegistradas"}
+        "200": {$ref: "#/components/responses/ReglasRegistradas"}
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/evaluacion:
+    post:
+      operationId: evaluarSiniestro
+      description: >
+        Evalua un siniestro reportado. Repetir la evaluacion con las mismas entradas y la misma
+        version de reglas devuelve la misma evaluacion con 200. senalesFraude ausente indica
+        que no hay senales disponibles; los siniestros parametricos o ya evaluados responden
+        409 siniestro_no_evaluable.
+      security: [{internalToken: []}]
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                senalesFraude:
+                  type: array
+                  maxItems: 50
+                  items: {$ref: "#/components/schemas/SenalFraude"}
+      responses:
+        "201": {$ref: "#/components/responses/Evaluacion"}
+        "200": {$ref: "#/components/responses/Evaluacion"}
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/evaluaciones:
+    get:
+      operationId: listarEvaluacionesSiniestro
+      description: Trazabilidad completa de las evaluaciones del siniestro en orden cronologico.
+      security: [{internalToken: []}]
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      responses:
+        "200":
+          description: Evaluaciones registradas
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [evaluaciones]
+                properties:
+                  evaluaciones:
+                    type: array
+                    items: {$ref: "#/components/schemas/Evaluacion"}
+        default: {$ref: "#/components/responses/Problema"}
+  /evaluaciones-siniestros/procesamiento:
+    post:
+      operationId: procesarEvaluacionesSiniestros
+      description: >
+        Evalua en lote los siniestros reportados sin evaluacion para su version de reglas y
+        evidencia confirmada actuales. Tambien lo ejecuta python -m siniestros.evaluation_worker.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limite: {type: integer, minimum: 1, maximum: 5000, default: 5000}
+      responses:
+        "200":
+          description: Resultado del lote
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [evaluados, decididos, informacionInsuficiente, pendientesRevision]
+                properties:
+                  evaluados: {type: integer, minimum: 0}
+                  decididos: {type: integer, minimum: 0}
+                  informacionInsuficiente: {type: integer, minimum: 0}
+                  pendientesRevision: {type: integer, minimum: 0}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  parameters:
+    SiniestroId:
+      name: siniestroId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    Tratamiento:
+      enum: [aprobacion, inspeccion, rechazo, revision_humana]
+    NivelFraude:
+      enum: [bajo, medio, alto]
+    Regla:
+      type: object
+      additionalProperties: false
+      required: [codigo, campo, operador, valor, tratamiento, motivo]
+      properties:
+        codigo:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{0,49}$'
+          description: >
+            Unico en el conjunto. Reservados INFORMACION_MINIMA, FRAUDE_NIVEL,
+            SIN_REGLAS_VIGENTES, FALLO_EVALUADOR y SINIESTRO_NO_INTEGRO.
+        campo:
+          enum:
+            - tipoEvento
+            - diasHastaReporte
+            - longitudDescripcion
+            - cantidadEvidencias
+            - cantidadEvidenciasConUbicacion
+            - senalesFraudeDisponibles
+            - nivelFraude
+            - cantidadSenalesFraude
+        operador: {enum: [eq, neq, gt, gte, lt, lte, in]}
+        valor:
+          description: >
+            Entero para campos numericos (nivelFraude 0 a 3), texto para tipoEvento y booleano
+            para senalesFraudeDisponibles. in requiere una lista de 1 a 50 valores.
+          oneOf:
+            - {type: boolean}
+            - {type: integer}
+            - {type: string, minLength: 1, maxLength: 100}
+            - {type: array, minItems: 1, maxItems: 50, items: {type: integer}}
+            - type: array
+              minItems: 1
+              maxItems: 50
+              items: {type: string, minLength: 1, maxLength: 100}
+        tratamiento: {$ref: "#/components/schemas/Tratamiento"}
+        motivo: {type: string, minLength: 1, maxLength: 300}
+    ConjuntoReglas:
+      type: object
+      additionalProperties: false
+      required: [version, vigenteDesde, tratamientoPorDefecto, motivoPorDefecto]
+      properties:
+        version: {type: integer, minimum: 1}
+        vigenteDesde: {type: string, format: date-time}
+        vigenteHasta:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        evidenciaMinima: {type: integer, minimum: 0, maximum: 100, default: 1}
+        longitudMinimaDescripcion: {type: integer, minimum: 10, maximum: 5000, default: 10}
+        nivelFraudeRevisionHumana:
+          description: Nivel de senales de fraude desde el que se exige revision humana.
+          default: medio
+          oneOf:
+            - {$ref: "#/components/schemas/NivelFraude"}
+            - {type: "null"}
+        tratamientoPorDefecto: {$ref: "#/components/schemas/Tratamiento"}
+        motivoPorDefecto: {type: string, minLength: 1, maxLength: 300}
+        reglas:
+          type: array
+          maxItems: 100
+          items: {$ref: "#/components/schemas/Regla"}
+          description: >
+            Si aplican varias reglas prevalece el tratamiento mas conservador:
+            revision_humana, rechazo, inspeccion, aprobacion.
+    SenalFraude:
+      type: object
+      additionalProperties: false
+      required: [codigo, nivel, fuente]
+      properties:
+        codigo: {type: string, minLength: 1, maxLength: 100}
+        nivel: {$ref: "#/components/schemas/NivelFraude"}
+        fuente: {type: string, minLength: 1, maxLength: 100}
+    Evaluacion:
+      type: object
+      additionalProperties: false
+      required:
+        - evaluacionId
+        - siniestroId
+        - reglasVersion
+        - resultado
+        - tratamiento
+        - requiereRevisionHumana
+        - motivo
+        - reglasAplicadas
+        - entradas
+        - estadoAnterior
+        - estadoResultante
+        - evaluadaEn
+        - decisionAutomatica
+      properties:
+        evaluacionId: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        reglasVersion:
+          oneOf:
+            - {type: integer, minimum: 1}
+            - {type: "null"}
+        resultado: {enum: [decidido, informacion_insuficiente, pendiente_revision]}
+        tratamiento:
+          oneOf:
+            - {$ref: "#/components/schemas/Tratamiento"}
+            - {type: "null"}
+        requiereRevisionHumana: {type: boolean}
+        motivo: {type: string}
+        reglasAplicadas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, tratamiento, motivo]
+            properties:
+              codigo: {type: string}
+              tratamiento:
+                oneOf:
+                  - {$ref: "#/components/schemas/Tratamiento"}
+                  - {type: "null"}
+              motivo: {type: string}
+        entradas:
+          type: object
+          description: >
+            Entradas relevantes evaluadas (sin texto libre del cliente): tipoEvento,
+            diasHastaReporte, longitudDescripcion, evidencias confirmadas con su sha256 y
+            senales de fraude consideradas.
+        estadoAnterior: {type: string}
+        estadoResultante: {enum: [reportado, en_evaluacion]}
+        evaluadaEn: {type: string, format: date-time}
+        decisionAutomatica:
+          description: Cuerpo para HU27; null cuando la informacion es insuficiente.
+          oneOf:
+            - {$ref: "#/components/schemas/DecisionAutomatica"}
+            - {type: "null"}
+    DecisionAutomatica:
+      type: object
+      additionalProperties: false
+      required:
+        - evaluacionId
+        - evaluadoEn
+        - elegible
+        - requiereInspeccion
+        - requiereRevisionHumana
+        - fraude
+        - reglas
+        - motivo
+      properties:
+        evaluacionId: {type: string, format: uuid}
+        evaluadoEn: {type: string, format: date-time}
+        elegible: {type: boolean}
+        requiereInspeccion: {type: boolean}
+        requiereRevisionHumana: {type: boolean}
+        fraude:
+          type: object
+          additionalProperties: false
+          required: [nivel, bloqueante]
+          properties:
+            nivel: {$ref: "#/components/schemas/NivelFraude"}
+            bloqueante: {type: boolean}
+        reglas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [reglaId, version, resultado]
+            properties:
+              reglaId: {type: string}
+              version: {type: integer, minimum: 1}
+              resultado: {$ref: "#/components/schemas/Tratamiento"}
+        motivo: {type: string}
+    Problema:
+      type: object
+      required: [type, title, status, code, correlationId]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}
+  responses:
+    ReglasRegistradas:
+      description: Version de reglas durable
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [version, vigenteDesde, vigenteHasta, creadaEn]
+            properties:
+              version: {type: integer, minimum: 1}
+              vigenteDesde: {type: string, format: date-time}
+              vigenteHasta:
+                oneOf:
+                  - {type: string, format: date-time}
+                  - {type: "null"}
+              creadaEn: {type: string, format: date-time}
+    Evaluacion:
+      description: Evaluacion registrada
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Evaluacion"}
+    Problema:
+      description: Rechazo seguro
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}

@@ -407,6 +407,46 @@ python -m siniestros.payment_worker --limit 100
 
 La disponibilidad de 99,99 % sigue pendiente de medirse en el ambiente AWS.
 
+## HU26: evaluacion automatica
+
+Los siniestros reportados por el cliente (`tipo` `null` o `asistido`) se evaluan con un
+conjunto de reglas versionado e inmutable. El evaluador es una funcion pura: las mismas
+entradas y la misma version producen siempre el mismo resultado, y reevaluar sin cambios
+devuelve la evaluacion ya registrada. Los siniestros parametricos quedan fuera porque HU30
+ya los decide.
+
+Cada evaluacion guarda la version de reglas, las entradas relevantes (tipo de evento, dias
+hasta el reporte, longitud de la descripcion sin su texto, evidencias confirmadas con su
+`sha256` y senales de fraude), las reglas aplicadas, el motivo, el estado anterior y el
+resultante, la fecha y la correlacion.
+
+- Sin la informacion minima (`evidenciaMinima`, `longitudMinimaDescripcion`) responde
+  `informacion_insuficiente`, explica lo que falta y el siniestro sigue `reportado`. Al
+  confirmarse nueva evidencia el lote lo vuelve a evaluar.
+- Si aplican varias reglas prevalece el tratamiento mas conservador: `revision_humana`,
+  `rechazo`, `inspeccion`, `aprobacion`.
+- Las senales de fraude (ASR-FRD-01) llegan en `senalesFraude` o mediante
+  `ProveedorSenalesFraude`; desde `nivelFraudeRevisionHumana` exigen revision humana.
+- Sin reglas vigentes, con un registro no integro o si el evaluador falla, el caso queda
+  `pendiente_revision` y nunca se aprueba.
+
+La evaluacion solo mueve el siniestro de `reportado` a `en_evaluacion`. HU27 aprueba o
+enruta usando `decisionAutomatica`, que es `null` cuando falta informacion.
+
+Los endpoints internos son:
+
+- `POST /internal/v1/reglas-evaluacion-siniestros`: registra una version de reglas.
+- `POST /internal/v1/siniestros/{siniestroId}/evaluacion`: evalua un siniestro.
+- `GET /internal/v1/siniestros/{siniestroId}/evaluaciones`: trazabilidad completa.
+- `POST /internal/v1/evaluaciones-siniestros/procesamiento`: evalua un lote.
+
+El contrato esta en `contracts/openapi/evaluacion-siniestros-internal-v1.yaml`. El
+trabajador continuo se ejecuta por separado:
+
+```powershell
+python -m siniestros.evaluation_worker --limit 100
+```
+
 ## HU27: aprobar o enrutar siniestro (SOL-179)
 
 El contrato es `contracts/openapi/siniestros-decisiones-internal-v1.yaml`. La evaluacion
@@ -486,7 +526,7 @@ maximo 1000).
 | 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno), `fuente_no_autorizada` |
 | 403 | `alcance_insuficiente` |
 | 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada` |
-| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
+| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad`, `siniestro_no_evaluable` |
 | 411 | `longitud_requerida` |
 | 413 | `limite_tamano` |
 | 415 | `formato_no_permitido` |
