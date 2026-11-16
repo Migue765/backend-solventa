@@ -31,6 +31,9 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `GET`    | `/movil/v1/notificaciones`     | Sí     | Lista las notificaciones entregadas del cliente    |
 | `GET`    | `/movil/v1/notificaciones/preferencias` | Sí | Consulta preferencias por tipo y canal       |
 | `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
+| `GET`    | `/movil/v1/polizas/{id}/modificacion` | Sí | Versión vigente y cambios permitidos |
+| `POST`   | `/movil/v1/polizas/{id}/modificaciones/simulacion` | Sí | Impacto en prima, coberturas y vigencia |
+| `POST`   | `/movil/v1/polizas/{id}/modificaciones` | Sí | Confirma el cambio y crea una versión |
 | `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
 | `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
 | `GET`    | `/movil/v1/polizas` | Sí | Lista las pólizas del cliente con sesión activa |
@@ -70,6 +73,17 @@ Las rutas `/movil/v1/notificaciones` delegan al servicio de Notificaciones. El B
 deriva `X-Cliente-ID` del JWT y nunca acepta un cliente indicado por la aplicación.
 Requieren `NOTIFICACIONES_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración o
 ante una respuesta interna no válida devuelven `503` sin inventar una lista vacía.
+
+## Modificación de pólizas
+
+Las rutas `/movil/v1/polizas/{id}/modificacion(es)` delegan en Pólizas, que valida
+campos permitidos, calcula el impacto y versiona el cambio de forma atómica. El BFF
+deriva `X-Cliente-ID` del JWT, exige `confirma: true` con la versión y el hash
+simulados, y reenvía `Idempotency-Key` al confirmar. Los errores incluyen `accion`
+(`ajustar_cambios`, `simular_de_nuevo`, `consultar_poliza`, `nueva_operacion`,
+`reintentar` o `reintentar_misma_clave`) para que la app recupere el flujo sin
+cambios parciales. Requieren `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin
+configuración responden 503. Ver `contracts/openapi/modificacion-poliza-movil-v1.yaml`.
 
 ## Asistencias
 

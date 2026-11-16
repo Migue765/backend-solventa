@@ -11,17 +11,22 @@ from bff_movil.api import (
     health,
     notifications,
     policies,
+    policy_modifications,
     policy_renewals,
     sessions,
     users,
 )
 from bff_movil.application.biometric_ports import BiometricGateway
+from bff_movil.application.policy_modification_ports import PolicyModificationGateway
 from bff_movil.application.policy_renewal_ports import PolicyQueryGateway, PolicyRenewalGateway
 from bff_movil.application.ports import IdentityGateway, SessionStateGateway, TokenVerifier
 from bff_movil.config import Config
 from bff_movil.domain.auth import CHANNEL
 from bff_movil.domain.errors import IdentityUnavailableError
 from bff_movil.infrastructure.http_identity_gateway import HttpIdentityGateway
+from bff_movil.infrastructure.http_policy_modification_gateway import (
+    HttpPolicyModificationGateway,
+)
 from bff_movil.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from bff_movil.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_movil.problems import problem_response
@@ -35,6 +40,7 @@ def create_app(
     policy_renewal_gateway: PolicyRenewalGateway | None = None,
     session_state_gateway: SessionStateGateway | None = None,
     policy_query_gateway: PolicyQueryGateway | None = None,
+    policy_modification_gateway: PolicyModificationGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -64,6 +70,12 @@ def create_app(
     )
     app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or policies_gateway
     app.extensions["policy_query_gateway"] = policy_query_gateway or policies_gateway
+    app.extensions["policy_modification_gateway"] = (
+        policy_modification_gateway
+        or HttpPolicyModificationGateway(
+            active_config.policies_service_url, active_config.internal_api_token
+        )
+    )
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
@@ -74,6 +86,7 @@ def create_app(
     app.register_blueprint(assistance.bp)
     app.register_blueprint(policies.bp)
     app.register_blueprint(policy_renewals.bp)
+    app.register_blueprint(policy_modifications.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

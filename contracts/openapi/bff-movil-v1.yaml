@@ -9,6 +9,7 @@ tags:
   - name: Usuarios
   - name: Sesiones
   - name: Notificaciones
+  - name: Polizas
   - name: Asistencias
   - name: Polizas
   - name: Renovaciones
@@ -342,6 +343,12 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}/modificacion:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificacion"
+  /v1/polizas/{polizaId}/modificaciones/simulacion:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificaciones~1simulacion"
+  /v1/polizas/{polizaId}/modificaciones:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificaciones"
 components:
   securitySchemes:
     bearerAuth:
