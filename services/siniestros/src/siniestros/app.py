@@ -185,6 +185,11 @@ def create_app(config: Config | None = None) -> Flask:
         empty()
         return jsonify(decisiones.asignaciones("perito", str(perito_id)))
 
+    @app.get("/internal/v1/pagos-parametricos/siniestros/<uuid:siniestro_id>")
+    def consultar_pago_parametrico_por_siniestro(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(pagos_parametricos.detalle_por_siniestro(siniestro_id))
+
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:
         empty()
