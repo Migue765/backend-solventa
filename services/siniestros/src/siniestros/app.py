@@ -17,6 +17,7 @@ from siniestros.domain.parametricos import (
     LoteEventosParametricos,
     ReglaParametrica,
 )
+from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
 from siniestros.policies import policies
@@ -36,7 +37,9 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["siniestros_engine"] = repo.engine
     estados = RepositorioSiniestros(repo.sessions)
     parametricos = RepositorioEventosParametricos(repo, config)
+    pagos_parametricos = ProcesadorPagosParametricos(repo)
     app.extensions["eventos_parametricos_repository"] = parametricos
+    app.extensions["pagos_parametricos_processor"] = pagos_parametricos
 
     @app.before_request
     def authorize() -> None:
@@ -131,6 +134,21 @@ def create_app(config: Config | None = None) -> Flask:
     def confirmar_caso_pago_automatico(caso_id: UUID) -> Response:
         entrada = ConfirmacionCaso.model_validate(body())
         return jsonify(parametricos.confirmar_caso(caso_id, entrada.entregadoEn))
+
+    @app.post("/internal/v1/pagos-parametricos/procesamiento")
+    def procesar_pagos_parametricos() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(pagos_parametricos.procesar(entrada.limite))
+
+    @app.post("/internal/v1/pagos-parametricos/conciliacion")
+    def conciliar_pagos_parametricos() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(pagos_parametricos.procesar(entrada.limite))
+
+    @app.get("/internal/v1/pagos-parametricos/casos/<uuid:caso_id>")
+    def consultar_pago_parametrico(caso_id: UUID) -> Response:
+        empty()
+        return jsonify(pagos_parametricos.detalle(caso_id))
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:

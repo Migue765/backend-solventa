@@ -3,8 +3,8 @@ info:
   title: Solventa eventos parametricos internos
   version: 1.0.0
   description: >
-    Recepcion durable y deduplicada de eventos externos, reglas versionadas y outbox
-    de casos validos para HU31. Un caso pendiente no representa un pago ejecutado.
+    Recepcion durable y deduplicada de eventos externos, reglas versionadas, casos
+    validos y pagos parametricos simulados, idempotentes y conciliables.
 servers:
   - url: /internal/v1
 paths:
@@ -150,6 +150,52 @@ paths:
                   estado: {const: entregado}
                   entregadoEn: {type: string, format: date-time}
         default: {$ref: "#/components/responses/Problema"}
+  /pagos-parametricos/procesamiento:
+    post:
+      operationId: procesarPagosParametricos
+      description: >
+        Incorpora casos validos, consulta efectos previos y ejecuta pagos simulados.
+        Los reintentos conservan una operacion e intentos durables.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200": {$ref: "#/components/responses/LotePagos"}
+        default: {$ref: "#/components/responses/Problema"}
+  /pagos-parametricos/conciliacion:
+    post:
+      operationId: conciliarPagosParametricos
+      description: >
+        Recupera primero cualquier efecto confirmado por el proveedor simulado y
+        solo ejecuta cuando no existe un resultado previo.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200": {$ref: "#/components/responses/LotePagos"}
+        default: {$ref: "#/components/responses/Problema"}
+  /pagos-parametricos/casos/{casoId}:
+    get:
+      operationId: consultarTrazabilidadPagoParametrico
+      security: [{internalToken: []}]
+      parameters:
+        - name: casoId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Pago reconstruido desde caso, evento, regla, siniestro e intentos
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PagoParametrico"}
+        default: {$ref: "#/components/responses/Problema"}
 components:
   securitySchemes:
     internalToken:
@@ -190,6 +236,9 @@ components:
         - unidad
         - clienteId
         - polizaId
+        - beneficiarioId
+        - montoIndemnizacion
+        - moneda
         - vigenteDesde
       properties:
         reglaId: {type: string, format: uuid}
@@ -206,6 +255,11 @@ components:
             - {type: "null"}
         clienteId: {type: string, format: uuid}
         polizaId: {type: string, format: uuid}
+        beneficiarioId: {type: string, format: uuid}
+        montoIndemnizacion:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]{1,2})?$'
+        moneda: {type: string, pattern: '^[A-Z]{3}$'}
         vigenteDesde: {type: string, format: date-time}
         vigenteHasta:
           oneOf:
@@ -224,6 +278,8 @@ components:
         - siniestroId
         - clienteId
         - polizaId
+        - beneficiarioId
+        - indemnizacion
         - fuente
         - eventoId
         - reglaId
@@ -234,11 +290,69 @@ components:
         siniestroId: {type: string, format: uuid}
         clienteId: {type: string, format: uuid}
         polizaId: {type: string, format: uuid}
+        beneficiarioId: {type: string, format: uuid}
+        indemnizacion:
+          type: object
+          additionalProperties: false
+          required: [monto, moneda]
+          properties:
+            monto: {type: string, pattern: '^[0-9]+\.[0-9]{2}$'}
+            moneda: {type: string, pattern: '^[A-Z]{3}$'}
         fuente: {type: string}
         eventoId: {type: string, format: uuid}
         reglaId: {type: string, format: uuid}
         reglaVersion: {type: integer, minimum: 1}
         decididoEn: {type: string, format: date-time}
+    PagoParametrico:
+      type: object
+      additionalProperties: false
+      required:
+        - pagoId
+        - casoId
+        - siniestroId
+        - evento
+        - regla
+        - beneficiarioId
+        - indemnizacion
+        - estado
+        - creadoEn
+        - intentos
+      properties:
+        pagoId: {type: string, format: uuid}
+        casoId: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        evento: {type: object}
+        regla: {type: object}
+        beneficiarioId: {type: string, format: uuid}
+        indemnizacion: {type: object}
+        estado: {enum: [pendiente, confirmado, rechazado]}
+        creadoEn: {type: string, format: date-time}
+        finalizadoEn:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        ultimoError:
+          oneOf:
+            - {type: string}
+            - {type: "null"}
+        intentos:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [numero, estado, iniciadoEn, finalizadoEn, codigo]
+            properties:
+              numero: {type: integer, minimum: 1}
+              estado: {enum: [en_proceso, ambiguo, confirmado, rechazado]}
+              iniciadoEn: {type: string, format: date-time}
+              finalizadoEn:
+                oneOf:
+                  - {type: string, format: date-time}
+                  - {type: "null"}
+              codigo:
+                oneOf:
+                  - {type: string}
+                  - {type: "null"}
     Problema:
       type: object
       required: [type, title, status, code, correlationId]
@@ -262,6 +376,19 @@ components:
               version: {type: integer, minimum: 1}
               fuente: {type: string}
               creadaEn: {type: string, format: date-time}
+    LotePagos:
+      description: Resultado del procesamiento o conciliacion
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [casosIncorporados, confirmados, rechazados, pendientes]
+            properties:
+              casosIncorporados: {type: integer, minimum: 0}
+              confirmados: {type: integer, minimum: 0}
+              rechazados: {type: integer, minimum: 0}
+              pendientes: {type: integer, minimum: 0}
     Problema:
       description: Rechazo seguro
       content:

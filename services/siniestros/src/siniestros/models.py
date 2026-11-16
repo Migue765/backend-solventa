@@ -129,6 +129,12 @@ class ParametricRule(Base):
     ubicacion_codigo: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cliente_id: Mapped[str] = mapped_column(String(36))
     poliza_id: Mapped[str] = mapped_column(String(36))
+    beneficiario_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    monto_indemnizacion: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2),
+        nullable=True,
+    )
+    moneda: Mapped[str | None] = mapped_column(String(3), nullable=True)
     vigente_desde: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     vigente_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -167,3 +173,66 @@ class AutomaticPaymentCase(Base):
     estado: Mapped[str] = mapped_column(String(20), default="pendiente")
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     entregado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rechazado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultimo_error: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ParametricPayment(Base):
+    __tablename__ = "pagos_parametricos"
+    __table_args__ = (
+        CheckConstraint("estado IN ('pendiente', 'confirmado', 'rechazado')"),
+        CheckConstraint("monto > 0"),
+        UniqueConstraint("caso_id"),
+        UniqueConstraint("siniestro_id"),
+        Index("ix_pagos_parametricos_estado_proximo", "estado", "proximo_intento_en"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    caso_id: Mapped[str] = mapped_column(ForeignKey("casos_pago_automatico.id"))
+    evento_id: Mapped[str] = mapped_column(ForeignKey("eventos_parametricos.id"))
+    siniestro_id: Mapped[str] = mapped_column(ForeignKey("siniestros.id"))
+    regla_id: Mapped[str] = mapped_column(String(36))
+    regla_version: Mapped[int] = mapped_column(Integer)
+    beneficiario_id: Mapped[str] = mapped_column(String(36))
+    monto: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    moneda: Mapped[str] = mapped_column(String(3))
+    huella: Mapped[str] = mapped_column(String(64))
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente")
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalizado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proximo_intento_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    intentos: Mapped[int] = mapped_column(Integer, default=0)
+    ultimo_error: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ParametricPaymentAttempt(Base):
+    __tablename__ = "intentos_pago_parametrico"
+    __table_args__ = (
+        CheckConstraint("numero > 0"),
+        CheckConstraint("estado IN ('en_proceso', 'ambiguo', 'confirmado', 'rechazado')"),
+        UniqueConstraint("pago_id", "numero"),
+        Index("ix_intentos_pago_parametrico_pago", "pago_id", "numero"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    pago_id: Mapped[str] = mapped_column(ForeignKey("pagos_parametricos.id"))
+    numero: Mapped[int] = mapped_column(Integer)
+    estado: Mapped[str] = mapped_column(String(20))
+    iniciado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalizado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    codigo: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ParametricPaymentEffect(Base):
+    __tablename__ = "efectos_pago_parametrico"
+
+    pago_id: Mapped[str] = mapped_column(
+        ForeignKey("pagos_parametricos.id"),
+        primary_key=True,
+    )
+    huella: Mapped[str] = mapped_column(String(64))
+    resultado: Mapped[str] = mapped_column(String(20))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
