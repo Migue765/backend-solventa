@@ -3,8 +3,8 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0007_outbox_notificaciones"
-down_revision = "0006_decisiones_siniestro"
+revision = "0008_outbox_notificaciones"
+down_revision = "0007_deteccion_fraude"
 branch_labels = None
 depends_on = None
 

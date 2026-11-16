@@ -59,7 +59,7 @@ kubectl -n siniestros get pdb siniestros-eventos-parametricos siniestros-pagos-p
 llama cada minuto a `POST /internal/v1/notificaciones/publicacion` con el
 `INTERNAL_API_TOKEN` del Secret (`concurrencyPolicy: Forbid`, 500 eventos por ciclo).
 `deploy/codebuild/deploy.sh` lo aplica solo despues de un rollout correcto. La outbox
-solo contiene cambios posteriores a la migracion `0007_outbox_notificaciones`: no se envian avisos
+solo contiene cambios posteriores a la migracion `0008_outbox_notificaciones`: no se envian avisos
 historicos. Si Notificaciones aun no esta desplegado, los eventos quedan pendientes y
 se publican cuando responda. Para pausar sin perder eventos:
 

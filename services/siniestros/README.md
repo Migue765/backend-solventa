@@ -331,7 +331,7 @@ texto interno. `POST /internal/v1/notificaciones/publicacion` (Bearer
 `NOTIFICACIONES_SERVICE_URL`; se detiene en el primer fallo y lo reintenta en el
 siguiente ciclo. Sin esa URL responde `503 notificaciones_no_configuradas`. Las
 repeticiones no duplican avisos: Notificaciones usa `eventoId` como clave idempotente.
-La migracion es `0007_outbox_notificaciones` (encadenada a `0006_decisiones_siniestro`).
+La migracion es `0008_outbox_notificaciones` (encadenada a `0007_deteccion_fraude`).
 
 El trabajador continuo se inicia por separado:
 
