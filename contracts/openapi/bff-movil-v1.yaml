@@ -10,11 +10,119 @@ tags:
   - name: Sesiones
   - name: Notificaciones
   - name: Asistencias
+  - name: Renovaciones
 paths:
   /v1/prestadores/consulta:
     $ref: "./asistencias-v1.yaml#/paths/~1prestadores~1consulta"
   /v1/asistencias:
     $ref: "./asistencias-v1.yaml#/paths/~1asistencias"
+  /v1/polizas/{polizaId}/renovacion:
+    get:
+      tags: [Renovaciones]
+      summary: Consulta la elegibilidad y las condiciones de renovacion de una poliza
+      operationId: consultarRenovacionPoliza
+      description: |
+        HU39 (SOL-320). Expone en el canal movil la renovacion central de Polizas (SOL-317);
+        el BFF no evalua reglas propias. Requiere un access token de cliente con alcance
+        `cliente`; el cliente se deriva del JWT y la operacion no admite query ni cuerpo.
+        Si la poliza es renovable devuelve la nueva vigencia contigua, coberturas, prima,
+        condiciones y `condicionesHash`, que se deben mostrar antes de la aceptacion.
+        `ultimoIntento` permite recuperar un resultado pendiente o rechazado.
+        Una poliza inexistente o de otro cliente responde el mismo 404.
+      parameters:
+        - $ref: "./bff-web-v1.yaml#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad y oferta de renovacion
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ElegibilidadRenovacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: El token no corresponde a un cliente con alcance `cliente`
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "404":
+          $ref: "./bff-web-v1.yaml#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}/renovaciones:
+    post:
+      tags: [Renovaciones]
+      summary: Confirma la renovacion aceptada y procesa su pago simulado
+      operationId: renovarPoliza
+      description: |
+        HU39 (SOL-320). Delega en la renovacion central de Polizas (SOL-317). Exige
+        `aceptaCondiciones: true` y el `condicionesHash` de la oferta consultada; si las
+        condiciones cambiaron responde 409 `condiciones_cambiaron`. La nueva vigencia solo
+        se registra con el pago confirmado; un pago rechazado conserva la poliza original.
+        201 = intento nuevo con resultado definitivo (`renovada` o `rechazada`);
+        200 = reintento con la misma Idempotency-Key, sin nuevo cobro;
+        202 = pago ambiguo, la renovacion queda `pendiente` con su `id` identificable.
+        Repetir con la misma clave recupera el mismo intento y nunca genera un segundo cobro.
+        Otra clave para el mismo periodo responde 409 `renovacion_en_curso` con `renovacionId`.
+        Un 503 no confirma ni descarta la renovacion: se debe reintentar con la misma clave.
+      parameters:
+        - $ref: "./bff-web-v1.yaml#/components/parameters/PolizaId"
+        - $ref: "./bff-web-v1.yaml#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./bff-web-v1.yaml#/components/schemas/SolicitudRenovacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el resultado registrado
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "201":
+          description: Renovacion registrada como renovada o rechazada
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "202":
+          description: Pago ambiguo; la renovacion queda pendiente de conciliacion
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: El token no corresponde a un cliente con alcance `cliente`
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "404":
+          $ref: "./bff-web-v1.yaml#/components/responses/NoEncontrado"
+        "409":
+          $ref: "./bff-web-v1.yaml#/components/responses/Conflicto"
+        "422":
+          $ref: "./bff-web-v1.yaml#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/notificaciones:
     $ref: "./notificaciones-v1.yaml#/paths/~1notificaciones"
   /v1/notificaciones/preferencias:
