@@ -1,0 +1,8 @@
+account_id  = "396383602233"
+aws_region  = "us-east-2"
+aws_profile = "" # Perfil real de rol asumido aprobado para la fase de red.
+
+name_prefix = "solventa-prod"
+environment = "prod"
+vpc_cidr    = "10.20.0.0/16"
+db_name     = "solventa_prod"

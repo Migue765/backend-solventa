@@ -5,7 +5,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from identidad.domain.auth import StoredCredential, User
+from identidad.domain.consent import Consent
 from identidad.domain.errors import DocumentAlreadyRegisteredError, EmailAlreadyRegisteredError
+from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.infrastructure.persistence.models import (
     AsesorSocioModel,
     SocioModel,
@@ -18,7 +20,13 @@ class SqlUserRepository:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self._sessions = sessions
 
-    def add(self, user: User, password_hash: str) -> None:
+    def add(
+        self,
+        user: User,
+        password_hash: str,
+        consent: Consent | None = None,
+        correlation_id: str = "",
+    ) -> None:
         with self._sessions() as session:
             session.add(
                 UsuarioModel(
@@ -34,16 +42,33 @@ class SqlUserRepository:
                 )
             )
             try:
+                session.flush()
+                if consent is not None:
+                    SqlConsentRepository.append(session, consent, correlation_id)
                 session.commit()
             except IntegrityError as error:
                 session.rollback()
+                constraint_name: object = getattr(
+                    getattr(error.orig, "diag", None), "constraint_name", None
+                )
                 message = str(error.orig)
                 if user.document_type is not None and (
-                    "uq_usuarios_documento" in message
-                    or "usuarios.tipo_documento, usuarios.numero_documento" in message
+                    constraint_name == "uq_usuarios_documento"
+                    or (
+                        constraint_name is None
+                        and (
+                            "uq_usuarios_documento" in message
+                            or "usuarios.tipo_documento, usuarios.numero_documento" in message
+                        )
+                    )
                 ):
                     raise DocumentAlreadyRegisteredError() from error
-                raise EmailAlreadyRegisteredError() from error
+                if constraint_name in ("uq_usuarios_correo", "usuarios_correo_key") or (
+                    constraint_name is None
+                    and ("usuarios.correo" in message or "usuarios_correo_key" in message)
+                ):
+                    raise EmailAlreadyRegisteredError() from error
+                raise
 
     def find_credential(self, email: str) -> StoredCredential | None:
         with self._sessions() as session:

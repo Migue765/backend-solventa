@@ -208,8 +208,11 @@ python -m flask --app polizas.app run --port 5004
 ```
 
 En Cotizacion usar `POLIZAS_SERVICE_URL=http://127.0.0.1:5004` y la misma
-credencial. Cada servicio mantiene su base propia. SQLite solo se usa para
-desarrollo y pruebas; el despliegue principal requiere PostgreSQL persistente.
+credencial. Cada dominio mantiene tablas propias en un esquema aislado dentro
+de una unica BD PostgreSQL, con roles separados y sin escrituras entre dominios.
+SQLite solo se usa para desarrollo y pruebas; no acredita ese aislamiento.
+El despliegue principal requiere PostgreSQL persistente; el recorrido sintetico
+de BD unica esta documentado en el README de la raiz.
 
 `python -m pytest services\polizas\tests tests\test_policies_flow.py` verifica
 vigencias de los ocho productos, limites de calendario, JWT del BFF, persistencia,

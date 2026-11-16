@@ -1,18 +1,33 @@
 from datetime import date, timedelta
+from typing import Self
 
 import pytest
+from bff_web.domain import product_data
 from bff_web.domain.product_data import validate_product_data
+
+TODAY = date(2026, 11, 14)
+
+
+@pytest.fixture(autouse=True)
+def product_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FixedDate(date):
+        @classmethod
+        def today(cls) -> Self:
+            return cls(TODAY.year, TODAY.month, TODAY.day)
+
+    monkeypatch.setattr(product_data, "date", FixedDate)
+
 
 FLIGHT = {
     "airline": "Aerolínea de prueba",
     "flightNumber": "AV123",
-    "flightDate": (date.today() + timedelta(days=1)).isoformat(),
+    "flightDate": (TODAY + timedelta(days=1)).isoformat(),
 }
 WEATHER = {
     "location": "Medellín, Antioquia",
     "weatherEvent": "heavy-rain",
-    "startDate": (date.today() + timedelta(days=1)).isoformat(),
-    "endDate": (date.today() + timedelta(days=30)).isoformat(),
+    "startDate": (TODAY + timedelta(days=1)).isoformat(),
+    "endDate": (TODAY + timedelta(days=30)).isoformat(),
     "insuredAmount": "10000000",
 }
 
@@ -22,7 +37,7 @@ WEATHER = {
     [
         ("parametric", FLIGHT, {"coverageType": "baggage"}),
         ("parametric", FLIGHT, {"coverageType": ""}),
-        ("parametric", FLIGHT, {"flightDate": date.today().isoformat()}),
+        ("parametric", FLIGHT, {"flightDate": TODAY.isoformat()}),
         ("parametric", FLIGHT, {"flightDate": "2020-01-01"}),
         ("parametric", FLIGHT, {"flightDate": "2026-02-30"}),
         ("parametric", FLIGHT, {"airline": "  "}),
@@ -38,13 +53,13 @@ WEATHER = {
         ("parametric-weather", WEATHER, {"insuredAmount": "9" * 5000}),
         ("parametric-weather", WEATHER, {"insuredAmount": 1000}),
         ("parametric-weather", WEATHER, {"startDate": "2026-02-30"}),
-        ("parametric-weather", WEATHER, {"startDate": date.today().isoformat()}),
-        ("parametric-weather", WEATHER, {"endDate": date.today().isoformat()}),
+        ("parametric-weather", WEATHER, {"startDate": TODAY.isoformat()}),
+        ("parametric-weather", WEATHER, {"endDate": TODAY.isoformat()}),
         ("parametric-weather", WEATHER, {"endDate": "2026-2-3"}),
         (
             "parametric-weather",
             WEATHER,
-            {"endDate": (date.today() + timedelta(days=367)).isoformat()},
+            {"endDate": (TODAY + timedelta(days=367)).isoformat()},
         ),
     ],
 )
@@ -61,7 +76,7 @@ def test_accepts_weather_amount_and_inclusive_period_boundaries(amount: str) -> 
         **WEATHER,
         "location": "x" * 120,
         "insuredAmount": amount,
-        "endDate": (date.today() + timedelta(days=366)).isoformat(),
+        "endDate": (TODAY + timedelta(days=366)).isoformat(),
     }
     assert validate_product_data("parametric-weather", data) == data
 

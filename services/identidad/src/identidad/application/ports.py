@@ -4,12 +4,19 @@ from typing import Protocol
 from uuid import UUID
 
 from identidad.domain.auth import NewRefreshToken, RotationResult, StoredCredential, User
+from identidad.domain.consent import Consent
 
 Clock = Callable[[], datetime]
 
 
 class UserRepository(Protocol):
-    def add(self, user: User, password_hash: str) -> None: ...
+    def add(
+        self,
+        user: User,
+        password_hash: str,
+        consent: Consent | None = None,
+        correlation_id: str = "",
+    ) -> None: ...
 
     def find_credential(self, email: str) -> StoredCredential | None: ...
 

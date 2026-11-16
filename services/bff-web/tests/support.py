@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -207,6 +207,25 @@ class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
     clients: tuple[User, ...] = (CLIENT_PROFILE,)
+
+    def registration_challenge(self, correlation_id: str) -> dict[str, object]:
+        self._record("registration_challenge", correlation_id)
+        return {
+            "desafioId": "a" * 43,
+            "clavePublica": {
+                "kty": "RSA",
+                "n": "gA" + "A" * 340,
+                "e": "AQAB",
+                "alg": "RSA-OAEP-256",
+                "use": "enc",
+                "kid": "test",
+            },
+            "expiraEn": (NOW + timedelta(seconds=60)).isoformat(),
+        }
+
+    def encrypted_register(self, payload: dict[str, object], correlation_id: str) -> User:
+        self._record("encrypted_register", payload, correlation_id)
+        return CLIENT_PROFILE
 
     def login_challenge(self, correlation_id: str) -> dict[str, object]:
         self._record("login_challenge", correlation_id)

@@ -1,18 +1,26 @@
+import re
 from datetime import date
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from identidad.domain.auth import IssuedTokens, User
 from identidad.domain.documents import DocumentType, normalize_document
 
 
-class RegisterRequest(BaseModel):
+class RegistrationFields(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nombre: str = Field(min_length=1, max_length=120)
     correo: EmailStr = Field(max_length=254)
-    contrasena: str = Field(min_length=8, max_length=128)
     tipo_documento: DocumentType | None = Field(default=None, alias="tipoDocumento")
     numero_documento: str | None = Field(
         default=None, alias="numeroDocumento", min_length=5, max_length=16
@@ -39,6 +47,44 @@ class RegisterRequest(BaseModel):
                 self.tipo_documento, self.numero_documento
             )
         return self
+
+
+class RegisterRequest(RegistrationFields):
+    contrasena: str = Field(min_length=8, max_length=128)
+
+
+class RegistrationConsent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    autorizado: StrictBool
+    versionTerminos: Literal["1.0"]
+
+
+class EncryptedRegisterRequest(RegistrationFields):
+    credencialCifrada: str = Field(min_length=1, max_length=8192, strict=True)
+    tipo_documento: DocumentType = Field(alias="tipoDocumento")
+    numero_documento: str = Field(alias="numeroDocumento", min_length=5, max_length=16)
+    telefono: str = Field(pattern=r"^\+57[0-9]{10}$")
+    fecha_nacimiento: date = Field(alias="fechaNacimiento")
+    consentimiento: RegistrationConsent
+
+    @field_validator("fecha_nacimiento", mode="before")
+    @classmethod
+    def iso_birth_date(cls, value: object) -> object:
+        if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+            raise ValueError("Fecha de nacimiento invalida.")
+        return value
+
+    @field_validator("nombre", "correo", "telefono", "numero_documento", mode="before")
+    @classmethod
+    def trim_fields(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("nombre")
+    @classmethod
+    def nonempty_name(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Nombre requerido.")
+        return value
 
 
 class TokenRequest(BaseModel):

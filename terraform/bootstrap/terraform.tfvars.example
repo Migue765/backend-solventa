@@ -1,0 +1,4 @@
+account_id = "396383602233"
+aws_region = "us-east-2"
+# Completar con el perfil real de rol asumido autorizado; no usar default/root.
+aws_profile = ""

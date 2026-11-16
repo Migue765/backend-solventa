@@ -1,5 +1,10 @@
 # Manifiestos Kubernetes - bff-movil
 
+Para una cuenta vacia seguir [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+dependencias, Deployment semilla sin pods y URL/issuer nuevos coordinados con Android.
+En esa reconstruccion, diferir `targetgroupbinding.yaml` durante la activacion
+privada de JWE y hasta comprobar el contrato Movil; no aplicar el directorio en lote.
+
 Backend for Frontend de la app movil nativa. Mismo esquema que `deploy/k8s/bff-web`: delega la autenticacion en
 `identidad` (`http://identidad.identidad.svc.cluster.local:8080`) y no tiene base de datos, Redis, cookies, CORS ni rol
 IRSA. **`identidad` debe estar desplegado antes que `bff-movil`.** Llama a Siniestros, Notificaciones, Asistencias y Polizas por

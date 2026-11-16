@@ -2,14 +2,27 @@ import base64
 import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import fakeredis
 import pytest
 from flask import Flask
+from identidad.domain.consent import Consent
 from identidad.infrastructure.encrypted_login import PREFIX
+from identidad.infrastructure.persistence.models import (
+    ConsentEventModel,
+    ConsentModel,
+    UsuarioModel,
+)
 from jwcrypto import jwe, jwk
 from redis.exceptions import ConnectionError
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Mapper, Session
 
 EMAIL = "ana@solventa.co"
 PASSWORD = "Solventa123!"
@@ -88,6 +101,191 @@ def body(compact: str, **overrides: object) -> dict[str, object]:
         "credencialCifrada": compact,
         **overrides,
     }
+
+
+def registration_challenge(app: Flask) -> dict[str, Any]:
+    response = app.test_client().get("/v1/usuarios/desafio")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    return cast(dict[str, Any], response.get_json())
+
+
+def registration_body(
+    issued: dict[str, Any], authorized: bool = True, email: str = "new@solventa.co"
+) -> dict[str, object]:
+    return {
+        "nombre": " Ana ",
+        "correo": email,
+        "credencialCifrada": encrypt(issued, email=email, typ="solventa-register+jwe"),
+        "tipoDocumento": "passport",
+        "numeroDocumento": " test123 ",
+        "telefono": " +573001234567 ",
+        "fechaNacimiento": "2010-06-15",
+        "consentimiento": {"autorizado": authorized, "versionTerminos": "1.0"},
+    }
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_encrypted_registration_persists_complete_decision_atomically(
+    encrypted_app: Flask, database_url: str, authorized: bool
+) -> None:
+    payload = registration_body(registration_challenge(encrypted_app), authorized)
+    response = encrypted_app.test_client().post("/v1/usuarios", json=payload)
+    assert response.status_code == 201
+    user = response.get_json()["usuario"]
+    assert set(response.get_json()) == {"usuario"}
+    assert user["rol"] == "cliente" and user["numeroDocumento"] == "TEST123"
+    assert user["telefono"] == "+573001234567" and user["fechaNacimiento"] == "2010-06-15"
+    with Session(create_engine(database_url)) as session:
+        row = session.scalar(select(ConsentModel))
+        assert row is not None
+        decision = row.contenido
+        parsed = Consent.model_validate(decision)
+        outbox = session.scalar(select(ConsentEventModel))
+        assert outbox is not None
+        assert decision["estado"] == ("autorizado" if authorized else "rechazado")
+        assert decision["actorId"] == user["id"]
+        assert decision["version"] == 1 and decision["versionTerminos"] == "1.0"
+        assert decision["fuentes"] == decision["alcances"] == ["open_finance", "open_data"]
+        assert decision["datos"] == ["indicador_riesgo"]
+        assert parsed.vigente_hasta - parsed.efectiva_en == timedelta(days=30)
+        assert outbox.tipo == (
+            "ConsentimientoAutorizado" if authorized else "ConsentimientoRechazado"
+        )
+        assert outbox.contenido["consentimientoId"] == decision["consentimientoId"]
+    assert encrypted_app.test_client().post("/v1/usuarios", json=payload).status_code == 400
+    if authorized:
+        encrypted_app.extensions["identidad_config"] = replace(
+            encrypted_app.extensions["identidad_config"],
+            internal_api_token="internal-registration-test",
+        )
+        revoked = encrypted_app.test_client().put(
+            f"/v1/clientes/{user['id']}/consentimiento-perfilamiento",
+            headers={"Authorization": "Bearer internal-registration-test"},
+            json={"autorizado": False, "version": 1},
+        )
+        assert revoked.status_code == 200
+        assert revoked.get_json()["estado"] == "revocado"
+        assert revoked.get_json()["version"] == 2
+
+
+def test_registration_purpose_is_not_interchangeable_with_login(encrypted_app: Flask) -> None:
+    issued = registration_challenge(encrypted_app)
+    assert (
+        encrypted_app.test_client().post("/oauth/token", json=body(encrypt(issued))).status_code
+        == 400
+    )
+    payload = registration_body(issued)
+    assert encrypted_app.test_client().post("/v1/usuarios", json=payload).status_code == 201
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"contrasena": PASSWORD},
+        {"rol": "socio"},
+        {"consentimiento": {"autorizado": "true", "versionTerminos": "1.0"}},
+        {"consentimiento": {"autorizado": True, "versionTerminos": "2.0"}},
+        {"consentimiento": None},
+        {"telefono": "123"},
+        {"numeroDocumento": "invalid!"},
+        {"fechaNacimiento": "2999-01-01"},
+    ],
+)
+def test_encrypted_registration_rejects_invalid_fields(
+    encrypted_app: Flask, changes: dict[str, object]
+) -> None:
+    payload = {**registration_body(registration_challenge(encrypted_app)), **changes}
+    assert encrypted_app.test_client().post("/v1/usuarios", json=payload).status_code == 400
+    assert encrypted_app.extensions["user_repository"].find_credential("new@solventa.co") is None
+
+
+def test_registration_expiry_and_atomic_single_use(
+    encrypted_app: Flask, clock: Any, redis_client: fakeredis.FakeRedis
+) -> None:
+    payload = registration_body(registration_challenge(encrypted_app))
+    clock.advance(seconds=61)
+    assert encrypted_app.test_client().post("/v1/usuarios", json=payload).status_code == 400
+    payload = registration_body(registration_challenge(encrypted_app))
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        statuses = list(
+            workers.map(
+                lambda _: encrypted_app.test_client()
+                .post("/v1/usuarios", json=payload)
+                .status_code,
+                range(2),
+            )
+        )
+    assert sorted(statuses) == [201, 400]
+
+
+@pytest.mark.parametrize("encrypted", [True, False])
+@pytest.mark.parametrize(
+    ("constraint_name", "status", "code"),
+    [
+        ("uq_usuarios_correo", 409, "correo_ya_registrado"),
+        ("usuarios_correo_key", 409, "correo_ya_registrado"),
+        ("uq_usuarios_documento", 409, "documento_ya_registrado"),
+        ("unrelated_constraint", 503, "servicio_no_disponible"),
+    ],
+)
+def test_registration_discriminates_named_database_constraints(
+    encrypted_app: Flask, constraint_name: str, status: int, code: str, encrypted: bool
+) -> None:
+    class NamedConstraintViolation(Exception):
+        def __init__(self) -> None:
+            super().__init__(
+                "synthetic usuarios.correo" if status == 503 else "synthetic violation"
+            )
+            self.diag = SimpleNamespace(constraint_name=constraint_name)
+
+    def fail_insert(
+        mapper: Mapper[UsuarioModel], connection: Connection, target: UsuarioModel
+    ) -> None:
+        raise IntegrityError("synthetic insert", {}, NamedConstraintViolation())
+
+    payload = (
+        registration_body(registration_challenge(encrypted_app))
+        if encrypted
+        else {
+            "nombre": "Ana",
+            "correo": "new@solventa.co",
+            "contrasena": PASSWORD,
+            "tipoDocumento": "passport",
+            "numeroDocumento": "TEST123",
+            "telefono": "+573001234567",
+            "fechaNacimiento": "2010-06-15",
+        }
+    )
+    event.listen(UsuarioModel, "before_insert", fail_insert)
+    try:
+        response = encrypted_app.test_client().post("/v1/usuarios", json=payload)
+        assert response.status_code == status
+        assert response.get_json()["code"] == code
+    finally:
+        event.remove(UsuarioModel, "before_insert", fail_insert)
+    assert encrypted_app.extensions["user_repository"].find_credential("new@solventa.co") is None
+
+
+def test_registration_rolls_back_account_when_outbox_fails(
+    encrypted_app: Flask, database_url: str
+) -> None:
+    def fail_outbox(mapper: Any, connection: Any, target: Any) -> None:
+        raise OperationalError("test-outbox", {}, Exception("synthetic failure"))
+
+    event.listen(ConsentEventModel, "before_insert", fail_outbox)
+    try:
+        payload = registration_body(registration_challenge(encrypted_app))
+        assert encrypted_app.test_client().post("/v1/usuarios", json=payload).status_code == 503
+    finally:
+        event.remove(ConsentEventModel, "before_insert", fail_outbox)
+    with Session(create_engine(database_url)) as session:
+        assert (
+            session.scalar(select(UsuarioModel).where(UsuarioModel.correo == "new@solventa.co"))
+            is None
+        )
+        assert session.scalar(select(func.count()).select_from(ConsentModel)) == 0
+        assert session.scalar(select(func.count()).select_from(ConsentEventModel)) == 0
 
 
 def test_valid_login_replay_refresh_and_revoke(encrypted_app: Flask) -> None:

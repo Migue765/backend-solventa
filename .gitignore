@@ -51,6 +51,9 @@ override.tf.json
 *_override.tf.json
 *.auto.tfvars
 secrets.tfvars
+terraform.tfvars
+backend.hcl
+*.tfvars.json
 
 # Python
 .venv/

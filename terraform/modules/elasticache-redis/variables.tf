@@ -13,6 +13,12 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
+variable "existing_security_group_id" {
+  description = "SG precreado en red; null conserva la creacion legacy."
+  type        = string
+  default     = null
+}
+
 variable "allowed_security_group_ids" {
   description = "SGs que pueden conectarse al puerto 6379 (nodos EKS)."
   type        = list(string)
