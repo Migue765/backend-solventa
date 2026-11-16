@@ -1,0 +1,283 @@
+openapi: 3.1.0
+info:
+  title: Solventa deteccion de fraude interna
+  version: 1.0.0
+  description: >
+    Motor de deteccion de patrones sospechosos sobre siniestros (HU29, ASR-FRD-01).
+    Cada aviso registrado y cada evidencia confirmada se evaluan en linea contra las
+    reglas versionadas vigentes. Un resultado sospechoso se enruta a revision humana
+    priorizada y deja el siniestro en_revision; si el motor falla se aplica la politica
+    de continuidad configurada (FRAUDE_POLITICA_CONTINUIDAD) y se audita el incidente
+    sin interrumpir el registro del aviso.
+servers:
+  - url: /internal/v1
+paths:
+  /reglas-fraude:
+    post:
+      operationId: registrarVersionReglaFraude
+      description: >
+        Registra una version inmutable de regla. Repetir el mismo contenido responde 200;
+        reutilizar la version con otro contenido responde 409 version_regla_conflictiva.
+        Se aplica la mayor version vigente de cada regla.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Regla"}
+      responses:
+        "201": {$ref: "#/components/responses/ReglaRegistrada"}
+        "200": {$ref: "#/components/responses/ReglaRegistrada"}
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/deteccion-fraude:
+    parameters:
+      - name: siniestroId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: detectarPatronSospechoso
+      description: >
+        Reevalua el siniestro con sus senales calculadas y senales externas opcionales.
+        Las senales calculadas por el servicio son reservadas (422 senal_reservada). Si
+        senales y reglas no cambiaron desde la ultima evaluacion, la devuelve sin crear
+        otra. Responde 503 motor_fraude_no_disponible solo si tampoco se pudo persistir
+        la politica de continuidad.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                senales:
+                  type: object
+                  maxProperties: 50
+                  propertyNames: {pattern: '^[a-z][a-z0-9_]{0,59}$'}
+                  additionalProperties: {type: number}
+      responses:
+        "200": {$ref: "#/components/responses/Evaluacion"}
+        default: {$ref: "#/components/responses/Problema"}
+    get:
+      operationId: consultarDeteccionFraude
+      description: Ultima evaluacion registrada del siniestro con su explicacion.
+      security: [{internalToken: []}]
+      responses:
+        "200": {$ref: "#/components/responses/Evaluacion"}
+        default: {$ref: "#/components/responses/Problema"}
+  /revision-fraude/pendientes:
+    post:
+      operationId: listarRevisionFraudePendiente
+      description: >
+        Cola de revision humana ordenada por prioridad, puntaje y antiguedad, con el
+        contexto del siniestro y la evaluacion que la origino.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limite: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        "200":
+          description: Casos pendientes de revision
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [casos]
+                properties:
+                  casos:
+                    type: array
+                    items: {$ref: "#/components/schemas/CasoRevision"}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  schemas:
+    Regla:
+      type: object
+      additionalProperties: false
+      required: [reglaId, version, nombre, motivo, senal, operador, umbral, peso, vigenteDesde]
+      properties:
+        reglaId: {type: string, format: uuid}
+        version: {type: integer, minimum: 1}
+        nombre: {type: string, minLength: 1, maxLength: 100}
+        motivo: {type: string, minLength: 10, maxLength: 300}
+        senal:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,59}$'
+          description: >
+            Senal calculada (horas_reporte_tras_evento, siniestros_cliente_90_dias,
+            siniestros_poliza_30_dias, evidencias_confirmadas, evidencias_duplicadas,
+            evidencias_sin_ubicacion) o externa enviada en la deteccion manual.
+        operador: {enum: [gt, gte, lt, lte, eq]}
+        umbral: {type: number}
+        peso: {type: integer, minimum: 1, maximum: 100}
+        vigenteDesde: {type: string, format: date-time}
+        vigenteHasta:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    Evaluacion:
+      type: object
+      additionalProperties: false
+      required:
+        - evaluacionId
+        - siniestroId
+        - resultado
+        - accion
+        - bloqueado
+        - puntaje
+        - prioridad
+        - motivo
+        - senales
+        - evidencia
+        - reglas
+        - versionMotor
+        - politicaContinuidad
+        - incidente
+        - duracionMs
+        - dentroDePresupuesto
+        - origen
+        - correlationId
+        - evaluadaEn
+      properties:
+        evaluacionId: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        resultado: {enum: [sospechoso, legitimo, indeterminado]}
+        accion: {enum: [revision_humana, continuar]}
+        bloqueado:
+          type: boolean
+          description: Verdadero cuando el caso quedo retenido para revision humana.
+        puntaje: {type: integer, minimum: 0, maximum: 100}
+        prioridad:
+          oneOf:
+            - {enum: [alta, media, baja]}
+            - {type: "null"}
+        motivo: {type: string}
+        senales:
+          type: object
+          additionalProperties: {type: string}
+        evidencia:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [reglaId, version, senal, valor, operador, umbral, peso, motivo]
+            properties:
+              reglaId: {type: string, format: uuid}
+              version: {type: integer, minimum: 1}
+              senal: {type: string}
+              valor: {type: string}
+              operador: {enum: [gt, gte, lt, lte, eq]}
+              umbral: {type: string}
+              peso: {type: integer, minimum: 1, maximum: 100}
+              motivo: {type: string}
+        reglas:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [reglaId, version, nombre, activada]
+            properties:
+              reglaId: {type: string, format: uuid}
+              version: {type: integer, minimum: 1}
+              nombre: {type: string}
+              activada: {type: boolean}
+        versionMotor: {type: string}
+        politicaContinuidad:
+          oneOf:
+            - {enum: [revision_humana, continuar]}
+            - {type: "null"}
+        incidente:
+          oneOf:
+            - {type: string}
+            - {type: "null"}
+        duracionMs: {type: integer, minimum: 0}
+        dentroDePresupuesto: {type: boolean}
+        origen: {enum: [registro, evidencia, manual]}
+        correlationId: {type: string, format: uuid}
+        evaluadaEn: {type: string, format: date-time}
+    CasoRevision:
+      type: object
+      additionalProperties: false
+      required: [casoId, prioridad, puntaje, estado, creadoEn, siniestro, evaluacion]
+      properties:
+        casoId: {type: string, format: uuid}
+        prioridad: {enum: [alta, media, baja]}
+        puntaje: {type: integer, minimum: 0, maximum: 100}
+        estado: {const: pendiente}
+        creadoEn: {type: string, format: date-time}
+        siniestro:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - clienteId
+            - polizaId
+            - tipo
+            - estado
+            - tipoEvento
+            - fechaEvento
+            - lugar
+            - descripcion
+            - reportadoEn
+            - evidenciasConfirmadas
+          properties:
+            id: {type: string, format: uuid}
+            clienteId: {type: string, format: uuid}
+            polizaId: {type: string, format: uuid}
+            tipo:
+              oneOf:
+                - {type: string}
+                - {type: "null"}
+            estado: {type: string}
+            tipoEvento: {type: string}
+            fechaEvento: {type: string, format: date-time}
+            lugar: {type: string}
+            descripcion: {type: string}
+            reportadoEn: {type: string, format: date-time}
+            evidenciasConfirmadas: {type: integer, minimum: 0}
+        evaluacion: {$ref: "#/components/schemas/Evaluacion"}
+    Problema:
+      type: object
+      required: [type, title, status, code, correlationId]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}
+  responses:
+    ReglaRegistrada:
+      description: Version de regla durable
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [reglaId, version, nombre, creadaEn]
+            properties:
+              reglaId: {type: string, format: uuid}
+              version: {type: integer, minimum: 1}
+              nombre: {type: string}
+              creadaEn: {type: string, format: date-time}
+    Evaluacion:
+      description: Evaluacion explicable del motor de fraude
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Evaluacion"}
+    Problema:
+      description: Rechazo seguro
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}
