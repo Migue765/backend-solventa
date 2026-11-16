@@ -1,14 +1,21 @@
-from datetime import UTC, datetime, timedelta
+import json
+from datetime import UTC, date, datetime, timedelta
+from io import BytesIO
+from typing import Any
+from urllib.request import Request
 from uuid import UUID, uuid4
 
+import pytest
+from cotizacion.infrastructure import publicador_notificaciones
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
     OutboxEventoModel,
     SuscripcionModel,
 )
 from cotizacion.infrastructure.publicador_notificaciones import (
-    PaymentNotification,
-    PaymentNotificationPublisher,
+    NotificationHttpSender,
+    OutboxNotification,
+    OutboxNotificationPublisher,
 )
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -17,9 +24,9 @@ from sqlalchemy.orm import Session, sessionmaker
 class FakeSender:
     def __init__(self, result: bool) -> None:
         self.result = result
-        self.sent: list[PaymentNotification] = []
+        self.sent: list[OutboxNotification] = []
 
-    def send(self, notification: PaymentNotification) -> bool:
+    def send(self, notification: OutboxNotification) -> bool:
         self.sent.append(notification)
         return self.result
 
@@ -67,7 +74,7 @@ def seed_payment_event(
 def test_publishes_confirmed_payment_once(database_url: str) -> None:
     sessions, event_id, expected = seed_payment_event(database_url)
     sender = FakeSender(True)
-    publisher = PaymentNotificationPublisher(sessions, sender)
+    publisher = OutboxNotificationPublisher(sessions, sender)
     published_at = expected[2] + timedelta(seconds=5)
 
     assert publisher.publish_one(published_at) is True
@@ -76,7 +83,9 @@ def test_publishes_confirmed_payment_once(database_url: str) -> None:
     assert len(sender.sent) == 1
     notification = sender.sent[0]
     assert notification.event_id == event_id
-    assert (notification.client_id, notification.payment_id, notification.occurred_at) == expected
+    assert (notification.client_id, notification.resource_id, notification.occurred_at) == expected
+    assert (notification.event_type, notification.resource_type) == ("pago_confirmado", "pago")
+    assert notification.end_date is None
     with sessions() as session:
         event = session.get(OutboxEventoModel, event_id)
         assert event is not None
@@ -87,7 +96,7 @@ def test_publishes_confirmed_payment_once(database_url: str) -> None:
 def test_failed_publish_retries_with_same_event_id(database_url: str) -> None:
     sessions, event_id, _ = seed_payment_event(database_url)
     sender = FakeSender(False)
-    publisher = PaymentNotificationPublisher(sessions, sender)
+    publisher = OutboxNotificationPublisher(sessions, sender)
 
     assert publisher.publish_one(datetime.now(UTC)) is False
     sender.result = True
@@ -101,3 +110,94 @@ def test_failed_publish_retries_with_same_event_id(database_url: str) -> None:
         assert event is not None
         assert event.intentos == 2
         assert event.publicado_en is not None
+
+
+def add_policy_event(
+    sessions: sessionmaker[Session], subscription_payment_event: UUID, payload: dict[str, Any]
+) -> UUID:
+    event_id = uuid4()
+    with sessions() as session, session.begin():
+        payment = session.get(OutboxEventoModel, subscription_payment_event)
+        assert payment is not None
+        session.add(
+            OutboxEventoModel(
+                evento_id=event_id,
+                tipo="PolizaAcademicaEmitida",
+                agregado_id=payment.agregado_id,
+                payload=payload,
+                creado_en=payment.creado_en + timedelta(seconds=1),
+                publicado_en=None,
+                intentos=0,
+            )
+        )
+    return event_id
+
+
+def test_publishes_issued_policy_with_end_date_and_skips_legacy_events(
+    database_url: str,
+) -> None:
+    sessions, payment_event, (client_id, _, now) = seed_payment_event(database_url)
+    policy_id = uuid4()
+    legacy = add_policy_event(sessions, payment_event, {"polizaId": str(uuid4()), "simulada": True})
+    issued = add_policy_event(
+        sessions,
+        payment_event,
+        {"polizaId": str(policy_id), "fechaFin": "2026-04-09", "simulada": True},
+    )
+    sender = FakeSender(True)
+    publisher = OutboxNotificationPublisher(sessions, sender)
+
+    while publisher.publish_one(now):
+        pass
+
+    assert [item.event_id for item in sender.sent] == [payment_event, issued]
+    policy = sender.sent[1]
+    assert policy == OutboxNotification(
+        issued,
+        "poliza_emitida",
+        client_id,
+        "poliza",
+        policy_id,
+        now + timedelta(seconds=1),
+        date(2026, 4, 9),
+    )
+    with sessions() as session:
+        stored = session.get(OutboxEventoModel, legacy)
+        assert stored is not None and stored.publicado_en is None
+
+
+def test_http_sender_maps_policy_event_to_notification_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[Request] = []
+    event_id = uuid4()
+
+    def fake_urlopen(request: Request, timeout: float) -> BytesIO:
+        captured.append(request)
+        response = BytesIO(json.dumps({"eventoId": str(event_id)}).encode())
+        response.status = 201  # type: ignore[attr-defined]
+        return response
+
+    monkeypatch.setattr(publicador_notificaciones, "urlopen", fake_urlopen)
+    notification = OutboxNotification(
+        event_id,
+        "poliza_emitida",
+        UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        "poliza",
+        UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        datetime(2026, 3, 10, 12, 0, tzinfo=UTC),
+        date(2026, 4, 9),
+    )
+
+    assert NotificationHttpSender("http://notificaciones/", "token").send(notification)
+
+    assert captured[0].full_url == "http://notificaciones/v1/eventos"
+    assert captured[0].data is not None
+    assert json.loads(captured[0].data) == {
+        "eventoId": str(event_id),
+        "tipo": "poliza_emitida",
+        "clienteId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "ocurridoEn": "2026-03-10T12:00:00Z",
+        "recurso": {"tipo": "poliza", "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+        "fechaFin": "2026-04-09",
+    }

@@ -6,7 +6,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from cotizacion.application.ports import ReservaEmision, ReservaPagoSimulado
+from cotizacion.application.ports import PolizaEmitida, ReservaEmision, ReservaPagoSimulado
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
@@ -86,7 +86,7 @@ class RepositorioPagosSqlAlchemy:
                 "fechasContratadas": fechas,
             }
 
-    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None:
+    def marcar_emitida(self, pago: PagoSimulado, poliza: PolizaEmitida) -> None:
         with self._sesiones.begin() as sesion:
             ahora = datetime.now(UTC)
             actualizada = sesion.scalar(
@@ -113,7 +113,11 @@ class RepositorioPagosSqlAlchemy:
                         evento_id=uuid4(),
                         tipo="PolizaAcademicaEmitida",
                         agregado_id=pago.suscripcion_id,
-                        payload={"polizaId": str(poliza_id), "simulada": True},
+                        payload={
+                            "polizaId": str(poliza.poliza_id),
+                            "fechaFin": poliza.fecha_fin.isoformat(),
+                            "simulada": True,
+                        },
                         creado_en=ahora,
                         intentos=0,
                     )

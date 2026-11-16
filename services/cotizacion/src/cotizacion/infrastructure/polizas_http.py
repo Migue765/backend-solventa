@@ -1,9 +1,11 @@
 import json
+from datetime import date
 from http.client import HTTPException
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+from cotizacion.application.ports import PolizaEmitida
 from cotizacion.domain.errors import ServicioPolizasNoDisponibleError
 
 
@@ -34,7 +36,7 @@ class PolizasHttp:
         except (OSError, HTTPException, ValueError) as error:
             raise ServicioPolizasNoDisponibleError() from error
 
-    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> UUID:
+    def emitir(self, evidencia: dict[str, object], correlation_id: str) -> PolizaEmitida:
         resultado = self._consultar("/v1/polizas", correlation_id, evidencia)
         try:
             if (
@@ -43,7 +45,9 @@ class PolizasHttp:
                 or resultado["tipo"] != evidencia["tipo"]
             ):
                 raise ValueError("La poliza no corresponde al pago.")
-            return UUID(str(resultado["id"]))
+            return PolizaEmitida(
+                UUID(str(resultado["id"])), date.fromisoformat(str(resultado["fechaFin"]))
+            )
         except (KeyError, ValueError, TypeError) as error:
             raise ServicioPolizasNoDisponibleError() from error
 
