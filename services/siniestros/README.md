@@ -364,6 +364,38 @@ El trabajador continuo se ejecuta por separado:
 python -m siniestros.payment_worker --limit 100
 ```
 
+## HU27: aprobar o enrutar siniestro (SOL-179)
+
+El contrato es `contracts/openapi/siniestros-decisiones-internal-v1.yaml`. La evaluacion
+automatica (HU26/SOL-178) entrega su resultado por
+`POST /internal/v1/siniestros/{id}/decisiones/automatica` o en proceso con
+`ServicioDecisiones.decidir_automaticamente`; HU27 no depende de sus tablas.
+
+Politica vigente `decision-siniestros` v1, en orden de precedencia:
+
+1. Fraude bloqueante o nivel `alto`: nunca se aprueba; pasa a `en_revision` en la cola `fraude`.
+2. `requiereInspeccion`: pasa a `en_inspeccion` asignado al `peritoId` o a la cola `inspeccion`.
+3. `requiereRevisionHumana`, fraude `medio` o no elegible: `en_revision` en la cola `revision`.
+4. En otro caso se aprueba automaticamente.
+
+La maquina de estados (`siniestros.domain.decision.TRANSICIONES`) exige
+`reportado -> en_evaluacion -> {aprobado | en_revision | en_inspeccion | rechazado}`.
+Si el resultado llega con el siniestro aun en `reportado`, se registra explicitamente el
+paso `en_evaluacion`; cualquier atajo responde 409 `transicion_no_permitida`. Un perito o
+analista resuelve los casos enrutados con
+`POST /internal/v1/siniestros/{id}/decisiones/revision` (`Idempotency-Key` obligatorio),
+lo que cierra la asignacion activa.
+
+Cada decision guarda reglas de evaluacion y de politica, resultado, actor (`sistema` o
+`revisor` con UUID), fecha, motivo, transiciones y correlacion en `decisiones_siniestro`;
+las asignaciones viven en `asignaciones_siniestro` y el historial del cliente se actualiza.
+El reintento con el mismo `evaluacionId` (o la misma `Idempotency-Key`) devuelve 200 con la
+decision existente sin duplicar aprobacion ni asignacion; con otro contenido responde 409
+`idempotencia_conflictiva`. Las bandejas se consultan con
+`GET /internal/v1/colas-revision/{cola}/asignaciones` y
+`GET /internal/v1/peritos/{peritoId}/asignaciones`; la auditoria del caso con
+`GET /internal/v1/siniestros/{id}/decisiones`.
+
 ## Errores
 
 | HTTP | `code` |
@@ -371,8 +403,8 @@ python -m siniestros.payment_worker --limit 100
 | 400 | `solicitud_invalida`, `carga_interrumpida` |
 | 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno), `fuente_no_autorizada` |
 | 403 | `alcance_insuficiente` |
-| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada` |
-| 409 | `idempotencia_conflictiva`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
+| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada` |
+| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
 | 411 | `longitud_requerida` |
 | 413 | `limite_tamano` |
 | 415 | `formato_no_permitido` |
