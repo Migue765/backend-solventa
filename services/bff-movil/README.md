@@ -33,6 +33,8 @@ El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 | `PUT`    | `/movil/v1/notificaciones/preferencias` | Sí | Actualiza preferencias por tipo y canal      |
 | `POST`   | `/movil/v1/prestadores/consulta` | Sí | Consulta prestadores cercanos con ubicación confirmada |
 | `POST`   | `/movil/v1/asistencias` | Sí | Registra una asistencia idempotente |
+| `GET`    | `/movil/v1/polizas/{polizaId}/renovacion` | Sí | Consulta elegibilidad y condiciones de renovación |
+| `POST`   | `/movil/v1/polizas/{polizaId}/renovaciones` | Sí | Acepta y paga la renovación de forma idempotente |
 | `GET`    | `/ping`                        | No     | Comprueba disponibilidad                           |
 
 El access token dura 1 hora y el refresh token es opaco, de un solo uso y rota en cada
@@ -74,6 +76,18 @@ servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
 `Idempotency-Key` al registrar. Requieren `ASISTENCIAS_SERVICE_URL` e
 `INTERNAL_API_TOKEN`; una caída interna devuelve 503 y no simula un registro.
 
+## Renovación de pólizas
+
+`GET /movil/v1/polizas/{polizaId}/renovacion` y `POST /movil/v1/polizas/{polizaId}/renovaciones`
+exponen la renovación central del servicio de Pólizas (HU39/SOL-320 sobre SOL-317); el BFF no
+evalúa reglas propias. Exigen JWT del canal móvil con rol y scope `cliente`, derivan
+`X-Cliente-ID` del token y reenvían `Idempotency-Key`. La consulta devuelve nueva vigencia,
+coberturas, prima, condiciones y `condicionesHash`; la confirmación exige
+`aceptaCondiciones: true` con ese hash. `201` es un resultado definitivo (`renovada` o
+`rechazada`), `200` un reintento con la misma clave sin nuevo cobro y `202` una renovación
+`pendiente` identificable por `id`. Ante `503` la app debe reintentar con la misma clave.
+Requieren `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`; sin configuración responden 503.
+
 ## Configuración de identidad
 
 | Variable                    | Default                                    | Descripción                    |
@@ -85,6 +99,7 @@ servicio de Asistencias. El BFF deriva `X-Cliente-ID` del JWT y reenvía
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                                        | Timeout hacia identidad y JWKS |
 | `NOTIFICACIONES_SERVICE_URL` | vacía                                      | URL interna de Notificaciones  |
 | `ASISTENCIAS_SERVICE_URL`     | vacía                                      | URL interna de Asistencias     |
+| `POLIZAS_SERVICE_URL`         | vacía                                      | URL interna de Pólizas         |
 | `INTERNAL_API_TOKEN`         | vacía                                      | Credencial entre servicios     |
 
 ## Ejecución
