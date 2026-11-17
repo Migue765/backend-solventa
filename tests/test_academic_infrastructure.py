@@ -784,7 +784,7 @@ def test_mobile_bff_reaches_new_services_with_shared_internal_token() -> None:
 
 
 @pytest.mark.parametrize("service", ["notificaciones", "asistencias"])
-def test_new_services_read_runtime_secret_and_migrate_with_same_url(service: str) -> None:
+def test_new_services_read_runtime_secret_and_migrate_with_separate_role(service: str) -> None:
     variable = f"{service.upper()}_DATABASE_URL"
     reference = {"secretKeyRef": {"name": f"{service}-runtime", "key": variable}}
     deployment = yaml.safe_load((K8S / service / "deployment.yaml").read_text(encoding="utf-8"))
@@ -797,7 +797,13 @@ def test_new_services_read_runtime_secret_and_migrate_with_same_url(service: str
     }
     migration = job["spec"]["template"]["spec"]["containers"][0]
     assert migration["command"] == ["alembic", "upgrade", "head"]
-    assert migration["env"] == [{"name": variable, "valueFrom": reference}]
+    assert migration["env"] == [
+        {"name": "DB_RUNTIME_ROLE", "value": f"{service}_runtime"},
+        {
+            "name": variable,
+            "valueFrom": {"secretKeyRef": {"name": f"{service}-migrator", "key": variable}},
+        },
+    ]
     assert job["metadata"]["name"] == f"{service}-migrate-${{MIGRATION_ID}}"
     migrations = (ROOT / "services" / service / "migrations" / "env.py").read_text(encoding="utf-8")
     assert f'os.environ["{variable}"]' in migrations

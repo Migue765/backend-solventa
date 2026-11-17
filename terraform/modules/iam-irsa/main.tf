@@ -84,10 +84,13 @@ resource "aws_iam_role" "service" {
 }
 
 data "aws_iam_policy_document" "service" {
-  statement {
-    sid       = "ReadDbSecret"
-    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-    resources = [var.db_secret_arn]
+  dynamic "statement" {
+    for_each = var.db_secret_arn == null ? [] : [var.db_secret_arn]
+    content {
+      sid       = "ReadDbSecret"
+      actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      resources = [statement.value]
+    }
   }
 
   statement {

@@ -27,10 +27,12 @@ spec:
           workingDir: /app
           command: ["alembic", "upgrade", "head"]
           env:
+            - name: DB_RUNTIME_ROLE
+              value: cotizacion_runtime
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: cotizacion-db
+                  name: cotizacion-migrator
                   key: DATABASE_URL
           resources:
             requests:
