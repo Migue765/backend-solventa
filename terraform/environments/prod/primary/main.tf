@@ -176,6 +176,7 @@ module "api_gateway" {
   tls_server_name          = var.api_tls_server_name
   throttling_rate_limit    = var.api_throttling_rate_limit
   throttling_burst_limit   = var.api_throttling_burst_limit
+  jwt_routes_enabled       = var.api_jwt_routes_enabled
   jwt_audience             = var.jwt_audience
   cors_allowed_origins     = var.cors_allowed_origins
   tags                     = local.tags

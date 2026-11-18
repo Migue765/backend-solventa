@@ -50,7 +50,7 @@ run "preflight_routes_do_not_require_jwt" {
       aws_apigatewayv2_route.v1_options.route_key == "OPTIONS /v1/{proxy+}" &&
       aws_apigatewayv2_route.v1_options.authorization_type == "NONE" &&
       aws_apigatewayv2_route.v1_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
-      aws_apigatewayv2_route.v1.authorization_type == "JWT"
+      aws_apigatewayv2_route.v1[0].authorization_type == "JWT"
     )
     error_message = "El preflight web debe ser publico sin quitar JWT de las demas solicitudes."
   }
@@ -60,7 +60,7 @@ run "preflight_routes_do_not_require_jwt" {
       aws_apigatewayv2_route.movil_options.route_key == "OPTIONS /movil/{proxy+}" &&
       aws_apigatewayv2_route.movil_options.authorization_type == "NONE" &&
       aws_apigatewayv2_route.movil_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
-      aws_apigatewayv2_route.movil.authorization_type == "JWT"
+      aws_apigatewayv2_route.movil[0].authorization_type == "JWT"
     )
     error_message = "El preflight movil debe ser publico sin quitar JWT de las demas solicitudes."
   }
@@ -92,7 +92,7 @@ run "evidence_preflight_keeps_gateway_security" {
   }
 
   assert {
-    condition     = aws_apigatewayv2_route.v1.authorization_type == "JWT" && aws_apigatewayv2_route.movil.authorization_type == "JWT"
+    condition     = aws_apigatewayv2_route.v1[0].authorization_type == "JWT" && aws_apigatewayv2_route.movil[0].authorization_type == "JWT"
     error_message = "Las rutas web y movil deben seguir protegidas por JWT."
   }
 }

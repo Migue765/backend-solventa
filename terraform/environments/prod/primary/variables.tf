@@ -363,6 +363,13 @@ variable "identidad_release_tag_patterns" {
   default     = ["identidad-v*"]
 }
 
+variable "api_jwt_routes_enabled" {
+  description = "False solo para completar PRIMARY antes de servir discovery real; omite authorizer y proxies protegidos. Restaurar true antes del cutover."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "jwt_audience" {
   description = "Audiencia (claim aud) de los access tokens; el authorizer del API Gateway la exige."
   type        = string

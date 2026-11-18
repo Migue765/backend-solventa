@@ -131,6 +131,13 @@ variable "identidad_path_patterns" {
   }
 }
 
+variable "jwt_routes_enabled" {
+  description = "Crear authorizer y proxies JWT. False solo durante el arranque sin discovery: las rutas protegidas no existen, nunca se hacen publicas."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "jwt_audience" {
   description = "Audiencia (claim aud) que el authorizer JWT exige a los access tokens."
   type        = string

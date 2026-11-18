@@ -27,6 +27,39 @@ Cliente --> API Gateway (HTTP API) --VPC Link--> ALB interno --> EKS (pods cotiz
 El [runbook de arranque vacio](../../../../deploy/k8s/ARRANQUE-VACIO.md)
 detalla Secrets/DSN, orden de las nueve APIs, readiness, cutover y rollback.
 
+### Primer arranque del authorizer JWT
+
+API Gateway valida discovery al crear el authorizer. Si el issuer es la URL
+del mismo API, el primer PRIMARY no puede depender de Identidad todavia no
+desplegada. `api_jwt_routes_enabled` conserva `true` por defecto. Solo para ese
+arranque, una sobreescritura privada explicita `false` omite el authorizer y los
+proxies `ANY /v1/{proxy+}` y `ANY /movil/{proxy+}`: no los convierte a `NONE`.
+Las rutas publicas existentes (incluidos discovery/JWKS) y el issuer no cambian;
+no se agrega ninguna ruta publica de negocio ni fallback.
+
+Orden para el operador autorizado, con planes nuevos revisados en cada fase:
+
+1. Completar PRIMARY con `api_jwt_routes_enabled = false`, sin `-target`, manteniendo
+   los TargetGroupBindings de ambos BFF ausentes. No usar `false` sobre una API
+   activa: retiraria sus proxies protegidos y cortaria el acceso de negocio.
+2. Completar ADDONS, Secrets/roles y Jobs; desplegar Identidad con su clave JWT
+   y `JWT_ISSUER`/`JWT_AUDIENCE` de los outputs del mismo PRIMARY. Preparar su
+   Service/TargetGroupBinding y readiness, sin publicar los bindings BFF.
+3. Comprobar por HTTPS valido `GET {jwt_issuer}/.well-known/openid-configuration`:
+   respuesta real de Identidad, `issuer` exactamente igual al output (sin barra
+   final), `jwks_uri` del mismo issuer y JWKS accesible con la clave publica
+   esperada. No sustituir issuer, TLS ni respuestas por una simulacion.
+4. Restaurar explicitamente `api_jwt_routes_enabled = true`, preparar/revisar un
+   nuevo plan PRIMARY sobre su mismo state y aplicar solo tras aprobacion. Debe
+   agregar el authorizer y ambos proxies con JWT, conservando el API/issuer.
+   Los bloques `moved` conservan direcciones de recursos preexistentes.
+5. Mantener el gate JWE/Redis privado de Identidad y BFF y comprobarlo antes de
+   publicar sus TargetGroupBindings. Tras el cutover, comprobar denegacion sin
+   token y con token invalido, y acceso autenticado con issuer/audience reales.
+
+Terraform no acredita la disponibilidad remota del discovery en pruebas offline.
+Si el paso 3 falla, detener la activacion: no desproteger rutas para continuar.
+
 ### Gate IAM: boundary externa pendiente de diseno y aprobacion
 
 `permissions_boundary_arns` es un objeto obligatorio con tres managed policy ARN

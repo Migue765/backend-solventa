@@ -383,8 +383,10 @@ resource "aws_apigatewayv2_integration" "alb" {
 
 # Validador JWT nativo del HTTP API. El emisor es la propia URL del API: el gateway descarga
 # {issuer}/.well-known/openid-configuration y el JWKS (rutas publicas hacia identidad, mas abajo).
-# Si identidad no sirve el discovery, TODAS las rutas protegidas responden 401.
+# El alta exige discovery disponible; el arranque difiere authorizer Y proxies, nunca su JWT.
 resource "aws_apigatewayv2_authorizer" "jwt" {
+  count = var.jwt_routes_enabled ? 1 : 0
+
   api_id           = aws_apigatewayv2_api.this.id
   authorizer_type  = "JWT"
   identity_sources = ["$request.header.Authorization"]
@@ -398,19 +400,38 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
 
 # ---- Rutas protegidas: exigen un access token valido ------------------------------------------
 resource "aws_apigatewayv2_route" "v1" {
+  count = var.jwt_routes_enabled ? 1 : 0
+
   api_id             = aws_apigatewayv2_api.this.id
   route_key          = "ANY /v1/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
   authorization_type = "JWT"
-  authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
+  authorizer_id      = aws_apigatewayv2_authorizer.jwt[0].id
 }
 
 resource "aws_apigatewayv2_route" "movil" {
+  count = var.jwt_routes_enabled ? 1 : 0
+
   api_id             = aws_apigatewayv2_api.this.id
   route_key          = "ANY /movil/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
   authorization_type = "JWT"
-  authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
+  authorizer_id      = aws_apigatewayv2_authorizer.jwt[0].id
+}
+
+moved {
+  from = aws_apigatewayv2_authorizer.jwt
+  to   = aws_apigatewayv2_authorizer.jwt[0]
+}
+
+moved {
+  from = aws_apigatewayv2_route.v1
+  to   = aws_apigatewayv2_route.v1[0]
+}
+
+moved {
+  from = aws_apigatewayv2_route.movil
+  to   = aws_apigatewayv2_route.movil[0]
 }
 
 # Las rutas OPTIONS evitan que los proxies JWT bloqueen el preflight de CORS.
