@@ -530,8 +530,11 @@ components:
           type: string
           maxLength: 2048
     ResumenPoliza:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PolizaBase"
+    PolizaBase:
       type: object
-      additionalProperties: false
       required: [id, numero, producto, estado, vigencia, coberturaPrincipal, simulada]
       properties:
         id:
@@ -600,8 +603,9 @@ components:
         incluida:
           type: boolean
     DetallePoliza:
+      unevaluatedProperties: false
       allOf:
-        - $ref: "#/components/schemas/ResumenPoliza"
+        - $ref: "#/components/schemas/PolizaBase"
         - type: object
           required:
             [suscripcionId, emitidaEn, version, plan, coberturas, prima, condiciones, consultadaEn]
