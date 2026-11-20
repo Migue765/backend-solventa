@@ -56,3 +56,15 @@ def test_session_and_storage_settings_no_longer_exist(monkeypatch: pytest.Monkey
 
     for removed in ("database_url", "redis_url", "session_cookie_name", "cors_allowed_origins"):
         assert not hasattr(config, removed)
+
+
+def test_simulated_identity_requires_explicit_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IDENTIDAD_URL", "http://identidad")
+    monkeypatch.setenv("JWT_ISSUER", "https://iss")
+    monkeypatch.delenv("IDENTIDAD_SIMULADA_ENABLED", raising=False)
+    assert Config.from_environment().simulated_identity_enabled is False
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_ENABLED", "true")
+    assert Config.from_environment().simulated_identity_enabled is True
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_ENABLED", "demo")
+    with pytest.raises(ValueError, match="IDENTIDAD_SIMULADA_ENABLED"):
+        Config.from_environment()

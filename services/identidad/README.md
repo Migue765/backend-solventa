@@ -239,3 +239,9 @@ export JWT_PRIVATE_KEY="$(cat /tmp/identidad.pem)"
 alembic upgrade head
 flask --app identidad.app run --port 8080
 ```
+
+## Demostracion de identidad
+
+La verificacion simulada post-login (deshabilitada por defecto) se documenta en
+[`docs/identidad-simulada.md`](../../docs/identidad-simulada.md).
+No acredita KYC/prueba de vida ni recibe fotos o documentos reales.
