@@ -19,10 +19,12 @@ spec:
           image: ${IMAGE}
           command: ["alembic", "upgrade", "head"]
           env:
+            - name: DB_RUNTIME_ROLE
+              value: notificaciones_runtime
             - name: NOTIFICACIONES_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: notificaciones-runtime
+                  name: notificaciones-migrator
                   key: NOTIFICACIONES_DATABASE_URL
           resources:
             requests:

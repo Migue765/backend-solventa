@@ -23,6 +23,10 @@ from siniestros.domain.parametricos import (
 )
 from siniestros.infrastructure.decisiones import ServicioDecisiones
 from siniestros.infrastructure.fraude import MotorFraude
+from siniestros.infrastructure.notificaciones import (
+    EnviadorNotificacionesHttp,
+    PublicadorNotificaciones,
+)
 from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
 from siniestros.infrastructure.reportes import ConsultaReporte, RepositorioReportes
@@ -53,6 +57,15 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
     app.extensions["motor_fraude"] = motor_fraude
     registrar_rutas_fraude(app, motor_fraude)
     reportes = RepositorioReportes(repo.sessions)
+    notificaciones = (
+        PublicadorNotificaciones(
+            repo.sessions,
+            EnviadorNotificacionesHttp(config.notifications_url, config.internal_token),
+        )
+        if config.notifications_url
+        else None
+    )
+    app.extensions["notificaciones_publisher"] = notificaciones
 
     @app.before_request
     def authorize() -> None:
@@ -206,6 +219,14 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
             return jsonify(reportes.consultar(entrada.corte, datetime.now(UTC)))
         except ValueError as error:
             raise Problem(400, "solicitud_invalida") from error
+
+    @app.post("/internal/v1/notificaciones/publicacion")
+    def publicar_notificaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        publicador = app.extensions["notificaciones_publisher"]
+        if publicador is None:
+            raise Problem(503, "notificaciones_no_configuradas")
+        return jsonify(publicador.publicar(entrada.limite))
 
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:

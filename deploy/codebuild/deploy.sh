@@ -161,6 +161,7 @@ if [ "$SERVICE_NAME" = "siniestros" ]; then
       exit 1
     fi
   done
+  envsubst < "${K8S_DIR}/notificaciones-cronjob.yaml" | kubectl apply -f -
 fi
 
 echo "Despliegue de ${IMAGE} completado."

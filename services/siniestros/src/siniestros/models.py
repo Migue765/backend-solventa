@@ -236,3 +236,24 @@ class ParametricPaymentEffect(Base):
     huella: Mapped[str] = mapped_column(String(64))
     resultado: Mapped[str] = mapped_column(String(20))
     evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationOutbox(Base):
+    __tablename__ = "outbox_notificaciones"
+    __table_args__ = (
+        CheckConstraint("tipo IN ('siniestro_estado_cambiado', 'pago_parametrico_ejecutado')"),
+        CheckConstraint("intentos >= 0"),
+        Index("ix_outbox_notificaciones_pendientes", "publicado_en", "creado_en"),
+    )
+
+    evento_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tipo: Mapped[str] = mapped_column(String(50))
+    cliente_id: Mapped[str] = mapped_column(String(36))
+    recurso_tipo: Mapped[str] = mapped_column(String(20))
+    recurso_id: Mapped[str] = mapped_column(String(36))
+    estado: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    ocurrido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    publicado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    intentos: Mapped[int] = mapped_column(Integer, default=0)
+    ultimo_error: Mapped[str | None] = mapped_column(String(100), nullable=True)

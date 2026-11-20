@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from siniestros import media
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput, now
 from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.infrastructure.notificaciones import registrar_outbox
 from siniestros.infrastructure.repositorio import validar
 from siniestros.models import Audit, Claim, Upload
 from siniestros.policies import policies
@@ -97,6 +98,7 @@ class Repository:
         self.config = config
         self.engine = make_engine(config.database_url)
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
+        registrar_outbox(self.sessions)
         config.storage_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if config.storage_root.is_symlink():
             raise ValueError("Private storage cannot be a symbolic link.")

@@ -16,7 +16,7 @@ from siniestros.infrastructure.decisiones import (
     ServicioDecisiones,
 )
 from siniestros.infrastructure.models import CambioEstadoModel
-from siniestros.models import Audit, Claim
+from siniestros.models import Audit, Claim, NotificationOutbox
 from siniestros.repository import fingerprint
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -379,3 +379,25 @@ def test_servicio_en_proceso_para_la_evaluacion_automatica(app: Flask) -> None:
     assert status == 201
     assert registro["estadoNuevo"] == "en_revision"
     assert registro["asignacion"]["destino"] == "revision"
+
+
+def test_hu22_decision_encola_notificacion_por_cada_estado_visible(
+    app: Flask, client: FlaskClient
+) -> None:
+    siniestro_id = registrar(app)
+    datos = evaluacion(requiereInspeccion=True)
+
+    assert decidir(client, siniestro_id, datos).status_code == 201
+    assert decidir(client, siniestro_id, datos).status_code == 200
+
+    with Session(app.extensions["siniestros_engine"]) as session:
+        eventos = session.scalars(
+            select(NotificationOutbox).order_by(NotificationOutbox.ocurrido_en)
+        ).all()
+        assert sorted(evento.estado or "" for evento in eventos) == [
+            "en_evaluacion",
+            "en_inspeccion",
+        ]
+        assert {evento.tipo for evento in eventos} == {"siniestro_estado_cambiado"}
+        assert {evento.recurso_id for evento in eventos} == {str(siniestro_id)}
+        assert all(evento.publicado_en is None for evento in eventos)

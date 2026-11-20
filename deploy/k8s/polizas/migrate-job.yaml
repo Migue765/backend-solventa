@@ -19,10 +19,12 @@ spec:
           image: ${IMAGE}
           command: ["alembic", "upgrade", "head"]
           env:
+            - name: DB_RUNTIME_ROLE
+              value: polizas_runtime
             - name: POLIZAS_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: polizas-runtime
+                  name: polizas-migrator
                   key: POLIZAS_DATABASE_URL
           resources:
             requests:
