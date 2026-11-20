@@ -19,7 +19,7 @@ from cotizacion.infrastructure.persistence.models import (
     IntentoPagoSimuladoModel,
 )
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
-from cotizacion.infrastructure.publicador_notificaciones import PaymentNotificationPublisher
+from cotizacion.infrastructure.publicador_notificaciones import OutboxNotificationPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class ConciliadorEmision:
         resultado_pago: str,
         *,
         conciliar_emision: bool = True,
-        publicador_notificaciones: PaymentNotificationPublisher | None = None,
+        publicador_notificaciones: OutboxNotificationPublisher | None = None,
     ) -> None:
         self._sesiones = crear_sesiones(
             database_url, pool_size=1, max_overflow=0, limitar_esperas=True

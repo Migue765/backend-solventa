@@ -38,8 +38,9 @@ variable "service_account_name" {
 }
 
 variable "db_secret_arn" {
-  description = "ARN del secreto de la base de datos."
+  description = "Lectura opcional de un secreto DB para consumidores existentes; null no concede acceso."
   type        = string
+  default     = null
 }
 
 variable "evidence_bucket_arn" {

@@ -10,7 +10,7 @@ def completar_emision_academica(
 ) -> bool:
     evidencia = repositorio.evidencia_emision(pago)
     if evidencia is not None:
-        poliza_id = polizas.emitir(evidencia, correlation_id)
-        repositorio.marcar_emitida(pago, poliza_id)
+        poliza = polizas.emitir(evidencia, correlation_id)
+        repositorio.marcar_emitida(pago, poliza)
         return True
     return False

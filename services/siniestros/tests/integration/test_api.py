@@ -15,7 +15,7 @@ from siniestros.domain import Config as ClaimsConfig
 from siniestros.infrastructure.models import Base, CambioEstadoModel
 from siniestros.models import Claim
 from siniestros.repository import fingerprint
-from sqlalchemy import update
+from sqlalchemy import inspect, update
 from sqlalchemy.orm import Session
 
 TOKEN = "siniestros-test-internal"
@@ -195,6 +195,23 @@ def test_fallo_persistencia_no_parece_historial_vacio(tmp_path: Path) -> None:
 def test_migracion_coincide_con_modelos(app: Flask) -> None:
     with app.extensions["siniestros_engine"].connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+
+
+@pytest.mark.parametrize("revision", ["0009_evaluacion_siniestros", "0009_indemnizaciones"])
+def test_actualiza_ambas_ramas_de_migraciones(tmp_path: Path, revision: str) -> None:
+    url = f"sqlite:///{tmp_path / 'siniestros.db'}"
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, revision)
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
+
+    app = create_app(ClaimsConfig(url, tmp_path / "evidencias", TOKEN, "http://polizas.test"))
+    with app.extensions["siniestros_engine"].connect() as connection:
+        context = MigrationContext.configure(connection)
+        assert context.get_current_heads() == ("0010_evaluacion_indemnizaciones",)
+        assert compare_metadata(context, Base.metadata) == []
+        assert len(inspect(connection).get_table_names()) == 24
 
 
 def test_latencia_de_consulta(app: Flask) -> None:

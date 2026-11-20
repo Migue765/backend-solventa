@@ -90,6 +90,18 @@ def create_app(
         }
         return jsonify(payload), 200 if duplicate else 201
 
+    @app.get("/v1/eventos/<uuid:event_id>/trazabilidad")
+    def trace_event(event_id: UUID) -> tuple[Response, int]:
+        trace = repository.trace(event_id)
+        if trace is None:
+            return problem(
+                404,
+                "evento_no_encontrado",
+                "Evento no encontrado",
+                "No existe un evento de notificación con ese identificador.",
+            ), 404
+        return jsonify(trace), 200
+
     @app.post("/v1/despachos")
     def dispatch() -> tuple[Response, int]:
         delivered = service.dispatch(active_clock(), limit=100)

@@ -22,8 +22,8 @@ TABLE_COUNTS = {
     "identidad": 10,
     "cotizacion": 20,
     "perfilamiento": 11,
-    "polizas": 1,
-    "siniestros": 14,
+    "polizas": 7,
+    "siniestros": 23,
     "notificaciones": 4,
     "asistencias": 3,
 }

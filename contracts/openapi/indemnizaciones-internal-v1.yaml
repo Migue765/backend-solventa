@@ -1,0 +1,233 @@
+openapi: 3.1.0
+info:
+  title: Solventa indemnizaciones internas
+  version: 1.0.0
+  description: >
+    HU28. Ordena y concilia la indemnizacion de un siniestro aprobado con clave de
+    idempotencia, intentos durables, proveedor simulado y trazabilidad auditable.
+    Los siniestros parametricos se pagan automaticamente por HU31 y no se aceptan aqui.
+servers:
+  - url: /internal/v1
+paths:
+  /siniestros/{siniestroId}/indemnizacion:
+    parameters:
+      - {$ref: "#/components/parameters/SiniestroId"}
+    post:
+      operationId: solicitarIndemnizacion
+      description: >
+        Persiste la orden antes del acuse. Solo acepta siniestros no parametricos en estado
+        aprobado con beneficiario y monto validos. Repetir la misma clave y el mismo cuerpo
+        devuelve la orden existente con 200; la misma clave con otro cuerpo responde 409
+        idempotencia_conflictiva y otra clave para el mismo siniestro responde 409
+        indemnizacion_existente. Cada siniestro tiene a lo sumo una indemnizacion.
+      security: [{internalToken: []}]
+      parameters:
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SolicitudIndemnizacion"}
+      responses:
+        "202":
+          description: Orden de pago aceptada y persistida
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Indemnizacion"}
+        "200":
+          description: Repeticion idempotente de una orden existente
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Indemnizacion"}
+        default: {$ref: "#/components/responses/Problema"}
+    get:
+      operationId: consultarIndemnizacion
+      description: Reconstruye la orden, sus intentos, referencias, resultado y auditoria.
+      security: [{internalToken: []}]
+      responses:
+        "200":
+          description: Indemnizacion asociada al siniestro
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Indemnizacion"}
+        default: {$ref: "#/components/responses/Problema"}
+  /indemnizaciones/procesamiento:
+    post:
+      operationId: procesarIndemnizaciones
+      description: >
+        Reserva ordenes pendientes con lease, consulta efectos previos del proveedor y
+        solo ejecuta cuando no existe un resultado. Una respuesta ambigua se reintenta con
+        backoff sin perder la operacion.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200": {$ref: "#/components/responses/LoteIndemnizaciones"}
+        default: {$ref: "#/components/responses/Problema"}
+  /indemnizaciones/conciliacion:
+    post:
+      operationId: conciliarIndemnizaciones
+      description: >
+        Converge intentos ambiguos o abandonados recuperando el efecto confirmado por el
+        proveedor antes de cualquier nueva ejecucion.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Limite"}
+      responses:
+        "200": {$ref: "#/components/responses/LoteIndemnizaciones"}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  parameters:
+    SiniestroId:
+      name: siniestroId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    Dinero:
+      type: object
+      additionalProperties: false
+      required: [monto, moneda]
+      properties:
+        monto: {type: string, pattern: '^[0-9]+(\.[0-9]{1,2})?$'}
+        moneda: {type: string, pattern: '^[A-Z]{3}$'}
+    SolicitudIndemnizacion:
+      type: object
+      additionalProperties: false
+      required: [beneficiarioId, indemnizacion]
+      properties:
+        beneficiarioId:
+          type: string
+          format: uuid
+          not: {const: 00000000-0000-0000-0000-000000000000}
+        indemnizacion: {$ref: "#/components/schemas/Dinero"}
+    Limite:
+      type: object
+      additionalProperties: false
+      properties:
+        limite: {type: integer, minimum: 1, maximum: 5000, default: 5000}
+    Indemnizacion:
+      type: object
+      additionalProperties: false
+      required:
+        - indemnizacionId
+        - siniestroId
+        - operacionId
+        - clienteId
+        - polizaId
+        - beneficiarioId
+        - indemnizacion
+        - estado
+        - referencia
+        - creadoEn
+        - finalizadoEn
+        - ultimoError
+        - intentos
+        - auditoria
+      properties:
+        indemnizacionId: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        operacionId: {type: string, format: uuid}
+        clienteId: {type: string, format: uuid}
+        polizaId: {type: string, format: uuid}
+        beneficiarioId: {type: string, format: uuid}
+        indemnizacion:
+          type: object
+          additionalProperties: false
+          required: [monto, moneda]
+          properties:
+            monto: {type: string, pattern: '^[0-9]+\.[0-9]{2}$'}
+            moneda: {type: string, pattern: '^[A-Z]{3}$'}
+        estado: {enum: [pendiente, confirmado, rechazado]}
+        referencia:
+          oneOf:
+            - {type: string, minLength: 1, maxLength: 100}
+            - {type: "null"}
+        creadoEn: {type: string, format: date-time}
+        finalizadoEn:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        ultimoError:
+          oneOf:
+            - {type: string}
+            - {type: "null"}
+        intentos:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [numero, estado, iniciadoEn, finalizadoEn, codigo, referencia]
+            properties:
+              numero: {type: integer, minimum: 1}
+              estado: {enum: [en_proceso, ambiguo, confirmado, rechazado]}
+              iniciadoEn: {type: string, format: date-time}
+              finalizadoEn:
+                oneOf:
+                  - {type: string, format: date-time}
+                  - {type: "null"}
+              codigo:
+                oneOf:
+                  - {type: string}
+                  - {type: "null"}
+              referencia:
+                oneOf:
+                  - {type: string}
+                  - {type: "null"}
+        auditoria:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [accion, resultado, correlationId, fecha]
+            properties:
+              accion:
+                enum: [indemnizacion.solicitud, indemnizacion.intento, indemnizacion.resultado]
+              resultado: {type: string}
+              correlationId: {type: string, format: uuid}
+              fecha: {type: string, format: date-time}
+    Problema:
+      type: object
+      required: [type, title, status, code, correlationId]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}
+  responses:
+    LoteIndemnizaciones:
+      description: Resultado del procesamiento o conciliacion
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [confirmados, rechazados, pendientes]
+            properties:
+              confirmados: {type: integer, minimum: 0}
+              rechazados: {type: integer, minimum: 0}
+              pendientes: {type: integer, minimum: 0}
+    Problema:
+      description: >
+        Rechazo seguro. Codigos propios: siniestro_no_encontrado, siniestro_no_aprobado,
+        pago_parametrico_automatico, indemnizacion_existente, idempotencia_conflictiva,
+        indemnizacion_no_encontrada, solicitud_invalida, no_autorizado.
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problema"}

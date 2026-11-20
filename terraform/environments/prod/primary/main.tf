@@ -93,7 +93,6 @@ module "iam_irsa" {
   oidc_issuer_url      = module.eks.oidc_issuer_url
   service_namespace    = var.service_namespace
   service_account_name = var.service_account_name
-  db_secret_arn        = module.database.master_user_secret_arn
   evidence_bucket_arn  = module.s3_evidence.bucket_arn
   sns_topic_arn        = module.messaging.topic_arn
   kms_key_arn          = module.kms.key_arn
@@ -156,7 +155,7 @@ module "iam_irsa_identidad" {
   oidc_issuer_url      = module.eks.oidc_issuer_url
   service_namespace    = var.identidad_namespace
   service_account_name = var.identidad_service_account_name
-  secret_arns          = [module.database.master_user_secret_arn, module.redis.secret_arn, module.jwt_key.secret_arn]
+  secret_arns          = [module.redis.secret_arn, module.jwt_key.secret_arn]
   kms_key_arn          = module.kms.key_arn
   tags                 = local.tags
 }

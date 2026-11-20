@@ -41,6 +41,8 @@ module = [
     "tests.test_mobile_policy_renewal_flow",
     "tests.test_policy_modification_flow",
     "tests.test_policy_cancellation_flow",
+    "tests.test_claims_notifications_flow",
+    "tests.test_simulated_identity_flow", "test_simulated_identity_flow",
 ]
 disable_error_code = ["import-untyped"]
 

@@ -2,7 +2,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,6 +17,7 @@ from siniestros.domain.pagos_parametricos import (
     RespuestaPagoAmbigua,
     ResultadoProveedorPago,
 )
+from siniestros.infrastructure.notificaciones import PublicadorNotificaciones
 from siniestros.infrastructure.pagos_parametricos import (
     ProcesadorPagosParametricos,
     SimuladorPagoParametrico,
@@ -24,6 +25,7 @@ from siniestros.infrastructure.pagos_parametricos import (
 from siniestros.models import (
     AutomaticPaymentCase,
     Claim,
+    NotificationOutbox,
     ParametricDecision,
     ParametricEvent,
     ParametricPayment,
@@ -41,6 +43,7 @@ INTERNAL_HEADERS = CLIENT_HEADERS
 SOURCE = "ideam"
 SOURCE_HEADERS = {"Authorization": "Bearer fuente-segura", "X-Fuente-ID": SOURCE}
 OCCURRED = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+ALLOWED_NOTIFICATION_FIELDS = {"eventoId", "tipo", "clienteId", "ocurridoEn", "recurso", "estado"}
 
 
 @pytest.fixture
@@ -792,5 +795,116 @@ def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     assert "/pagos-parametricos/conciliacion" in contract["paths"]
     assert "/pagos-parametricos/casos/{casoId}" in contract["paths"]
     assert "/pagos-parametricos/siniestros/{siniestroId}" in contract["paths"]
+    assert "/notificaciones/publicacion" in contract["paths"]
     required_rule_fields = contract["components"]["schemas"]["Regla"]["required"]
     assert {"beneficiarioId", "montoIndemnizacion", "moneda"} <= set(required_rule_fields)
+
+
+class EnviadorRegistrado:
+    def __init__(self, fallos: int = 0) -> None:
+        self.fallos = fallos
+        self.eventos: list[dict[str, Any]] = []
+
+    def enviar(self, evento: dict[str, Any]) -> bool:
+        if self.fallos:
+            self.fallos -= 1
+            return False
+        self.eventos.append(evento)
+        return True
+
+
+def publish_notifications(app: Flask, limit: int = 10) -> TestResponse:
+    return app.test_client().post(
+        "/internal/v1/notificaciones/publicacion",
+        headers=INTERNAL_HEADERS,
+        json={"limite": limit},
+    )
+
+
+def test_hu22_publica_cambios_visibles_y_pago_parametrico_sin_duplicar(app: Flask) -> None:
+    sender = EnviadorRegistrado()
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+    with Session(app.extensions["siniestros_engine"]) as session:
+        payment = session.scalar(select(ParametricPayment))
+        assert payment is not None
+        payment_id = payment.id
+
+    first = publish_notifications(app)
+    replay = publish_notifications(app)
+
+    assert first.status_code == 200
+    assert first.get_json() == {"publicadas": 3, "fallidas": 0}
+    assert replay.get_json() == {"publicadas": 0, "fallidas": 0}
+    published = {(item["tipo"], item.get("estado")): item for item in sender.eventos}
+    assert set(published) == {
+        ("siniestro_estado_cambiado", "aprobado"),
+        ("siniestro_estado_cambiado", "pagado"),
+        ("pago_parametrico_ejecutado", None),
+    }
+    assert {item["clienteId"] for item in sender.eventos} == {case["clienteId"]}
+    assert published[("siniestro_estado_cambiado", "pagado")]["recurso"] == {
+        "tipo": "siniestro",
+        "id": case["siniestroId"],
+    }
+    assert published[("pago_parametrico_ejecutado", None)]["recurso"] == {
+        "tipo": "pago",
+        "id": payment_id,
+    }
+    assert all(set(item) <= ALLOWED_NOTIFICATION_FIELDS for item in sender.eventos)
+
+
+def test_hu22_reintenta_publicacion_fallida_con_el_mismo_evento(app: Flask) -> None:
+    sender = EnviadorRegistrado(fallos=1)
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    prepare_payment_case(app)
+
+    assert publish_notifications(app).get_json() == {"publicadas": 0, "fallidas": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        pending = session.scalar(select(NotificationOutbox))
+        assert pending is not None
+        assert pending.intentos == 1
+        assert pending.ultimo_error == "publicacion_fallida"
+        event_id = pending.evento_id
+
+    assert publish_notifications(app).get_json() == {"publicadas": 1, "fallidas": 0}
+    assert [item["eventoId"] for item in sender.eventos] == [event_id]
+    with Session(app.extensions["siniestros_engine"]) as session:
+        published = session.get(NotificationOutbox, event_id)
+        assert published is not None and published.publicado_en is not None
+        assert published.intentos == 2
+
+
+def test_hu22_corta_el_ciclo_al_primer_fallo_y_reintenta_al_final(app: Flask) -> None:
+    sender = EnviadorRegistrado(fallos=1)
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+
+    assert publish_notifications(app).get_json() == {"publicadas": 0, "fallidas": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        attempts = session.scalars(select(NotificationOutbox.intentos)).all()
+        failed = session.scalar(select(NotificationOutbox).where(NotificationOutbox.intentos == 1))
+        assert failed is not None
+        failed_id = failed.evento_id
+    assert sorted(attempts) == [0, 0, 1]
+
+    assert publish_notifications(app).get_json() == {"publicadas": 3, "fallidas": 0}
+    assert sender.eventos[-1]["eventoId"] == failed_id
+
+
+def test_hu22_publicacion_exige_credencial_y_configuracion(app: Flask) -> None:
+    route = "/internal/v1/notificaciones/publicacion"
+    client = app.test_client()
+
+    assert client.post(route, json={"limite": 1}).status_code == 401
+    unconfigured = client.post(route, headers=INTERNAL_HEADERS, json={"limite": 1})
+    assert unconfigured.status_code == 503
+    assert unconfigured.get_json()["code"] == "notificaciones_no_configuradas"

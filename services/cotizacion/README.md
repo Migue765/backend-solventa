@@ -253,6 +253,10 @@ Con `NOTIFICACIONES_SERVICE_URL` configurada, el conciliador publica cada outbox
 idempotente. El mensaje solo contiene cliente, fecha y `pagoId`; no reenvía importe,
 moneda ni referencia interna. Un fallo HTTP conserva `publicado_en=null` y el siguiente
 ciclo reintenta el mismo evento. `INTERNAL_API_TOKEN` es obligatorio para habilitarlo.
+Cuando el pago emite la póliza, el outbox `PolizaAcademicaEmitida` guarda `polizaId` y
+`fechaFin`, y el conciliador lo publica como `poliza_emitida` (con su `evento_id` como
+clave idempotente) para que Notificaciones programe los avisos de vencimiento y
+renovación.
 
 Con `rechazado`, POST responde **200** con `estado: rechazado`, `rechazadaEn`,
 `motivo: rechazo_simulado` y sin `confirmadaEn`. Conserva los IDs, importe,

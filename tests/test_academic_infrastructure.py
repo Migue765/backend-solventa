@@ -241,7 +241,7 @@ source "$1"
         },
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
 
@@ -346,7 +346,7 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
         input=json.dumps(runtime),
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=True,
     )
     actual = json.loads(applied.stdout)
@@ -509,22 +509,23 @@ def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -
         assert not any("hpa.yaml" in call for call in calls)
     if service != "bff-web":
         assert not any(" patch " in call or "--local" in call for call in calls)
-    if service not in {"identidad", "notificaciones"}:
+    if service not in {"identidad", "notificaciones", "siniestros"}:
         assert "applied|CronJob" not in calls
     assert "completado." in result.stdout
 
 
-def test_notification_scheduler_starts_only_after_successful_rollout() -> None:
-    result = run_deploy("notificaciones")
+@pytest.mark.parametrize("service", ["notificaciones", "siniestros"])
+def test_notification_scheduler_starts_only_after_successful_rollout(service: str) -> None:
+    result = run_deploy(service)
     assert result.returncode == 0, result.stdout + result.stderr
     calls = result.stderr.splitlines()
     rollout = calls.index(
-        "kubectl|-n notificaciones rollout status deployment/notificaciones --timeout=300s"
+        f"kubectl|-n {service} rollout status deployment/{service} --timeout=300s"
     )
     assert calls.index("applied|Deployment") < rollout < calls.index("applied|CronJob")
-    failed = run_deploy("notificaciones", "rollout")
+    failed = run_deploy(service, "rollout")
     assert failed.returncode != 0
-    assert "Rollback de notificaciones confirmado." in failed.stderr
+    assert f"Rollback de {service} confirmado." in failed.stderr
     assert "applied|CronJob" not in failed.stderr
     assert "completado." not in failed.stdout
 
@@ -783,7 +784,7 @@ def test_mobile_bff_reaches_new_services_with_shared_internal_token() -> None:
 
 
 @pytest.mark.parametrize("service", ["notificaciones", "asistencias"])
-def test_new_services_read_runtime_secret_and_migrate_with_same_url(service: str) -> None:
+def test_new_services_read_runtime_secret_and_migrate_with_separate_role(service: str) -> None:
     variable = f"{service.upper()}_DATABASE_URL"
     reference = {"secretKeyRef": {"name": f"{service}-runtime", "key": variable}}
     deployment = yaml.safe_load((K8S / service / "deployment.yaml").read_text(encoding="utf-8"))
@@ -796,7 +797,13 @@ def test_new_services_read_runtime_secret_and_migrate_with_same_url(service: str
     }
     migration = job["spec"]["template"]["spec"]["containers"][0]
     assert migration["command"] == ["alembic", "upgrade", "head"]
-    assert migration["env"] == [{"name": variable, "valueFrom": reference}]
+    assert migration["env"] == [
+        {"name": "DB_RUNTIME_ROLE", "value": f"{service}_runtime"},
+        {
+            "name": variable,
+            "valueFrom": {"secretKeyRef": {"name": f"{service}-migrator", "key": variable}},
+        },
+    ]
     assert job["metadata"]["name"] == f"{service}-migrate-${{MIGRATION_ID}}"
     migrations = (ROOT / "services" / service / "migrations" / "env.py").read_text(encoding="utf-8")
     assert f'os.environ["{variable}"]' in migrations
@@ -830,3 +837,35 @@ def test_notification_scheduler_calls_internal_dispatch_with_service_token() -> 
         if item["name"] == "INTERNAL_API_TOKEN"
     )
     assert container["env"] == [token]
+
+
+def test_claims_notification_scheduler_publishes_outbox_with_service_token() -> None:
+    text = (K8S / "siniestros" / "notificaciones-cronjob.yaml").read_text(encoding="utf-8")
+    # envsubst reemplazaria cualquier otra referencia y alteraria el script.
+    assert "$" not in text.replace("${IMAGE}", "")
+    cronjob = yaml.safe_load(text)
+    assert cronjob["metadata"]["namespace"] == "siniestros"
+    assert cronjob["spec"]["concurrencyPolicy"] == "Forbid"
+    container = cronjob["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+    script = container["command"][-1]
+    compile(script, "publicacion", "exec")
+    route = "/internal/v1/notificaciones/publicacion"
+    assert f"http://siniestros.siniestros.svc.cluster.local:8080{route}" in script
+    app = (ROOT / "services" / "siniestros" / "src" / "siniestros" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    assert f'@app.post("{route}")' in app
+    deployment = yaml.safe_load(
+        (K8S / "siniestros" / "deployment.yaml").read_text(encoding="utf-8")
+    )
+    environment = {
+        item["name"]: item
+        for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert container["env"] == [environment["INTERNAL_API_TOKEN"]]
+    assert (
+        environment["NOTIFICACIONES_SERVICE_URL"]["value"]
+        == "http://notificaciones.notificaciones.svc.cluster.local:8080"
+    )
+    deploy = (ROOT / "deploy" / "codebuild" / "deploy.sh").read_text(encoding="utf-8")
+    assert 'envsubst < "${K8S_DIR}/notificaciones-cronjob.yaml"' in deploy

@@ -176,6 +176,11 @@ Un objeto ajeno recibe el mismo 404 que uno inexistente.
 PostgreSQL; no hay base en memoria ni fallback automatico. El arranque no crea
 tablas: ejecutar la migracion antes de servir.
 
+`alembic upgrade head` aplica `0010_evaluacion_indemnizaciones`, que une
+`0009_evaluacion_siniestros` y `0009_indemnizaciones` sin alterar sus historiales.
+Permite actualizar desde cualquiera de esas revisiones y conserva las 23 tablas
+del dominio, incluidas evaluaciones automaticas e indemnizaciones.
+
 `SINIESTROS_STORAGE_ROOT` es un directorio absoluto privado, fuera de las raices
 HTTP, donde se reciben los fragmentos. Los archivos usan UUID del servidor, nunca
 nombres del cliente. El proceso debe ser su unico escritor. En POSIX se crean
@@ -322,6 +327,21 @@ un caso estable en `casos_pago_automatico`. HU31 consulta la outbox mediante
 consulta o confirmacion no crea otro siniestro ni caso. Un caso pendiente significa
 **entrega durable para HU31**, no pago ejecutado.
 
+### Notificaciones (HU22)
+
+En la misma transaccion que registra un cambio de estado visible para el cliente
+(`en_evaluacion` en adelante, incluidas las decisiones de aprobacion o enrutamiento)
+o confirma un pago parametrico, Siniestros encola en
+`outbox_notificaciones` un evento `siniestro_estado_cambiado` o
+`pago_parametrico_ejecutado` con identificador determinista (siniestro y secuencia, o
+pago). Solo guarda cliente, recurso, estado y fecha; no copia importes, cuentas ni
+texto interno. `POST /internal/v1/notificaciones/publicacion` (Bearer
+`INTERNAL_API_TOKEN`) publica pendientes en orden de intentos y antiguedad hacia
+`NOTIFICACIONES_SERVICE_URL`; se detiene en el primer fallo y lo reintenta en el
+siguiente ciclo. Sin esa URL responde `503 notificaciones_no_configuradas`. Las
+repeticiones no duplican avisos: Notificaciones usa `eventoId` como clave idempotente.
+La migracion es `0008_outbox_notificaciones` (encadenada a `0007_deteccion_fraude`).
+
 El trabajador continuo se inicia por separado:
 
 ```powershell
@@ -396,6 +416,50 @@ python -m siniestros.payment_worker --limit 100
 
 La disponibilidad de 99,99 % sigue pendiente de medirse en el ambiente AWS.
 
+## HU26: evaluacion automatica
+
+Los siniestros reportados por el cliente (`tipo` `null` o `asistido`) se evaluan con un
+conjunto de reglas versionado e inmutable. El evaluador es una funcion pura: las mismas
+entradas y la misma version producen siempre el mismo resultado, y reevaluar sin cambios
+devuelve la evaluacion ya registrada. Los siniestros parametricos quedan fuera porque HU30
+ya los decide.
+
+Cada evaluacion guarda la version de reglas, las entradas relevantes (tipo de evento, dias
+hasta el reporte, longitud de la descripcion sin su texto, evidencias confirmadas con su
+`sha256` y senales de fraude), las reglas aplicadas, el motivo, el estado anterior y el
+resultante, la fecha y la correlacion.
+
+- Sin la informacion minima (`evidenciaMinima`, `longitudMinimaDescripcion`) responde
+  `informacion_insuficiente`, explica lo que falta y el siniestro sigue `reportado`. Al
+  confirmarse nueva evidencia el lote lo vuelve a evaluar.
+- Si aplican varias reglas prevalece el tratamiento mas conservador: `revision_humana`,
+  `rechazo`, `inspeccion`, `aprobacion`.
+- Las senales de fraude (ASR-FRD-01) llegan en `senalesFraude` o mediante
+  `ProveedorSenalesFraude`; desde `nivelFraudeRevisionHumana` exigen revision humana.
+- Sin reglas vigentes, con un registro no integro o si el evaluador falla, el caso queda
+  `pendiente_revision` y nunca se aprueba.
+
+La evaluacion solo mueve el siniestro de `reportado` a `en_evaluacion`. HU27 aprueba o
+enruta usando `decisionAutomatica`, que es `null` cuando falta informacion. Ese cuerpo se
+envia tal cual a `POST /internal/v1/siniestros/{siniestroId}/decisiones/automatica`:
+`reglas` siempre trae al menos una entrada (`TRATAMIENTO_POR_DEFECTO` si ninguna aplica y
+version de sistema 1 sin conjunto vigente). Por eso cada conjunto admite hasta 49 reglas y
+los motivos tienen al menos 10 caracteres; el motivo combinado se recorta a 1000.
+
+Los endpoints internos son:
+
+- `POST /internal/v1/reglas-evaluacion-siniestros`: registra una version de reglas.
+- `POST /internal/v1/siniestros/{siniestroId}/evaluacion`: evalua un siniestro.
+- `GET /internal/v1/siniestros/{siniestroId}/evaluaciones`: trazabilidad completa.
+- `POST /internal/v1/evaluaciones-siniestros/procesamiento`: evalua un lote.
+
+El contrato esta en `contracts/openapi/evaluacion-siniestros-internal-v1.yaml`. El
+trabajador continuo se ejecuta por separado:
+
+```powershell
+python -m siniestros.evaluation_worker --limit 100
+```
+
 ## HU27: aprobar o enrutar siniestro (SOL-179)
 
 El contrato es `contracts/openapi/siniestros-decisiones-internal-v1.yaml`. La evaluacion
@@ -467,6 +531,34 @@ Variables: `FRAUDE_UMBRAL_SOSPECHA` (50), `FRAUDE_UMBRAL_PRIORIDAD_ALTA` (80),
 `FRAUDE_POLITICA_CONTINUIDAD` (`revision_humana`) y `FRAUDE_PRESUPUESTO_MS` (1000,
 maximo 1000).
 
+## HU28: indemnizacion de siniestros aprobados
+
+Contrato: `contracts/openapi/indemnizaciones-internal-v1.yaml`. Un sistema interno ordena
+la indemnizacion de un siniestro no parametrico en estado `aprobado` con
+`beneficiarioId` (UUID no nulo) y `indemnizacion` (`monto` positivo con dos decimales y
+`moneda` ISO). Los siniestros parametricos se pagan automaticamente por HU31 y se
+rechazan con `pago_parametrico_automatico` para evitar un doble desembolso.
+
+- `POST /internal/v1/siniestros/{siniestroId}/indemnizacion` exige `Idempotency-Key`.
+  La orden se persiste antes del acuse (202). La misma clave y cuerpo devuelven la orden
+  existente (200); otro cuerpo responde `idempotencia_conflictiva` y otra clave para el
+  mismo siniestro responde `indemnizacion_existente`. Cada siniestro tiene una sola
+  indemnizacion con identificador determinista.
+- `POST /internal/v1/indemnizaciones/procesamiento` y `.../conciliacion` reservan ordenes
+  con lease, consultan primero el efecto del proveedor y solo ejecutan si no existe.
+  Respuestas ambiguas, caidas del proveedor o leases vencidos dejan el intento `ambiguo`
+  y se reintentan con backoff hasta un resultado final, sin repetir el desembolso.
+- `GET /internal/v1/siniestros/{siniestroId}/indemnizacion` reconstruye orden, intentos,
+  referencias, resultado y auditoria (`indemnizacion.solicitud`, `indemnizacion.intento`,
+  `indemnizacion.resultado`) con la correlacion de origen.
+
+Una confirmacion cambia el siniestro de `aprobado` a `pagado` y agrega el hito visible
+al historial; un rechazo es definitivo y conserva `aprobado`. El mismo
+`payment_worker` procesa pagos parametricos e indemnizaciones. El cambio a `pagado`
+se notifica al cliente por el outbox de HU22.
+
+La migracion es `0009_indemnizaciones` (encadenada a `0008_outbox_notificaciones`).
+
 ## Errores
 
 | HTTP | `code` |
@@ -474,8 +566,8 @@ maximo 1000).
 | 400 | `solicitud_invalida`, `carga_interrumpida` |
 | 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno), `fuente_no_autorizada` |
 | 403 | `alcance_insuficiente` |
-| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada` |
-| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
+| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada`, `indemnizacion_no_encontrada` |
+| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad`, `siniestro_no_evaluable`, `siniestro_no_aprobado`, `pago_parametrico_automatico`, `indemnizacion_existente` |
 | 411 | `longitud_requerida` |
 | 413 | `limite_tamano` |
 | 415 | `formato_no_permitido` |

@@ -35,6 +35,30 @@ paths:
           $ref: "#/components/responses/Problema"
         "422":
           $ref: "#/components/responses/Problema"
+  /v1/eventos/{eventoId}/trazabilidad:
+    get:
+      summary: Consulta el evento origen, sus notificaciones y cada intento de entrega
+      operationId: consultarTrazabilidadEvento
+      security:
+        - internalToken: []
+      parameters:
+        - name: eventoId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Trazabilidad completa del evento
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrazabilidadEvento"
+        "401":
+          $ref: "#/components/responses/Problema"
+        "404":
+          $ref: "#/components/responses/Problema"
   /v1/despachos:
     post:
       summary: Procesa notificaciones programadas o pendientes
@@ -154,6 +178,88 @@ components:
         entregasConfirmadas:
           type: integer
           minimum: 0
+    TrazabilidadEvento:
+      type: object
+      additionalProperties: false
+      required: [eventoId, tipo, clienteId, ocurridoEn, recibidoEn, resultado, notificaciones]
+      properties:
+        eventoId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+          enum: [pago_parametrico_ejecutado, pago_confirmado, siniestro_estado_cambiado, poliza_emitida]
+        clienteId:
+          type: string
+          format: uuid
+        ocurridoEn:
+          type: string
+          format: date-time
+        recibidoEn:
+          type: string
+          format: date-time
+        resultado:
+          type: string
+          enum: [generado, ignorado]
+        notificaciones:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrazabilidadNotificacion"
+    TrazabilidadNotificacion:
+      type: object
+      additionalProperties: false
+      required:
+        - notificacionId
+        - tipo
+        - canal
+        - recurso
+        - programadaEn
+        - estado
+        - intentos
+        - entregadaEn
+        - ultimoError
+        - historial
+      properties:
+        notificacionId:
+          type: string
+          format: uuid
+        tipo:
+          type: string
+          enum: [pagos, siniestros, vencimientos, renovaciones]
+        canal:
+          type: string
+          enum: [in_app, email, push]
+        recurso:
+          $ref: "#/components/schemas/Recurso"
+        programadaEn:
+          type: string
+          format: date-time
+        estado:
+          type: string
+          enum: [pendiente, procesando, entregada, fallida, omitida]
+        intentos:
+          type: integer
+          minimum: 0
+        entregadaEn:
+          type: [string, "null"]
+          format: date-time
+        ultimoError:
+          type: [string, "null"]
+        historial:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [intentadoEn, resultado, error]
+            properties:
+              intentadoEn:
+                type: string
+                format: date-time
+              resultado:
+                type: string
+                enum: [entregada, pendiente, fallida, omitida]
+              error:
+                type: [string, "null"]
     Problema:
       type: object
       required: [type, title, status, detail, code, correlationId]

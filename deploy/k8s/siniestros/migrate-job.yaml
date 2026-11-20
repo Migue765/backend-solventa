@@ -19,10 +19,12 @@ spec:
           image: ${IMAGE}
           command: ["alembic", "upgrade", "head"]
           env:
+            - name: DB_RUNTIME_ROLE
+              value: siniestros_runtime
             - name: SINIESTROS_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: siniestros-runtime
+                  name: siniestros-migrator
                   key: SINIESTROS_DATABASE_URL
           resources:
             requests:
