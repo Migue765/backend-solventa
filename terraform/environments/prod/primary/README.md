@@ -138,10 +138,12 @@ perfil del backend. No usar root, el perfil historico `tesis` ni el state del or
    Completar `../addons/backend.hcl`: su key es distinta de primary.
    Con autorizacion separada, inicializar/revisar/aplicar addons. Lee el cluster
    existente por nombre, comprueba su VPC e instala los mismos dos charts y versiones.
-7. Aprovisionar bases/usuarios nuevos por dominio y Secrets externos mediante el
-   procedimiento aprobado; ninguna base de aplicacion debe usar el usuario master
-   como solucion rapida. Los BFF no necesitan DB. Usar migraciones de esquema
-   existentes, sin restaurar dumps/snapshots/filas historicos.
+7. Aprovisionar una sola base logica `solventa_prod` (`db_name`), siete esquemas
+   propietarios por dominio y roles runtime/migrator separados mediante el
+   procedimiento aprobado. No crear una base distinta por servicio ni usar el
+   usuario master en la aplicacion. Los BFF no necesitan DB. Conservar los seis
+   historiales Alembic y la inicializacion de Perfilamiento, sin restaurar
+   dumps/snapshots/filas historicos. Ver el [contrato de migradores](../../../../deploy/k8s/README.md#migraciones-en-una-base-logica).
 8. Inicializar namespaces, ServiceAccounts/IRSA y Secrets antes de los Jobs. Para
    Cotizacion, Identidad, Perfilamiento y BFF, aplicar Service y Deployment semilla
    renderizados con imagen aprobada y **replicas cero**, sin HPA todavia: no arrancar
@@ -178,6 +180,41 @@ El API nuevo obtiene su URL/issuer de outputs: actualizar consumidores, CORS, TL
 y DNS solo tras autorizar el cutover. No versionar URLs calculadas de otro entorno.
 Las claves JWT/JWE nuevas implican login nuevo; esta reconstruccion no recupera
 cuentas ni siniestros anteriores. Conservar el origen para una decision posterior.
+
+### Entrega de DSN sin permisos sobre el master
+
+Cotizacion e Identidad leen `DATABASE_URL` de los Secrets Kubernetes
+`cotizacion-db` e `identidad-config`; no consultan Secrets Manager para obtener
+el DSN. Primary deja de concederles lectura del master sin agregar un secreto
+AWS sustituto, variables obligatorias ni recursos. Conserva los permisos JWT
+y Redis de Identidad, asi como KMS, S3 y mensajeria. En `iam-irsa`,
+`db_secret_arn` queda opcional (`null`): omite `ReadDbSecret` si no se proporciona
+y conserva el comportamiento de consumidores anteriores que si lo indiquen.
+
+Esta revision de fuente no acredita el contenido/rol de los Secrets existentes.
+Antes de aplicar la retirada de permisos, un operador autorizado debe verificar
+la entrega privada y rotacion de los DSN runtime/migrator y que ningun
+consumidor externo dependa de obtener el master mediante esos roles.
+IRSA no entrega automaticamente variables de entorno; External Secrets/CSI
+no estan instalados por este cambio.
+
+Los siete Secrets Kubernetes `<dominio>-migrator` y los roles/esquemas de la
+base administrada requieren aprovisionamiento revisado y autorizacion separada.
+El helper PostgreSQL local crea un cluster sintetico nuevo: nunca usarlo contra RDS.
+
+La regresion de permisos usa Terraform existente y un mirror filesystem ya
+verificado con `hashicorp/aws` 5.100.0:
+
+```powershell
+$env:SOLVENTA_TEST_TERRAFORM_BIN = $terraformBin
+$env:SOLVENTA_TEST_TERRAFORM_MIRROR = $providerMirror
+.\.venv\Scripts\python.exe -m pytest tests\test_terraform_irsa.py -q
+```
+
+Inicializa solo un root temporal sin recursos AWS ni backend remoto y renderiza
+el documento IAM con el provider real. Prueba tanto omision de acceso DB como
+compatibilidad del argumento opcional, sin credenciales AWS, lectura de metadata
+ni descargas. No inicializar/reconfigurar primary para ejecutar esta comprobacion.
 
 Los pipelines mantienen triggers automaticos apagados y aprobacion manual antes de
 Deploy. Su creacion/autorizacion de conexion puede iniciar Source/Build; revisar esa

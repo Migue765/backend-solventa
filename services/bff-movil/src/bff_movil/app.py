@@ -15,11 +15,13 @@ from bff_movil.api import (
     policy_renewals,
     sessions,
     users,
+    verification,
 )
 from bff_movil.application.biometric_ports import BiometricGateway
 from bff_movil.application.policy_modification_ports import PolicyModificationGateway
 from bff_movil.application.policy_renewal_ports import PolicyQueryGateway, PolicyRenewalGateway
 from bff_movil.application.ports import IdentityGateway, SessionStateGateway, TokenVerifier
+from bff_movil.application.verification_ports import VerificationGateway
 from bff_movil.config import Config
 from bff_movil.domain.auth import CHANNEL
 from bff_movil.domain.errors import IdentityUnavailableError
@@ -41,6 +43,7 @@ def create_app(
     session_state_gateway: SessionStateGateway | None = None,
     policy_query_gateway: PolicyQueryGateway | None = None,
     policy_modification_gateway: PolicyModificationGateway | None = None,
+    verification_gateway: VerificationGateway | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -53,6 +56,9 @@ def create_app(
         active_config.identity_url, active_config.identity_timeout_seconds
     )
     app.extensions["clock"] = lambda: datetime.now(UTC)
+    app.extensions["verification_gateway"] = verification_gateway or HttpIdentityGateway(
+        active_config.identity_url, active_config.identity_timeout_seconds
+    )
     app.extensions["session_state_gateway"] = session_state_gateway or HttpIdentityGateway(
         active_config.identity_url, active_config.identity_timeout_seconds
     )
@@ -87,6 +93,7 @@ def create_app(
     app.register_blueprint(policies.bp)
     app.register_blueprint(policy_renewals.bp)
     app.register_blueprint(policy_modifications.bp)
+    app.register_blueprint(verification.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
@@ -95,9 +102,9 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
-        if request.path.startswith("/movil/v1/biometria/") or (
-            request.path == "/movil/v1/sesiones/biometria"
-        ):
+        if request.path.startswith(
+            ("/movil/v1/biometria/", "/movil/v1/verificaciones-identidad")
+        ) or (request.path == "/movil/v1/sesiones/biometria"):
             response.headers["Cache-Control"] = "no-store"
         return response
 

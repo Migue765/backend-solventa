@@ -27,12 +27,14 @@ spec:
           workingDir: /app
           command: ["alembic", "upgrade", "head"]
           env:
+            - name: DB_RUNTIME_ROLE
+              value: identidad_runtime
             - name: DB_SCHEMA
               value: identidad
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: identidad-config
+                  name: identidad-migrator
                   key: DATABASE_URL
           resources:
             requests:

@@ -1,0 +1,271 @@
+openapi: 3.1.0
+info:
+  title: Demostracion academica de identidad y prueba de vida
+  version: 1.0.0
+  description: >-
+    Simulacion post-login, no KYC ni prueba de vida acreditada. No valida fotos reales,
+    no recibe imagenes/documentos/PII, no concede permisos ni cambia el login biometrico.
+    IDENTIDAD_SIMULADA_ENABLED=false por defecto en Identidad y BFF movil.
+servers:
+  - url: /movil/v1
+  - url: /v1
+security:
+  - BearerMovil: []
+paths:
+  /verificaciones-identidad:
+    post:
+      operationId: iniciarVerificacionSimulada
+      summary: Crea o recupera la unica sesion de demostracion del cliente autenticado
+      description: >-
+        Requiere JWT RS256 movil con rol/alcance cliente y sid activo. Propietario derivado
+        del token, nunca del cuerpo. Repetir devuelve el estado actual sin reiniciar intentos,
+        incluso tras aprobacion o agotamiento. No hay reset publico. No admite query.
+      security:
+        - BearerMovil: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          $ref: "#/components/responses/Estado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+  /verificaciones-identidad/{verificacionId}:
+    get:
+      operationId: consultarVerificacionSimulada
+      summary: Consulta el estado actual sin producir transiciones ni nuevos intentos
+      security:
+        - BearerMovil: []
+      parameters:
+        - $ref: "#/components/parameters/VerificacionId"
+      responses:
+        "200":
+          $ref: "#/components/responses/Estado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/NoEncontrada"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+  /verificaciones-identidad/{verificacionId}/intentos:
+    post:
+      operationId: procesarIntentoIdentidadSimulado
+      summary: Procesa atomicamente un intento sintetico sin temporizador
+      description: >-
+        Solo pendiente o rechazado con menos de 3 intentos permite un intento nuevo.
+        Aprobado y rechazado con 3 intentos son terminales. El servidor decide el resultado;
+        las referencias no lo eligen ni verifican imagenes reales.
+        Mismo intentoId y referencias: reproduce snapshot historico (aunque GET ya muestre
+        otro estado), sin consumir cupo. Referencias validas distintas con el mismo intentoId:
+        409 conflicto_idempotencia. Para reintentar un rechazo usar otro UUID.
+        No admite query, campos extra, propietario, resultado ni archivos.
+      security:
+        - BearerMovil: []
+      parameters:
+        - $ref: "#/components/parameters/VerificacionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Intento"
+      responses:
+        "200":
+          $ref: "#/components/responses/Estado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/NoEncontrada"
+        "409":
+          description: transicion_invalida o conflicto_idempotencia; no modifica el estado
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "503":
+          $ref: "#/components/responses/NoDisponible"
+components:
+  securitySchemes:
+    BearerMovil:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    VerificacionId:
+      name: verificacionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Intento:
+      type: object
+      additionalProperties: false
+      required: [intentoId, documentoRef, selfieRef]
+      properties:
+        intentoId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        documentoRef:
+          enum: ["fixture:documento-v1", "fixture:documento-v2"]
+        selfieRef:
+          enum: ["fixture:selfie-v1", "fixture:selfie-v2"]
+    Verificacion:
+      type: object
+      additionalProperties: false
+      required: [verificacionId, estado, intentos, maxIntentos, reintentoPermitido, simulada, motivo]
+      properties:
+        verificacionId:
+          type: string
+          format: uuid
+        estado:
+          enum: [pendiente, aprobado, rechazado]
+        intentos:
+          type: integer
+          minimum: 0
+          maximum: 3
+        maxIntentos:
+          const: 3
+        reintentoPermitido:
+          type: boolean
+        simulada:
+          const: true
+        motivo:
+          enum: [null, documento_no_valido, prueba_vida_no_valida]
+      allOf:
+        - if:
+            properties:
+              estado:
+                const: pendiente
+          then:
+            properties:
+              intentos:
+                const: 0
+              reintentoPermitido:
+                const: false
+              motivo:
+                type: "null"
+        - if:
+            properties:
+              estado:
+                const: aprobado
+          then:
+            properties:
+              intentos:
+                minimum: 1
+              reintentoPermitido:
+                const: false
+              motivo:
+                type: "null"
+        - if:
+            properties:
+              estado:
+                const: rechazado
+          then:
+            properties:
+              intentos:
+                minimum: 1
+              motivo:
+                enum: [documento_no_valido, prueba_vida_no_valida]
+            allOf:
+              - if:
+                  properties:
+                    intentos:
+                      const: 3
+                then:
+                  properties:
+                    reintentoPermitido:
+                      const: false
+                else:
+                  properties:
+                    reintentoPermitido:
+                      const: true
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          enum:
+            - solicitud_invalida
+            - sesion_invalida
+            - acceso_denegado
+            - verificacion_no_encontrada
+            - transicion_invalida
+            - conflicto_idempotencia
+            - servicio_no_disponible
+        correlationId:
+          type: string
+          format: uuid
+  responses:
+    Estado:
+      description: Estado durable de demostracion; nunca un dictamen de identidad real
+      headers:
+        Cache-Control:
+          schema:
+            const: no-store
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Verificacion"
+    SolicitudInvalida:
+      description: solicitud_invalida; maximo 2048 bytes, solo JSON sintetico
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoAutorizado:
+      description: sesion_invalida; token ausente, invalido, canal incorrecto o sesion revocada/vencida
+      headers:
+        WWW-Authenticate:
+          schema:
+            const: Bearer
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    AccesoDenegado:
+      description: acceso_denegado; requiere rol y alcance cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoEncontrada:
+      description: verificacion_no_encontrada; mismo error para inexistente y de otro cliente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    NoDisponible:
+      description: servicio_no_disponible; demo deshabilitada o dependencia inaccesible
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
