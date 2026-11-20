@@ -485,6 +485,34 @@ Variables: `FRAUDE_UMBRAL_SOSPECHA` (50), `FRAUDE_UMBRAL_PRIORIDAD_ALTA` (80),
 `FRAUDE_POLITICA_CONTINUIDAD` (`revision_humana`) y `FRAUDE_PRESUPUESTO_MS` (1000,
 maximo 1000).
 
+## HU28: indemnizacion de siniestros aprobados
+
+Contrato: `contracts/openapi/indemnizaciones-internal-v1.yaml`. Un sistema interno ordena
+la indemnizacion de un siniestro no parametrico en estado `aprobado` con
+`beneficiarioId` (UUID no nulo) y `indemnizacion` (`monto` positivo con dos decimales y
+`moneda` ISO). Los siniestros parametricos se pagan automaticamente por HU31 y se
+rechazan con `pago_parametrico_automatico` para evitar un doble desembolso.
+
+- `POST /internal/v1/siniestros/{siniestroId}/indemnizacion` exige `Idempotency-Key`.
+  La orden se persiste antes del acuse (202). La misma clave y cuerpo devuelven la orden
+  existente (200); otro cuerpo responde `idempotencia_conflictiva` y otra clave para el
+  mismo siniestro responde `indemnizacion_existente`. Cada siniestro tiene una sola
+  indemnizacion con identificador determinista.
+- `POST /internal/v1/indemnizaciones/procesamiento` y `.../conciliacion` reservan ordenes
+  con lease, consultan primero el efecto del proveedor y solo ejecutan si no existe.
+  Respuestas ambiguas, caidas del proveedor o leases vencidos dejan el intento `ambiguo`
+  y se reintentan con backoff hasta un resultado final, sin repetir el desembolso.
+- `GET /internal/v1/siniestros/{siniestroId}/indemnizacion` reconstruye orden, intentos,
+  referencias, resultado y auditoria (`indemnizacion.solicitud`, `indemnizacion.intento`,
+  `indemnizacion.resultado`) con la correlacion de origen.
+
+Una confirmacion cambia el siniestro de `aprobado` a `pagado` y agrega el hito visible
+al historial; un rechazo es definitivo y conserva `aprobado`. El mismo
+`payment_worker` procesa pagos parametricos e indemnizaciones. El cambio a `pagado`
+se notifica al cliente por el outbox de HU22.
+
+La migracion es `0009_indemnizaciones` (encadenada a `0008_outbox_notificaciones`).
+
 ## Errores
 
 | HTTP | `code` |
@@ -492,8 +520,8 @@ maximo 1000).
 | 400 | `solicitud_invalida`, `carga_interrumpida` |
 | 401 | `sesion_invalida` (BFF), `no_autorizado` (servicio interno), `fuente_no_autorizada` |
 | 403 | `alcance_insuficiente` |
-| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada` |
-| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad` |
+| 404 | `siniestro_no_encontrado`, `poliza_no_encontrada`, `carga_no_encontrada`, `evidencia_no_encontrada`, `cola_no_encontrada`, `indemnizacion_no_encontrada` |
+| 409 | `idempotencia_conflictiva`, `transicion_no_permitida`, `evento_conflictivo`, `version_regla_conflictiva`, `confirmacion_conflictiva`, `offset_conflictivo`, `carga_incompleta`, `carga_cancelada`, `carga_confirmada`, `limite_cantidad`, `siniestro_no_aprobado`, `pago_parametrico_automatico`, `indemnizacion_existente` |
 | 411 | `longitud_requerida` |
 | 413 | `limite_tamano` |
 | 415 | `formato_no_permitido` |
