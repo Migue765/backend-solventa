@@ -226,6 +226,72 @@ class ParametricPaymentAttempt(Base):
     codigo: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
+class Indemnization(Base):
+    __tablename__ = "indemnizaciones"
+    __table_args__ = (
+        CheckConstraint("estado IN ('pendiente', 'confirmado', 'rechazado')"),
+        CheckConstraint("monto > 0"),
+        CheckConstraint("intentos >= 0"),
+        UniqueConstraint("siniestro_id"),
+        UniqueConstraint("operacion"),
+        Index("ix_indemnizaciones_estado_proximo", "estado", "proximo_intento_en"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    siniestro_id: Mapped[str] = mapped_column(ForeignKey("siniestros.id"))
+    operacion: Mapped[str] = mapped_column(String(36))
+    huella_solicitud: Mapped[str] = mapped_column(String(64))
+    huella: Mapped[str] = mapped_column(String(64))
+    cliente_id: Mapped[str] = mapped_column(String(36))
+    poliza_id: Mapped[str] = mapped_column(String(36))
+    beneficiario_id: Mapped[str] = mapped_column(String(36))
+    monto: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    moneda: Mapped[str] = mapped_column(String(3))
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente")
+    referencia: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    correlacion: Mapped[str] = mapped_column(String(36))
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    actualizado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalizado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proximo_intento_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    intentos: Mapped[int] = mapped_column(Integer, default=0)
+    ultimo_error: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class IndemnizationAttempt(Base):
+    __tablename__ = "intentos_indemnizacion"
+    __table_args__ = (
+        CheckConstraint("numero > 0"),
+        CheckConstraint("estado IN ('en_proceso', 'ambiguo', 'confirmado', 'rechazado')"),
+        UniqueConstraint("indemnizacion_id", "numero"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    indemnizacion_id: Mapped[str] = mapped_column(ForeignKey("indemnizaciones.id"))
+    numero: Mapped[int] = mapped_column(Integer)
+    estado: Mapped[str] = mapped_column(String(20))
+    iniciado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalizado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    codigo: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    referencia: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class IndemnizationEffect(Base):
+    __tablename__ = "efectos_indemnizacion"
+    __table_args__ = (CheckConstraint("resultado IN ('confirmado', 'rechazado')"),)
+
+    indemnizacion_id: Mapped[str] = mapped_column(
+        ForeignKey("indemnizaciones.id"),
+        primary_key=True,
+    )
+    huella: Mapped[str] = mapped_column(String(64))
+    resultado: Mapped[str] = mapped_column(String(20))
+    referencia: Mapped[str] = mapped_column(String(100))
+    evaluado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ParametricPaymentEffect(Base):
     __tablename__ = "efectos_pago_parametrico"
 
