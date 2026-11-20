@@ -17,6 +17,9 @@ KNOWN_REJECTIONS = frozenset(
         "sesion_invalida",
         "acceso_denegado",
         "credencial_ya_registrada",
+        "verificacion_no_encontrada",
+        "transicion_invalida",
+        "conflicto_idempotencia",
     }
 )
 DEFAULT_RETRY_AFTER = 60
@@ -160,6 +163,16 @@ class HttpIdentityGateway:
         if not isinstance(payload, dict):
             raise IdentityUnavailableError()
         return payload
+
+    def verification_request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+        bearer: str,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        return self._request(method, path, body, bearer, correlation_id, expected_status=200)
 
 
 def _rejection_from(error: HTTPError) -> IdentityRejectedError | IdentityUnavailableError:

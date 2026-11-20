@@ -15,6 +15,7 @@ class Config:
     assistance_service_url: str = ""
     policies_service_url: str = ""
     internal_api_token: str = ""
+    simulated_identity_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.identity_url.strip():
@@ -33,7 +34,11 @@ class Config:
         biometric = os.getenv("BIOMETRIC_LOGIN_ENABLED", "false").strip().lower()
         if biometric not in {"true", "false"}:
             raise ValueError("BIOMETRIC_LOGIN_ENABLED solo admite true o false.")
+        simulated = os.getenv("IDENTIDAD_SIMULADA_ENABLED", "false").strip().lower()
+        if simulated not in {"true", "false"}:
+            raise ValueError("IDENTIDAD_SIMULADA_ENABLED solo admite true o false.")
         return cls(
+            simulated_identity_enabled=simulated == "true",
             claims_service_url=os.getenv("SINIESTROS_SERVICE_URL", "").strip().rstrip("/"),
             notifications_service_url=os.getenv("NOTIFICACIONES_SERVICE_URL", "")
             .strip()

@@ -18,6 +18,7 @@ from identidad.api import (
     oauth,
     session_state,
     users,
+    verification,
     wellknown,
 )
 from identidad.api.schemas import RegisterRequest
@@ -41,6 +42,7 @@ from identidad.infrastructure.persistence.refresh_token_repository import (
     SqlRefreshTokenRepository,
 )
 from identidad.infrastructure.persistence.user_repository import SqlUserRepository
+from identidad.infrastructure.persistence.verification_repository import SqlVerificationRepository
 from identidad.infrastructure.redis_attempt_limiter import RedisLoginAttemptLimiter
 from identidad.problems import problem_response
 
@@ -94,6 +96,9 @@ def create_app(
     app.extensions["clock"] = active_clock
     app.extensions["consent_repository"] = SqlConsentRepository(sessions)
     app.extensions["user_repository"] = user_repository
+    app.extensions["verification_repository"] = SqlVerificationRepository(
+        sessions, active_config.simulated_identity_outcomes
+    )
     app.extensions["jwt_issuer"] = jwt_issuer
     app.extensions["token_service"] = TokenService(
         users=user_repository,
@@ -136,6 +141,7 @@ def create_app(
     app.register_blueprint(advisors.bp)
     app.register_blueprint(biometrics.bp)
     app.register_blueprint(session_state.bp)
+    app.register_blueprint(verification.bp)
 
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)
@@ -189,7 +195,7 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
-        if request.path.startswith(("/oauth/", "/v1/biometria/")):
+        if request.path.startswith(("/oauth/", "/v1/biometria/", "/v1/verificaciones-identidad")):
             response.headers["Cache-Control"] = "no-store"
         return response
 
