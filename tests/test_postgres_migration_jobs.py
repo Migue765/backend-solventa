@@ -160,7 +160,7 @@ def test_real_job_commands_preserve_owner_role_schema_and_restrict_history(
             assert result["ownerNoLogin"] is True
             if domain != "perfilamiento":
                 assert result["migrationHistoryRuntimeDenied"] is True
-        assert total == 73
+        assert total == 78
         for domain, count, revision, tables in (
             (
                 "polizas",
@@ -177,8 +177,8 @@ def test_real_job_commands_preserve_owner_role_schema_and_restrict_history(
             ),
             (
                 "siniestros",
-                18,
-                "0008_outbox_notificaciones",
+                23,
+                "0010_evaluacion_indemnizaciones",
                 (
                     "decisiones_siniestro",
                     "asignaciones_siniestro",
@@ -186,6 +186,11 @@ def test_real_job_commands_preserve_owner_role_schema_and_restrict_history(
                     "evaluaciones_fraude",
                     "casos_revision_fraude",
                     "outbox_notificaciones",
+                    "reglas_evaluacion_siniestros",
+                    "evaluaciones_siniestros",
+                    "indemnizaciones",
+                    "intentos_indemnizacion",
+                    "efectos_indemnizacion",
                 ),
             ),
         ):
