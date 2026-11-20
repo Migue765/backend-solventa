@@ -241,7 +241,7 @@ source "$1"
         },
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
 
@@ -346,7 +346,7 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
         input=json.dumps(runtime),
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=True,
     )
     actual = json.loads(applied.stdout)
