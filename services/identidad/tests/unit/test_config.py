@@ -109,3 +109,26 @@ def test_invalid_encrypted_login_flag(monkeypatch: pytest.MonkeyPatch, value: st
     monkeypatch.setenv("ENCRYPTED_LOGIN_ENABLED", value)
     with pytest.raises(ValueError, match="ENCRYPTED_LOGIN_ENABLED"):
         Config.from_environment()
+
+
+def test_simulated_identity_requires_explicit_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_required(monkeypatch)
+    monkeypatch.delenv("IDENTIDAD_SIMULADA_ENABLED", raising=False)
+    monkeypatch.delenv("IDENTIDAD_SIMULADA_RESULTADOS", raising=False)
+    assert Config.from_environment().simulated_identity_enabled is False
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_ENABLED", "true")
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_RESULTADOS", "documento_no_valido, aprobado")
+    config = Config.from_environment()
+    assert config.simulated_identity_enabled is True
+    assert config.simulated_identity_outcomes == ("documento_no_valido", "aprobado")
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_ENABLED", "demo")
+    with pytest.raises(ValueError, match="IDENTIDAD_SIMULADA_ENABLED"):
+        Config.from_environment()
+
+
+@pytest.mark.parametrize("value", ["", "real", "aprobado,", ",".join(["documento_no_valido"] * 4)])
+def test_invalid_simulated_outcomes_fail_fast(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    set_required(monkeypatch)
+    monkeypatch.setenv("IDENTIDAD_SIMULADA_RESULTADOS", value)
+    with pytest.raises(ValueError, match="IDENTIDAD_SIMULADA_RESULTADOS"):
+        Config.from_environment()

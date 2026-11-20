@@ -126,3 +126,9 @@ pytest
 IDENTIDAD_URL=http://localhost:5003 JWT_ISSUER=http://localhost:5003 \
   flask --app bff_movil.app run --port 5002
 ```
+
+## Demostracion de identidad
+
+Las rutas autenticadas `/movil/v1/verificaciones-identidad` delegan en Identidad.
+Activacion, contrato y limites en [`docs/identidad-simulada.md`](../../docs/identidad-simulada.md).
+No sustituyen el alta ni el login; no reciben imagenes ni acreditan KYC/prueba de vida.
