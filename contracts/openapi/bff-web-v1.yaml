@@ -20,6 +20,12 @@ tags:
   - name: Polizas
   - name: Reportes
 paths:
+  /v1/clientes/me/polizas/{polizaId}/documento:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documento"
+  /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documentos~1{documentoId}~1descarga"
+  /v1/clientes/me/polizas/{polizaId}/aceptaciones:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1aceptaciones"
   /v1/siniestros:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros"
   /v1/siniestros/polizas:

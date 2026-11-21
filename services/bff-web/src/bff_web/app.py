@@ -15,6 +15,7 @@ from bff_web.api import (
     operational_reports,
     partner_quotes,
     policy_cancellations,
+    policy_documents,
     policy_modifications,
     policy_renewals,
     quotes,
@@ -53,6 +54,7 @@ from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGa
 from bff_web.infrastructure.http_policy_cancellation_gateway import (
     HttpPolicyCancellationGateway,
 )
+from bff_web.infrastructure.http_policy_document_gateway import HttpPolicyDocumentGateway
 from bff_web.infrastructure.http_policy_modification_gateway import (
     HttpPolicyModificationGateway,
 )
@@ -155,6 +157,10 @@ def create_app(
         active_config.internal_api_token,
     )
     app.register_error_handler(ProfilingError, consents.profiling_error)
+    app.extensions["policy_document_gateway"] = HttpPolicyDocumentGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
+    app.register_blueprint(policy_documents.bp)
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)

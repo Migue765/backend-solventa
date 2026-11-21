@@ -3,6 +3,8 @@
 Esta carpeta contiene los contratos HTTP públicos y versionados de Solventa.
 
 - `bff-web-v1.yaml`: contrato consumido por la aplicación web.
+- `documento-poliza-web-v1.yaml`: documento HTML privado y aceptacion academica simulada,
+  referenciado desde `bff-web-v1.yaml`. El hash identifica los bytes UTF-8 descargables.
 - `bff-movil-v1.yaml`: contrato consumido por la aplicación móvil.
 - `identidad-simulada-v1.yaml`: demostracion academica post-login de documento/prueba de vida,
   sin KYC real, imagenes ni PII; compartido por Identidad y BFF movil.
