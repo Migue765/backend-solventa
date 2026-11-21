@@ -43,6 +43,16 @@ variable "github_connection_arn" {
   default     = null
 }
 
+variable "create_github_connection" {
+  description = "Seleccion explicita si el ARN externo aun es desconocido en plan; null conserva el contrato anterior."
+  type        = bool
+  default     = null
+  validation {
+    condition     = var.create_github_connection != false || var.github_connection_arn != null
+    error_message = "Al desactivar la creacion debe proporcionarse una conexion GitHub."
+  }
+}
+
 variable "github_repository" {
   description = "Repositorio de GitHub en formato owner/repo."
   type        = string

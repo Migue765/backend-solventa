@@ -41,10 +41,18 @@ def _register_client(client: FlaskClient, with_document: bool = False) -> str:
     return client_id
 
 
+@pytest.mark.parametrize("existing_partner", [False, True])
 def test_advisor_login_includes_authorized_partners(
     make_app: Any,
+    existing_partner: bool,
 ) -> None:
     app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
+    with app.extensions["user_repository"]._sessions.begin() as session:
+        connection = session.connection()
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+        if existing_partner:
+            session.add(SocioModel(socio_id="BANCO-001", nombre="Banco Aliado", activo=True))
     runner = app.test_cli_runner()
     created = runner.invoke(
         args=[

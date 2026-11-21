@@ -1,0 +1,5 @@
+bucket              = ""
+profile             = ""
+region              = "us-east-2"
+allowed_account_ids = ["096571798698"]
+key                 = "accounts/096571798698/us-east-2/network/terraform.tfstate"

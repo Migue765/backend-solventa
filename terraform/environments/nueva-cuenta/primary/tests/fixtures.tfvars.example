@@ -1,0 +1,37 @@
+account_id            = "096571798698"
+aws_profile           = "synthetic-role-profile"
+deployment_role_arn   = "arn:aws:iam::096571798698:role/test-deploy"
+public_access_cidrs   = ["192.0.2.1/32"]
+api_listener_protocol = "HTTP"
+release_branch        = "develop"
+permissions_boundary_arns = {
+  network     = "arn:aws:iam::096571798698:policy/test-network"
+  ci          = "arn:aws:iam::096571798698:policy/test-ci"
+  application = "arn:aws:iam::096571798698:policy/test-application"
+}
+network_context = {
+  account_id         = "096571798698"
+  region             = "us-east-2"
+  name_prefix        = "solventa-nueva"
+  vpc_id             = "vpc-00000000000000001"
+  vpc_arn            = "arn:aws:ec2:us-east-2:096571798698:vpc/vpc-00000000000000001"
+  public_subnet_ids  = ["subnet-00000000000000001", "subnet-00000000000000002"]
+  private_subnet_ids = ["subnet-00000000000000003", "subnet-00000000000000004"]
+  security_group_ids = {
+    db       = "sg-00000000000000001"
+    redis    = "sg-00000000000000002"
+    alb      = "sg-00000000000000003"
+    vpc_link = "sg-00000000000000004"
+    cicd = {
+      asistencias    = "sg-00000000000000005"
+      bff-movil      = "sg-00000000000000006"
+      bff-web        = "sg-00000000000000007"
+      cotizacion     = "sg-00000000000000008"
+      identidad      = "sg-00000000000000009"
+      notificaciones = "sg-0000000000000000a"
+      perfilamiento  = "sg-0000000000000000b"
+      polizas        = "sg-0000000000000000c"
+      siniestros     = "sg-0000000000000000d"
+    }
+  }
+}

@@ -10,6 +10,11 @@ COPY pyproject.toml alembic.ini ./
 COPY src ./src
 COPY migrations ./migrations
 RUN pip install ".[postgres,server]"
+RUN python -c "from urllib.request import urlretrieve; urlretrieve( \
+    'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', \
+    '/etc/ssl/certs/aws-rds-bundle.pem')"
+
+ENV PGSSLROOTCERT=/etc/ssl/certs/aws-rds-bundle.pem
 
 RUN useradd --system --uid 10001 --no-create-home identidad
 USER 10001

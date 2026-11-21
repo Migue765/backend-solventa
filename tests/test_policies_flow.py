@@ -4,11 +4,10 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from threading import Barrier, Lock, Thread, current_thread
+from threading import Barrier, Lock, current_thread
 from time import monotonic, sleep
 from uuid import UUID, uuid4
 
@@ -35,13 +34,11 @@ from cotizacion.infrastructure.persistence.models import (
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cryptography.hazmat.primitives.asymmetric import rsa
-from flask import Flask, request
+from flask import request
 from openapi_schema_validator import OAS31Validator
-from polizas.app import create_app
 from polizas.infrastructure.models import PolizaModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from werkzeug.serving import make_server
 
 from tests import test_dashboard_flow as dashboard_flow
 from tests.test_dashboard_flow import (
@@ -54,29 +51,13 @@ from tests.test_dashboard_flow import (
     sign_token,
     validate_contract,
 )
+from tests.test_dashboard_flow import (
+    policy_server as policy_server,
+)
 
 keypair = dashboard_flow.keypair
 runtime = dashboard_flow.runtime
 token = dashboard_flow.token
-
-
-@contextmanager
-def policy_server(tmp_path: Path, database_url: str | None = None) -> Iterator[tuple[Flask, str]]:
-    url = database_url or f"sqlite:///{tmp_path / 'polizas.db'}"
-    config = Config(str(ROOT / "services" / "polizas" / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", url)
-    command.upgrade(config, "head")
-    policies = create_app(url, INTERNAL_TOKEN)
-    server = make_server("127.0.0.1", 0, policies, threaded=True)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield policies, f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        policies.extensions["polizas_engine"].dispose()
 
 
 @pytest.fixture
