@@ -415,7 +415,11 @@ def test_database_failure_is_not_empty_success(runtime: Runtime, token: str) -> 
 def test_internal_dashboard_fails_closed_without_configuration(runtime: Runtime) -> None:
     _, client, _ = runtime
     app = create_quote_app(
-        replace(client.application.extensions["cotizacion_config"], internal_api_token="")
+        replace(
+            client.application.extensions["cotizacion_config"],
+            internal_api_token="",
+            polizas_url="",
+        )
     )
     client = app.test_client()
     app.extensions["conciliador_emision"].cerrar()
