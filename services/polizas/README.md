@@ -161,6 +161,15 @@ liquidacion cambio; `201` nueva; `200` misma clave y solicitud; `409 idempotenci
 si la clave se reutiliza con otra solicitud. Una poliza cancelada no se renueva ni se modifica
 (`poliza_cancelada`), y una renovacion pendiente que se resuelva despues se rechaza sin cobro.
 
+`GET /v1/reportes/polizas?corte=<ISO con zona>` (SOL-322) alimenta los reportes
+operativos del BFF Web. Devuelve `{corte,fuente:"polizas",registros,huella,polizas:[...]}`
+con las polizas emitidas hasta el corte (`id,tipo,pagoId,emitidaEn,fechaInicio,fechaFin`
+y `estado` programada/vigente/vencida/cancelada al corte), sin cliente ni suscripcion. Una
+cancelacion registrada hasta el corte prevalece y una renovacion confirmada despues del
+corte conserva el `fechaFin` anterior. `huella` es
+el SHA-256 del JSON canonico de `polizas`. Corte ausente, futuro o sin zona y parametros
+extra responden `400`. Contrato: `contracts/openapi/reportes-operativos-internal-v1.yaml`.
+
 ## Integracion y recuperacion
 
 Cotizacion activa emision con `POLIZAS_SERVICE_URL` e `INTERNAL_API_TOKEN`.

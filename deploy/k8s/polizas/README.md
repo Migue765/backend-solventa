@@ -10,8 +10,9 @@ ajenos ni ejecutar un apply completo sin revision.
 
 ## Prerrequisitos de la primera entrega
 
-1. Crear una base PostgreSQL propia y un usuario con permisos solo sobre ella
-   en la infraestructura principal. No compartir tablas ni usar SQLite/emptyDir.
+1. En la cuenta nueva usar la unica PostgreSQL `solventa_prod`, esquema `polizas`,
+   owner NOLOGIN y usuarios runtime/migrator separados, con TLS `verify-full` y
+   CA RDS de la imagen. No compartir tablas ni usar SQLite/emptyDir.
    Aprovisionar mediante el procedimiento de bases aprobado, sin imprimir
    credenciales ni versionarlas.
 2. Aplicar `namespace.yaml`; sincronizar el Secret externo `polizas-runtime`
@@ -45,7 +46,7 @@ suscripcion origen, tipo, fechas y estado; conservar el rotulo academico.
 Repetir el pago y recargar la pagina no debe generar otro pago ni poliza.
 Iniciar otra sesion/cliente: sus polizas no deben incluir las del primero.
 
-Comprobar las filas en las dos bases con un operador autorizado, sin exponer
+Comprobar las filas en los esquemas cotizacion/polizas con un operador autorizado, sin exponer
 identidad, secretos o tokens en informes. Verificar que pagos historicos no
 se convierten en polizas y que el dashboard no tiene efectos de escritura.
 Una caida de Polizas debe verse como `503`, no como una lista vacia ni emision
@@ -53,7 +54,7 @@ exitosa. Ready, `/health` o una prueba local no sustituyen esta aceptacion.
 
 ## Rollback
 
-Conservar ambas bases y las migraciones aditivas. Si hay que retirar la nueva
+Conservar los esquemas y las migraciones aditivas. Si hay que retirar la nueva
 dependencia, deshabilitar la emision en Cotizacion antes de revertir servicios:
 
 ```powershell
@@ -61,6 +62,6 @@ kubectl -n cotizacion set env deployment/cotizacion POLIZAS_SERVICE_URL-
 kubectl -n cotizacion rollout status deployment/cotizacion --timeout=300s
 ```
 
-El frontend debe mostrar error/indisponibilidad al recibir el marcador legado,
-no atribuir cero polizas al cliente. Los pagos marcados pendientes necesitan
+El dashboard responde `503` si se retira la dependencia; el marcador legado ya
+no es valido ni representa cero polizas. Los pagos marcados pendientes necesitan
 reintento despues de rehabilitar Polizas; nunca borrar sus datos para recuperar.

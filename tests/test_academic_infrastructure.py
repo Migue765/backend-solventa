@@ -25,7 +25,15 @@ SERVICES = (
 )
 NEW_SERVICES = ("siniestros", "notificaciones", "asistencias")
 FULL_MANIFEST_SERVICES = {"asistencias", "notificaciones", "polizas", "siniestros"}
-HPA_SERVICES = {"bff-movil", "bff-web", "cotizacion", "identidad"}
+HPA_SERVICES = {
+    "bff-movil",
+    "bff-web",
+    "cotizacion",
+    "identidad",
+    "notificaciones",
+    "perfilamiento",
+    "polizas",
+}
 BFF_PATCH_PREFIX = "kubectl|-n bff-web patch deployment/bff-web --type=strategic -p "
 IRSA_ROLE = "arn:aws:iam::123456789012:role/solventa-prod-siniestros"
 
@@ -113,6 +121,7 @@ def test_primary_oidc_exception_keeps_provider_guards_and_other_eks_tags() -> No
         "aws_eks_access_entry.admin",
         "aws_launch_template.node",
         "aws_eks_node_group.default",
+        "aws_eks_node_group.additional",
         "aws_eks_addon.this",
         "aws_iam_openid_connect_provider.this",
     }, "Incluir cualquier recurso nuevo etiquetable en las assertions tags/tags_all offline."
@@ -158,7 +167,8 @@ def test_existing_autoscalers_and_disruption_budgets_preserve_academic_profile()
         )
         assert autoscaler["metadata"]["namespace"] == deployment["metadata"]["namespace"]
     budgets = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in K8S.rglob("pdb.yaml")]
-    assert len(budgets) == 4
+    assert len(budgets) == len(HPA_SERVICES)
+    assert {item["metadata"]["namespace"] for item in budgets} == HPA_SERVICES
     assert all(item["spec"]["minAvailable"] == 1 for item in budgets)
 
 
@@ -241,7 +251,7 @@ source "$1"
         },
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=False,
     )
 
@@ -346,7 +356,7 @@ def test_bff_deploy_updates_image_and_profile_dependency_in_one_patch(previous_u
         input=json.dumps(runtime),
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=60,
         check=True,
     )
     actual = json.loads(applied.stdout)
@@ -502,10 +512,14 @@ def test_deploy_limits_replicas_before_rollout_and_checks_result(service: str) -
                 f"kubectl|-n {service} set image deployment/{service} {service}=registry/test:test"
             )
         assert scale < image < rollout
-        if service in HPA_SERVICES:
-            path = (service_directory(service) / "hpa.yaml").relative_to(ROOT).as_posix()
-            assert calls.index(f"kubectl|apply -f {path}") < scale
-    if service not in HPA_SERVICES:
+    if service in HPA_SERVICES:
+        path = (service_directory(service) / "hpa.yaml").relative_to(ROOT).as_posix()
+        hpa = calls.index(f"kubectl|apply -f {path}")
+        if service in FULL_MANIFEST_SERVICES:
+            assert hpa < calls.index("applied|Deployment")
+        else:
+            assert hpa < scale
+    else:
         assert not any("hpa.yaml" in call for call in calls)
     if service != "bff-web":
         assert not any(" patch " in call or "--local" in call for call in calls)

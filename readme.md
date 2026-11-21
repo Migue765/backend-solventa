@@ -173,10 +173,10 @@ En cada arranque se migran Identidad, Cotizacion, Polizas, Siniestros,
 Notificaciones y Asistencias con sus historiales Alembic existentes en esquemas
 distintos. Perfilamiento reutiliza su inicializacion existente, solo sobre
 esquema nuevo; `create_all` no es una migracion de datos existentes. Se repite
-la inicializacion para comprobar que no colisionan los historiales. Son 70 tablas
-de los seis dominios web mas 3 de Asistencias (73 en total), sin contar las tablas
-Alembic. Polizas incluye 7 tablas tras `polizas_0004` y Siniestros 18 tras
-`0008_outbox_notificaciones`.
+la inicializacion para comprobar que no colisionan los historiales. Son 75 tablas
+de los seis dominios web mas 3 de Asistencias (78 en total), sin contar las tablas
+Alembic. Polizas incluye 7 tablas tras `polizas_0004` y Siniestros 23 tras
+`0010_evaluacion_indemnizaciones`, que une evaluacion automatica e indemnizaciones.
 Notificaciones y Asistencias quedan preparadas en SQL sin arrancar sus APIs
 porque no las necesita este recorrido web.
 
@@ -280,6 +280,10 @@ Ejecuta el comando de tipos por servicio solo si existe su `mypy.ini`; el flujo 
 
 El repositorio contempla módulos para red, EKS, API Gateway, WAF, RDS/Aurora, Redis, S3, KMS, Secrets Manager, mensajería, ECR, IAM y observabilidad.
 
+El [productivo de la cuenta nueva](terraform/environments/nueva-cuenta/README.md)
+usa nueve ECR privados, uno por API, sin reutilizar el estado anterior.
+Identidad, BFF Web, Perfilamiento, Cotización y Pólizas ya funcionan sobre EKS y una sola
+base relacional; el runbook distingue lo verificado de las APIs aún pendientes.
 
 ## Pruebas y verificación
 

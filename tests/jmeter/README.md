@@ -76,6 +76,7 @@ al cerrar normalmente. No usarlo como servidor de produccion.
 | Ownership | Otro JWT real no accede a solicitud/ofertas/pago, ni paga una solicitud ajena; dashboard vacio y rechazo de clienteId por query |
 | Persistencia e idempotencia | Una cotizacion, saga, pago y poliza por operacion; importe de pago igual a seleccion; reintentos conservan referencia; consulta dashboard |
 | Siniestros Web (HU24/HU25) | Sobre una poliza emitida en el mismo recorrido: aviso, replay con la misma clave y conflicto; estado e historial propio, sin JWT, de otro cliente, inexistente y no UUID; configuracion, formato no permitido, confirmacion incompleta, carga del PNG sintetico con sha256, confirmacion y reintentos idempotentes, cancelacion de confirmada, listado, descarga byte a byte y ownership de evidencias |
+| Siniestros movil (HU21) | Login movil del mismo cliente y estado e historial del siniestro reportado por `/movil/v1/siniestros/{id}/estado`; rechazo de JWT web e inexistente |
 | Recuperacion real | Reiniciar aplicacion Polizas con la misma DB; detener su servidor antes de un pago nuevo, exigir503, conservar pago sin poliza, reiniciar y reintentar dos veces para emitir exactamente una |
 
 El smoke ejecuta ocho contrataciones y una novena durante la falla controlada.
@@ -122,10 +123,12 @@ ejecución falla si la capacidad es menor de 20.000 perfilamientos/ofertas por h
 | `journey.emission.*` | Aceptar oferta + suscripcion + pago/emision + GET de saga emitida | 1500 / 3000 ms |
 | `journey.dashboard` | Consulta BFF que agrega cotizaciones, pagos, suscripciones y polizas | 150 / 300 ms |
 | `journey.claim.status` | BFF -> Siniestros: estado vigente e historial permitido de un siniestro propio | 150 / 300 ms |
+| `journey.claim.status.movil` | BFF movil -> Siniestros: el mismo estado e historial por `/movil/v1/siniestros/{id}/estado` (HU21/SOL-309) | 150 / 300 ms |
 
 Los gates toman presupuestos del Enunciado p11; dashboard es una consulta agregada real
-con polizas; `journey.claim.status` usa el presupuesto de consulta de estado de
-Arquitectura v7 (p95 <= 150 ms, p99 <= 300 ms). Registro y carga de evidencia se validan
+con polizas; `journey.claim.status` y `journey.claim.status.movil` usan el presupuesto de
+consulta de estado de Arquitectura v7 (p95 <= 150 ms, p99 <= 300 ms); el login movil que
+obtiene su token queda fuera de la transaccion. Registro y carga de evidencia se validan
 funcionalmente y por conteo durable (un siniestro, un historial y una evidencia por recorrido). La cotizacion via
 BFF tampoco certifica el ingreso embebido de socios aun no implementado. Un fallo de
 presupuesto produce salida1 y conserva medidas: nunca se eleva el umbral para dejar verde.

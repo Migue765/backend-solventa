@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import timedelta
 
+from identidad.domain.verification import MOCK_OUTCOMES
 from identidad.infrastructure.passwords import DEFAULT_ITERATIONS
 
 CLIENT_IDS = ("web", "movil")
@@ -29,8 +30,14 @@ class Config:
     encrypted_login_enabled: bool = False
     biometric_login_enabled: bool = False
     login_encryption_private_key: str = ""
+    simulated_identity_enabled: bool = False
+    simulated_identity_outcomes: tuple[str, ...] = ("aprobado",)
 
     def __post_init__(self) -> None:
+        if not 1 <= len(self.simulated_identity_outcomes) <= 3 or any(
+            value not in MOCK_OUTCOMES for value in self.simulated_identity_outcomes
+        ):
+            raise ValueError("IDENTIDAD_SIMULADA_RESULTADOS requiere de 1 a 3 resultados validos.")
         if not self.database_url.strip():
             raise ValueError("DATABASE_URL no puede estar vacía.")
         if not self.jwt_private_key.strip():
@@ -56,6 +63,11 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            simulated_identity_enabled=_boolean("IDENTIDAD_SIMULADA_ENABLED"),
+            simulated_identity_outcomes=tuple(
+                item.strip()
+                for item in os.getenv("IDENTIDAD_SIMULADA_RESULTADOS", "aprobado").split(",")
+            ),
             biometric_login_enabled=_boolean("BIOMETRIC_LOGIN_ENABLED"),
             encrypted_login_enabled=_boolean("ENCRYPTED_LOGIN_ENABLED"),
             login_encryption_private_key=normalize_pem(

@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
+from polizas.api_documentos import documentos_blueprint
 from polizas.domain.cancelacion import ConfirmacionCancelacion
 from polizas.domain.emision import EvidenciaEmision
 from polizas.domain.modificacion import (
@@ -21,12 +22,14 @@ from polizas.domain.modificacion import (
     SolicitudModificacion,
 )
 from polizas.domain.renovacion import SolicitudRenovacion
+from polizas.domain.reporte import corte_desde_texto, huella, instante
 from polizas.infrastructure.cancelaciones import (
     LiquidacionCambio,
     PolizaNoCancelable,
     RepositorioCancelaciones,
 )
 from polizas.infrastructure.consultas import RepositorioConsultas
+from polizas.infrastructure.documentos import RepositorioDocumentos
 from polizas.infrastructure.modificaciones import (
     ImpactoCambio,
     PolizaNoModificable,
@@ -75,6 +78,7 @@ def create_app(
     modificaciones = RepositorioModificaciones(sesiones)
     cancelaciones = RepositorioCancelaciones(sesiones)
     consultas = RepositorioConsultas(sesiones)
+    app.register_blueprint(documentos_blueprint(RepositorioDocumentos(sesiones), reloj))
 
     @app.before_request
     def autenticar() -> tuple[Response, int] | None:
@@ -103,6 +107,22 @@ def create_app(
             raise ValueError("La consulta no admite cuerpo.")
         cliente_id = UUID(request.args["clienteId"])
         return jsonify(polizas=repositorio.listar(cliente_id, datetime.now(UTC)))
+
+    @app.get("/v1/reportes/polizas")
+    def reporte() -> Response:
+        if set(request.args) != {"corte"} or len(request.args.getlist("corte")) != 1:
+            raise ValueError("Se requiere un unico corte.")
+        if request.get_data():
+            raise ValueError("La consulta no admite cuerpo.")
+        corte = corte_desde_texto(request.args["corte"], datetime.now(UTC))
+        registros = repositorio.reporte(corte)
+        return jsonify(
+            corte=instante(corte),
+            fuente="polizas",
+            registros=len(registros),
+            huella=huella(registros),
+            polizas=registros,
+        )
 
     @app.post("/v1/polizas")
     def emitir() -> Response:

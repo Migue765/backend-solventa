@@ -142,5 +142,5 @@ class Dashboard(DashboardModel):
     payments: list[DashboardPayment | DashboardRejectedPayment | DashboardPendingPayment] = Field(
         alias="pagos"
     )
-    policies: list[DashboardPolicy] | UnimplementedDomain = Field(alias="polizas")
+    policies: list[DashboardPolicy] = Field(alias="polizas")
     notifications: UnimplementedDomain = Field(alias="notificaciones")

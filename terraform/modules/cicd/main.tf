@@ -72,7 +72,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 # ---------------------------------------------------------------------------
 # Con github_connection_arn se reutiliza una conexion ya autorizada (otro servicio) y no se crea otra.
 resource "aws_codestarconnections_connection" "github" {
-  count = var.github_connection_arn == null ? 1 : 0
+  count = var.create_github_connection == null ? (var.github_connection_arn == null ? 1 : 0) : (var.create_github_connection ? 1 : 0)
 
   name          = "${local.prefix}-github"
   provider_type = "GitHub"

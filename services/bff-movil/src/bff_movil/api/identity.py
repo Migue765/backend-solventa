@@ -7,6 +7,9 @@ from bff_movil.domain.errors import IdentityRejectedError
 from bff_movil.problems import problem_response
 
 REJECTIONS = {
+    "verificacion_no_encontrada": ("Verificacion no encontrada", "No existe la verificacion."),
+    "transicion_invalida": ("Verificacion terminal", "No se admiten mas intentos."),
+    "conflicto_idempotencia": ("Intento ya utilizado", "El intentoId tiene otras referencias."),
     "sesion_invalida": ("Sesion no valida", "Inicia sesion nuevamente."),
     "acceso_denegado": ("Acceso denegado", "Esta operacion requiere una cuenta cliente."),
     "credencial_ya_registrada": ("Credencial ya registrada", "Registra una clave nueva."),

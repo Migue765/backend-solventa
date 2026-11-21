@@ -86,6 +86,12 @@ run "primary_alias_keeps_explicit_tags" {
   }
   variables {
     oidc_provider_tags = {}
+    additional_node_groups = {
+      extra = {
+        instance_types  = ["t3.small"]
+        release_version = "1.35.9-20261119"
+      }
+    }
   }
 
   assert {
@@ -105,7 +111,9 @@ run "primary_alias_keeps_explicit_tags" {
         aws_eks_access_entry.admin[0].tags, aws_eks_access_entry.admin[0].tags_all,
         aws_launch_template.node.tags, aws_launch_template.node.tags_all,
         aws_eks_node_group.default.tags, aws_eks_node_group.default.tags_all,
-      ], flatten([for addon in values(aws_eks_addon.this) : [addon.tags, addon.tags_all]])) :
+        ],
+        flatten([for group in values(aws_eks_node_group.additional) : [group.tags, group.tags_all]]),
+      flatten([for addon in values(aws_eks_addon.this) : [addon.tags, addon.tags_all]])) :
       tags == var.tags
     ])
     error_message = "Conservar los cuatro tags efectivos de AMBOS roles, access entry, plantilla, nodos y TODOS los addons."
@@ -115,6 +123,7 @@ run "primary_alias_keeps_explicit_tags" {
     condition = (
       aws_eks_cluster.this.tags == tomap(merge(var.tags, { Name = var.cluster_name })) &&
       aws_eks_cluster.this.tags_all == tomap(merge(var.tags, { Name = var.cluster_name })) &&
+      length(aws_eks_node_group.additional) == 1 &&
       length(aws_eks_addon.this) == 3
     )
     error_message = "El cluster conserva Name y los cuatro tags, sin omitir addons del recorrido."

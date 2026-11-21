@@ -15,6 +15,12 @@ tags:
   - name: Asesores
   - name: Sesiones
 paths:
+  /v1/verificaciones-identidad:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
+  /v1/verificaciones-identidad/{verificacionId}:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}"
+  /v1/verificaciones-identidad/{verificacionId}/intentos:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}~1intentos"
   /v1/biometria/enrolamientos/desafio:
     $ref: "./biometria-v1.yaml#/paths/~1enrolamientos~1desafio"
   /v1/biometria/enrolamientos:

@@ -14,6 +14,12 @@ tags:
   - name: Polizas
   - name: Renovaciones
 paths:
+  /v1/verificaciones-identidad:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
+  /v1/verificaciones-identidad/{verificacionId}:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}"
+  /v1/verificaciones-identidad/{verificacionId}/intentos:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}~1intentos"
   /v1/prestadores/consulta:
     $ref: "./asistencias-v1.yaml#/paths/~1prestadores~1consulta"
   /v1/asistencias:
@@ -530,8 +536,11 @@ components:
           type: string
           maxLength: 2048
     ResumenPoliza:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PolizaBase"
+    PolizaBase:
       type: object
-      additionalProperties: false
       required: [id, numero, producto, estado, vigencia, coberturaPrincipal, simulada]
       properties:
         id:
@@ -600,8 +609,9 @@ components:
         incluida:
           type: boolean
     DetallePoliza:
+      unevaluatedProperties: false
       allOf:
-        - $ref: "#/components/schemas/ResumenPoliza"
+        - $ref: "#/components/schemas/PolizaBase"
         - type: object
           required:
             [suscripcionId, emitidaEn, version, plan, coberturas, prima, condiciones, consultadaEn]

@@ -23,9 +23,11 @@ from cotizacion.infrastructure.persistence.models import (
     SagaEmisionModel,
 )
 from cryptography.hazmat.primitives.asymmetric import rsa
+from flask import Flask
 from flask.testing import FlaskClient
 from jwt.algorithms import RSAAlgorithm
 from openapi_schema_validator import OAS31Validator
+from polizas.app import create_app as create_policy_app
 from sqlalchemy import create_engine, event, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.serving import make_server
@@ -97,8 +99,33 @@ def token(keypair: rsa.RSAPrivateKey) -> str:
 def runtime(
     tmp_path: Path, keypair: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Runtime]:
-    with dashboard_runtime(tmp_path, keypair, monkeypatch) as running:
-        yield running
+    with policy_server(tmp_path) as (_, url):
+        config = QuoteConfig(
+            database_url=f"sqlite:///{tmp_path / 'dashboard.db'}",
+            internal_api_token=INTERNAL_TOKEN,
+            polizas_url=url,
+        )
+        with dashboard_runtime(tmp_path, keypair, monkeypatch, config) as running:
+            yield running
+
+
+@contextmanager
+def policy_server(tmp_path: Path, database_url: str | None = None) -> Iterator[tuple[Flask, str]]:
+    url = database_url or f"sqlite:///{tmp_path / 'polizas.db'}"
+    config = AlembicConfig(str(ROOT / "services" / "polizas" / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "head")
+    policies = create_policy_app(url, INTERNAL_TOKEN)
+    server = make_server("127.0.0.1", 0, policies, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield policies, f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        policies.extensions["polizas_engine"].dispose()
 
 
 @contextmanager
@@ -298,9 +325,10 @@ def test_dashboard_reads_main_flow_with_foreign_keys(
         )
     }
     assert dashboard["pagos"][0]["periodicidad"] == period
-    assert (
-        dashboard["polizas"] == dashboard["notificaciones"] == {"disponibilidad": "no_implementado"}
-    )
+    assert len(dashboard["polizas"]) == 1
+    assert dashboard["polizas"][0]["suscripcionId"] == subscription["id"]
+    assert dashboard["polizas"][0]["simulada"] is True
+    assert dashboard["notificaciones"] == {"disponibilidad": "no_implementado"}
     other = client.get(PATH, headers=bearer(other_token)).get_json()
     assert other["cotizaciones"][0]["id"] != quote["id"]
     assert other["pagos"][0]["id"] != payment["id"]
@@ -314,10 +342,21 @@ def test_genuine_empty_dashboard(runtime: Runtime, token: str) -> None:
         "cotizaciones": [],
         "suscripciones": [],
         "pagos": [],
-        "polizas": {"disponibilidad": "no_implementado"},
+        "polizas": [],
         "notificaciones": {"disponibilidad": "no_implementado"},
     }
     validate_contract(response.get_json())
+
+
+def test_missing_policies_is_unavailable_not_an_empty_dashboard(
+    runtime: Runtime, token: str
+) -> None:
+    client, quotes, _ = runtime
+    quotes.application.extensions["polizas"] = None
+    response = client.get(PATH, headers=bearer(token))
+    assert response.status_code == 503
+    assert response.get_json()["code"] == "servicio_no_disponible"
+    assert "polizas" not in response.get_json()
 
 
 @pytest.mark.parametrize("credential", [None, "invalid"])
@@ -376,7 +415,11 @@ def test_database_failure_is_not_empty_success(runtime: Runtime, token: str) -> 
 def test_internal_dashboard_fails_closed_without_configuration(runtime: Runtime) -> None:
     _, client, _ = runtime
     app = create_quote_app(
-        replace(client.application.extensions["cotizacion_config"], internal_api_token="")
+        replace(
+            client.application.extensions["cotizacion_config"],
+            internal_api_token="",
+            polizas_url="",
+        )
     )
     client = app.test_client()
     app.extensions["conciliador_emision"].cerrar()

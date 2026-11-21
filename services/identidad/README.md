@@ -121,6 +121,11 @@ Entrega solo el UUID del usuario. No habilita cuentas automaticamente desde la w
 Las organizaciones inactivas se excluyen al emitir/renovar JWT; tokens ya emitidos
 mantienen su vigencia existente hasta expiracion (una hora).
 
+El alta interna de asesores (`create-advisor`) persiste organizacion y usuario
+antes de insertar su vinculo, dentro de una unica transaccion. Funciona tanto con
+organizaciones nuevas como existentes sin desactivar las claves foraneas.
+Tampoco habilita la asignacion de roles privilegiados desde el registro publico.
+
 - **Access token:** JWT `RS256` con `kid` en la cabecera. Claims: `iss`, `sub`, `aud`, `iat`,
   `exp` (`iat` + 3600 s), `jti`, `scope`, `rol`, `nombre`, `correo` y `client_id`.
 - **Refresh token:** `secrets.token_urlsafe(48)`; solo se guarda su SHA-256. Vive 8 horas para
@@ -239,3 +244,9 @@ export JWT_PRIVATE_KEY="$(cat /tmp/identidad.pem)"
 alembic upgrade head
 flask --app identidad.app run --port 8080
 ```
+
+## Demostracion de identidad
+
+La verificacion simulada post-login (deshabilitada por defecto) se documenta en
+[`docs/identidad-simulada.md`](../../docs/identidad-simulada.md).
+No acredita KYC/prueba de vida ni recibe fotos o documentos reales.

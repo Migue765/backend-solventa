@@ -8,7 +8,10 @@ from alembic import command
 from alembic.config import Config
 from flask import Flask
 from flask.testing import FlaskClient
+from jsonschema import Draft202012Validator, FormatChecker  # type: ignore[import-untyped]
 from polizas.app import create_app
+
+from scripts.validate_openapi import load_contract
 
 TOKEN = "polizas-test-internal"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
@@ -64,6 +67,98 @@ def _emitir(cliente: FlaskClient, cliente_id: str, tipo: str = "automotive") -> 
 
 def _cabeceras(cliente_id: str) -> dict[str, str]:
     return {**HEADERS, "X-Cliente-ID": cliente_id}
+
+
+@pytest.fixture
+def contrato_movil() -> dict[str, Draft202012Validator]:
+    contrato = load_contract(
+        Path(__file__).resolve().parents[4] / "contracts" / "openapi" / "bff-movil-v1.yaml"
+    )
+    return {
+        nombre: Draft202012Validator(
+            {"$ref": f"#/components/schemas/{nombre}", "components": contrato["components"]},
+            format_checker=FormatChecker(),
+        )
+        for nombre in ("ResumenPoliza", "DetallePoliza", "ListaPolizas")
+    }
+
+
+@pytest.fixture
+def documentos_poliza(app: Flask) -> dict[str, dict[str, Any]]:
+    cliente = app.test_client()
+    usuario = str(uuid4())
+    poliza = _emitir(cliente, usuario)
+    lista = cliente.get("/v1/clientes/me/polizas", headers=_cabeceras(usuario)).get_json()
+    detalle = cliente.get(
+        f"/v1/clientes/me/polizas/{poliza['id']}", headers=_cabeceras(usuario)
+    ).get_json()
+    return {"ResumenPoliza": lista["polizas"][0], "DetallePoliza": detalle}
+
+
+@pytest.mark.parametrize("tipo", ["automotive", "travel"])
+def test_respuestas_serializadas_cumplen_contrato_movil(
+    app: Flask, contrato_movil: dict[str, Draft202012Validator], tipo: str
+) -> None:
+    cliente = app.test_client()
+    usuario = str(uuid4())
+    poliza = _emitir(cliente, usuario, tipo)
+    lista = cliente.get("/v1/clientes/me/polizas", headers=_cabeceras(usuario))
+    detalle = cliente.get(f"/v1/clientes/me/polizas/{poliza['id']}", headers=_cabeceras(usuario))
+    assert lista.status_code == detalle.status_code == 200
+    contrato_movil["ListaPolizas"].validate(lista.get_json())
+    resumen = lista.get_json()["polizas"][0]
+    documento = detalle.get_json()
+    contrato_movil["ResumenPoliza"].validate(resumen)
+    contrato_movil["DetallePoliza"].validate(documento)
+    assert not contrato_movil["ResumenPoliza"].is_valid(documento)
+
+    # Compatibilidad del contrato, sin emitir polizas reales ni cambiar el serializer.
+    for nombre, respuesta in (("ResumenPoliza", resumen), ("DetallePoliza", documento)):
+        assert respuesta["simulada"] is True
+        contrato_movil[nombre].validate({**respuesta, "simulada": False})
+
+
+@pytest.mark.parametrize("nombre", ["ResumenPoliza", "DetallePoliza"])
+def test_contrato_movil_conserva_todos_los_campos_requeridos(
+    contrato_movil: dict[str, Draft202012Validator],
+    documentos_poliza: dict[str, dict[str, Any]],
+    nombre: str,
+) -> None:
+    documento = documentos_poliza[nombre]
+    contrato_movil[nombre].validate(documento)
+    for campo in documento:
+        incompleto = {clave: valor for clave, valor in documento.items() if clave != campo}
+        assert not contrato_movil[nombre].is_valid(incompleto), campo
+
+
+@pytest.mark.parametrize(
+    ("nombre", "campo", "valor"),
+    [
+        ("ResumenPoliza", "extra", True),
+        ("ResumenPoliza", "numero", None),
+        ("ResumenPoliza", "producto", {"tipo": "automotive"}),
+        ("ResumenPoliza", "vigencia", {"inicio": "no-es-fecha", "fin": "2027-01-01"}),
+        ("ResumenPoliza", "coberturaPrincipal", {"codigo": "x", "nombre": "x", "extra": 1}),
+        ("ResumenPoliza", "simulada", "false"),
+        ("DetallePoliza", "extra", True),
+        ("DetallePoliza", "version", "1"),
+        ("DetallePoliza", "plan", 1),
+        ("DetallePoliza", "emitidaEn", "no-es-fecha"),
+        ("DetallePoliza", "coberturas", [{"codigo": "x"}]),
+        ("DetallePoliza", "prima", {"monto": 85000, "moneda": "COP", "periodicidad": "mensual"}),
+        ("DetallePoliza", "condiciones", None),
+    ],
+)
+def test_contrato_movil_rechaza_propiedades_y_tipos_invalidos(
+    contrato_movil: dict[str, Draft202012Validator],
+    documentos_poliza: dict[str, dict[str, Any]],
+    nombre: str,
+    campo: str,
+    valor: object,
+) -> None:
+    contrato_movil[nombre].validate(documentos_poliza[nombre])
+    documento = {**documentos_poliza[nombre], campo: valor}
+    assert not contrato_movil[nombre].is_valid(documento)
 
 
 def test_lista_del_cliente_con_resumen_y_aislamiento(app: Flask) -> None:
