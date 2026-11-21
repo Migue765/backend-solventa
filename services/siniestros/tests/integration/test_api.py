@@ -15,8 +15,9 @@ from siniestros.domain import Config as ClaimsConfig
 from siniestros.infrastructure.models import Base, CambioEstadoModel
 from siniestros.models import Claim
 from siniestros.repository import fingerprint
-from sqlalchemy import inspect, update
+from sqlalchemy import inspect, select, update
 from sqlalchemy.orm import Session
+from werkzeug.test import TestResponse
 
 TOKEN = "siniestros-test-internal"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
@@ -257,3 +258,81 @@ def test_siembra_local_produce_casos_consultables(app: Flask) -> None:
     assert estados == ["reportado", "en_inspeccion", "pagado"]
     with pytest.raises(ValueError, match="SQLite"):
         modulo.sembrar("postgresql://remoto/siniestros", cliente_id, REPORTE)
+
+
+RUTA_REPORTE = "/internal/v1/reportes/consulta"
+
+
+def consultar_reporte(
+    app: Flask, corte: datetime, headers: dict[str, str] | None = None
+) -> TestResponse:
+    return app.test_client().post(
+        RUTA_REPORTE,
+        headers=HEADERS if headers is None else headers,
+        json={"corte": corte.isoformat()},
+    )
+
+
+def test_reporte_reconstruye_estado_del_siniestro_al_corte(app: Flask) -> None:
+    cliente_id = uuid4()
+    siniestro_id = registrar(app, cliente_id, HISTORIAL)
+
+    assert consultar_reporte(app, REPORTE - timedelta(seconds=1)).get_json()["siniestros"] == []
+    intermedio = consultar_reporte(app, REPORTE + timedelta(hours=1, minutes=30))
+    final = consultar_reporte(app, REPORTE + timedelta(days=1))
+
+    assert intermedio.status_code == 200
+    assert intermedio.headers["Cache-Control"] == "no-store"
+    cuerpo = intermedio.get_json()
+    with Session(app.extensions["siniestros_engine"]) as session:
+        poliza_id = session.scalars(select(Claim)).one().payload["polizaId"]
+    assert cuerpo["siniestros"] == [
+        {
+            "id": str(siniestro_id),
+            "polizaId": poliza_id,
+            "tipo": "asistido",
+            "estado": "en_evaluacion",
+            "reportadoEn": "2026-11-01T15:00:00Z",
+        }
+    ]
+    assert cuerpo["pagos"] == []
+    assert cuerpo["corte"] == "2026-11-01T16:30:00Z"
+    assert cuerpo["fuente"] == "siniestros"
+    assert cuerpo["registros"] == 1
+    assert str(cliente_id) not in intermedio.get_data(as_text=True)
+    assert final.get_json()["siniestros"][0]["estado"] == "aprobado"
+    repetido = consultar_reporte(app, REPORTE + timedelta(hours=1, minutes=30)).get_json()
+    assert repetido == cuerpo
+    assert final.get_json()["huella"] != cuerpo["huella"]
+
+
+@pytest.mark.parametrize(
+    "cuerpo",
+    [
+        {},
+        {"corte": "2026-11-01T00:00:00"},
+        {"corte": "x"},
+        {"corte": "2999-01-01T00:00:00Z"},
+        {"corte": "2026-11-01T00:00:00Z", "clienteId": "x"},
+    ],
+)
+def test_reporte_rechaza_consulta_invalida(app: Flask, cuerpo: dict[str, str]) -> None:
+    respuesta = app.test_client().post(RUTA_REPORTE, headers=HEADERS, json=cuerpo)
+    assert respuesta.status_code == 400
+
+
+def test_reporte_exige_credencial_interna_y_corte_en_cuerpo(app: Flask) -> None:
+    assert consultar_reporte(app, REPORTE, {}).status_code == 401
+    respuesta = app.test_client().post(
+        RUTA_REPORTE + "?corte=x", headers=HEADERS, json={"corte": REPORTE.isoformat()}
+    )
+    assert respuesta.status_code == 400
+
+
+def test_reporte_con_historial_incompleto_falla_y_no_parece_vacio(app: Flask) -> None:
+    registrar(app, uuid4(), HISTORIAL)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        session.execute(update(CambioEstadoModel).values(ocurrido_en=REPORTE + timedelta(days=2)))
+    respuesta = consultar_reporte(app, REPORTE + timedelta(days=1))
+    assert respuesta.status_code == 503
+    assert respuesta.get_json()["code"] == "siniestro_no_integro"
