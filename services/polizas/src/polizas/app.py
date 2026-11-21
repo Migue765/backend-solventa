@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
+from polizas.api_documentos import documentos_blueprint
 from polizas.domain.cancelacion import ConfirmacionCancelacion
 from polizas.domain.emision import EvidenciaEmision
 from polizas.domain.modificacion import (
@@ -27,6 +28,7 @@ from polizas.infrastructure.cancelaciones import (
     RepositorioCancelaciones,
 )
 from polizas.infrastructure.consultas import RepositorioConsultas
+from polizas.infrastructure.documentos import RepositorioDocumentos
 from polizas.infrastructure.modificaciones import (
     ImpactoCambio,
     PolizaNoModificable,
@@ -75,6 +77,7 @@ def create_app(
     modificaciones = RepositorioModificaciones(sesiones)
     cancelaciones = RepositorioCancelaciones(sesiones)
     consultas = RepositorioConsultas(sesiones)
+    app.register_blueprint(documentos_blueprint(RepositorioDocumentos(sesiones), reloj))
 
     @app.before_request
     def autenticar() -> tuple[Response, int] | None:

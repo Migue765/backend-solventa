@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -126,3 +126,33 @@ class AuditoriaPolizaModel(Base):
     detalle: Mapped[dict[str, object]] = mapped_column(JSON)
     correlation_id: Mapped[str] = mapped_column(String(64))
     ocurrido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentoPolizaModel(Base):
+    """Instantanea inmutable de los bytes consultados y descargables."""
+
+    __tablename__ = "documentos_poliza"
+    __table_args__ = (UniqueConstraint("poliza_id", "contenido_hash"),)
+
+    documento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    poliza_id: Mapped[UUID] = mapped_column(ForeignKey("polizas.poliza_id"), index=True)
+    version_poliza: Mapped[int | None]
+    contenido_hash: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[str] = mapped_column(Text)
+    archivo: Mapped[str] = mapped_column(Text)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AceptacionDocumentoModel(Base):
+    """Evidencia append-only; actor y fecha se obtienen del servidor."""
+
+    __tablename__ = "aceptaciones_documento"
+    __table_args__ = (UniqueConstraint("cliente_id", "idempotency_key"),)
+
+    aceptacion_id: Mapped[UUID] = mapped_column(primary_key=True)
+    documento_id: Mapped[UUID] = mapped_column(ForeignKey("documentos_poliza.documento_id"))
+    poliza_id: Mapped[UUID] = mapped_column(ForeignKey("polizas.poliza_id"), index=True)
+    cliente_id: Mapped[UUID]
+    idempotency_key: Mapped[UUID]
+    solicitud_hash: Mapped[str] = mapped_column(String(64))
+    aceptada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
