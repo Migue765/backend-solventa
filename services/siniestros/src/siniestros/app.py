@@ -14,6 +14,7 @@ from siniestros.api.fraude import registrar_rutas_fraude
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
 from siniestros.domain.decision import DecisionRevision, ResultadoEvaluacion
 from siniestros.domain.estado import SiniestroNoIntegro
+from siniestros.domain.evaluacion import ConjuntoReglasEvaluacion, SolicitudEvaluacion
 from siniestros.domain.fraude import ConfiguracionFraude
 from siniestros.domain.indemnizaciones import SolicitudIndemnizacion
 from siniestros.domain.parametricos import (
@@ -23,6 +24,7 @@ from siniestros.domain.parametricos import (
     ReglaParametrica,
 )
 from siniestros.infrastructure.decisiones import ServicioDecisiones
+from siniestros.infrastructure.evaluacion import RepositorioEvaluaciones
 from siniestros.infrastructure.fraude import MotorFraude
 from siniestros.infrastructure.indemnizaciones import ServicioIndemnizaciones
 from siniestros.infrastructure.notificaciones import (
@@ -70,6 +72,8 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
         else None
     )
     app.extensions["notificaciones_publisher"] = notificaciones
+    evaluaciones = RepositorioEvaluaciones(repo)
+    app.extensions["evaluaciones_repository"] = evaluaciones
 
     @app.before_request
     def authorize() -> None:
@@ -231,6 +235,31 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
         if publicador is None:
             raise Problem(503, "notificaciones_no_configuradas")
         return jsonify(publicador.publicar(entrada.limite))
+
+    @app.post("/internal/v1/reglas-evaluacion-siniestros")
+    def registrar_reglas_evaluacion() -> tuple[Response, int]:
+        registro, status = evaluaciones.registrar_reglas(
+            ConjuntoReglasEvaluacion.model_validate(body())
+        )
+        return jsonify(registro), status
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/evaluacion")
+    def evaluar_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        solicitud = SolicitudEvaluacion.model_validate(body())
+        registro, status = evaluaciones.evaluar(
+            siniestro_id, solicitud.senalesFraude, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/evaluaciones")
+    def historial_evaluaciones(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(evaluaciones.historial(siniestro_id))
+
+    @app.post("/internal/v1/evaluaciones-siniestros/procesamiento")
+    def procesar_evaluaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(evaluaciones.procesar(entrada.limite))
 
     @app.post("/internal/v1/siniestros/<uuid:claim_id>/indemnizacion")
     def solicitar_indemnizacion(claim_id: UUID) -> tuple[Response, int]:

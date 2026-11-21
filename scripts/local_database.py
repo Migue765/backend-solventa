@@ -23,7 +23,7 @@ TABLE_COUNTS = {
     "cotizacion": 20,
     "perfilamiento": 11,
     "polizas": 7,
-    "siniestros": 18,
+    "siniestros": 23,
     "notificaciones": 4,
     "asistencias": 3,
 }
