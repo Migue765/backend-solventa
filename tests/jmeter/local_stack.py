@@ -228,7 +228,14 @@ class LocalStack:
             if self.mobile_port is not None:
                 self.start(
                     "mobile",
-                    mobile_app(MobileConfig(identity_url=identity, jwt_issuer=issuer)),
+                    mobile_app(
+                        MobileConfig(
+                            identity_url=identity,
+                            jwt_issuer=issuer,
+                            claims_service_url=claims,
+                            internal_api_token=self.internal_token,
+                        )
+                    ),
                     self.mobile_port,
                 )
         except BaseException:

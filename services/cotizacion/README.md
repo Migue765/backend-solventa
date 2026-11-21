@@ -405,6 +405,16 @@ La creación de solicitudes requiere el encabezado `Idempotency-Key` con un UUID
 clave y los mismos datos devuelven el registro original; reutilizarla con datos diferentes
 produce `409`.
 
+### Reportes operativos (SOL-322)
+
+`GET /v1/reportes/primas?corte=<ISO con zona>` exige el `INTERNAL_API_TOKEN` como Bearer y
+alimenta los reportes operativos del BFF Web. Devuelve
+`{corte,fuente:"primas",registros,huella,primas:[{pagoId,producto,monto,moneda,confirmadaEn}]}`
+con los pagos simulados confirmados hasta el corte, sin cliente, solicitud ni datos de
+pago. `huella` es el SHA-256 del JSON canonico de `primas`. Corte invalido o parametros
+extra: `400`; credencial incorrecta: `401`; persistencia no disponible: `503`. Contrato:
+`contracts/openapi/reportes-operativos-internal-v1.yaml`.
+
 ## Solicitudes multirramo
 
 El contrato público está en `contracts/openapi/bff-web-v1.yaml`. El BFF recibe exclusivamente

@@ -433,6 +433,37 @@ publican como problemas: `422 poliza_no_cancelable` (`motivo`) y `409` `liquidac
 `idempotencia_conflictiva`. Un `503` no confirma ni descarta la cancelacion; se reintenta con
 la misma clave. Reglas: `services/polizas/README.md`.
 
+### Reportes operativos consolidados (SOL-322, HU36)
+
+`GET /v1/reportes/operativos?desde=&hasta=[&producto=][&estado=][&corte=]` requiere JWT del
+canal Web con rol y scope `asesor`; cualquier otro rol responde `403 alcance_insuficiente`.
+`desde` y `hasta` (`YYYY-MM-DD`, UTC, maximo 366 dias, sin pasar del dia del corte) son
+obligatorios; `producto` y `estado` (de poliza al corte) son opcionales y se validan contra
+`GET /v1/reportes/operativos/opciones`. Se rechazan filtros desconocidos, repetidos o cuerpo.
+Sin `corte`, el BFF fija uno a 60 s antes del reloj del servidor, truncado al segundo.
+
+El BFF consulta, al mismo corte y con `INTERNAL_API_TOKEN`, a Polizas
+(`POLIZAS_SERVICE_URL`, `GET /v1/reportes/polizas`), Cotizacion (`QUOTE_SERVICE_URL`,
+`GET /v1/reportes/primas`) y Siniestros (`SINIESTROS_SERVICE_URL`,
+`POST /internal/v1/reportes/consulta`); contrato en
+`contracts/openapi/reportes-operativos-internal-v1.yaml`. Las fuentes no exponen clientes,
+documentos, contactos, direcciones ni evidencias, y el BFF rechaza cualquier campo extra.
+Verifica corte, conteo y huella SHA-256 de cada fuente, identificadores unicos y que ningun
+registro sea posterior al corte. Cualquier falla, timeout (3 s por fuente) o discrepancia responde
+`503 consolidacion_incompleta` con `fuente` y `Retry-After`; nunca entrega datos parciales.
+
+La respuesta trae indicadores de polizas, primas (totales por moneda), siniestros y pagos
+parametricos, el desglose `porProducto`, `inconsistencias` informativas entre fuentes, la
+huella de cada fuente y la `huella` del reporte (sin `generadoEn`). Para descargar el mismo
+resultado, `GET /v1/reportes/operativos/descarga` recibe los mismos filtros, el `corte`
+devuelto y la `huella`; recalcula el reporte y entrega CSV solo si la huella coincide, si no
+responde `409 reporte_no_reproducible`. Toda consulta, descarga o rechazo deja el evento de
+auditoria `sol322.reporte` con actor, filtros, corte, huella, codigo y `correlationId`.
+
+Para activarlo sin redesplegar el manifiesto completo:
+`kubectl -n bff-web set env deployment/bff-web POLIZAS_SERVICE_URL=http://polizas.polizas.svc.cluster.local:8080`.
+Sin esa variable las consultas responden `503` con `fuente=polizas`.
+
 ### Pago exclusivamente simulado
 
 `GET/POST /v1/solicitudes-cotizacion/{id}/pago-simulado` requiere el mismo JWT.
@@ -598,7 +629,7 @@ para validar la vigencia con el reloj del servidor.
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
 | `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
-| `POLIZAS_SERVICE_URL`       | Sin valor; devuelve 503 | Servicio de polizas (renovacion)                     |
+| `POLIZAS_SERVICE_URL`       | Sin valor; devuelve 503 | Servicio de polizas (renovacion y reportes)          |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.
