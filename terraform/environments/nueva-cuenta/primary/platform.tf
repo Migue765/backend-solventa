@@ -109,7 +109,7 @@ module "api_gateway" {
   jwt_audience             = "solventa-api"
   enable_jwt_routes        = var.enable_jwt_routes
   cors_allowed_origins     = ["http://localhost:4200"]
-  cors_expose_headers      = ["date", "retry-after"]
+  cors_expose_headers      = ["date", "retry-after", "x-reporte-huella", "x-content-sha256"]
   tags                     = local.tags
 
   depends_on = [terraform_data.tls_configuration]
