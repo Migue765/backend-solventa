@@ -491,9 +491,10 @@ run "reject_wrong_group_name" {
     for group in small_groups.values():
         assert group["instance_types"] == ["t3.small"]
         assert group["scaling_config"] == legacy["scaling_config"]
-    assert small_groups['module.eks.aws_eks_node_group.additional["small-extra"]'][
-        "release_version"
-    ] == "1.35.9-20261119"
+    assert (
+        small_groups['module.eks.aws_eks_node_group.additional["small-extra"]']["release_version"]
+        == "1.35.9-20261119"
+    )
 
 
 @pytest.mark.parametrize("name", ["bootstrap", "network", "addons"])

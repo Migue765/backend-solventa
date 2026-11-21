@@ -43,7 +43,8 @@ def _register_client(client: FlaskClient, with_document: bool = False) -> str:
 
 @pytest.mark.parametrize("existing_partner", [False, True])
 def test_advisor_login_includes_authorized_partners(
-    make_app: Any, existing_partner: bool,
+    make_app: Any,
+    existing_partner: bool,
 ) -> None:
     app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
     with app.extensions["user_repository"]._sessions.begin() as session:

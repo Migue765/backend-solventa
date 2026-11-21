@@ -94,7 +94,12 @@ def render(context: dict[str, Any], images: dict[str, str]) -> dict[str, dict[st
         rendered[f"{service}/seed.json"] = {"apiVersion": "v1", "kind": "List", "items": seed}
 
         after = []
-        for name in ("hpa.yaml", "pdb.yaml", "consent-outbox-cronjob.yaml", "despachos-cronjob.yaml"):
+        for name in (
+            "hpa.yaml",
+            "pdb.yaml",
+            "consent-outbox-cronjob.yaml",
+            "despachos-cronjob.yaml",
+        ):
             if (directory / name).exists():
                 after.append(load_manifest(directory, values, name))
         if after:
