@@ -350,7 +350,7 @@ Cotizacion, la base o la validacion del contrato, el BFF devuelve `503`, no un r
 Credenciales JWT invalidas devuelven `401`; parametros o cuerpo devuelven `400`.
 La respuesta satisfactoria tiene `Cache-Control: no-store`.
 
-El contrato devuelve arrays reales `cotizaciones`, `suscripciones` y `pagos`.
+El contrato devuelve arrays reales `cotizaciones`, `suscripciones`, `pagos` y `polizas`.
 Los importes son strings decimales de dos posiciones y las fechas incluyen zona horaria.
 Cada cotizacion conserva ID, solicitud (null en registros antiguos), producto, estado,
 fechas, prima estimada y seleccion opcional. La prima estimada no tiene periodicidad
@@ -359,14 +359,14 @@ exacta (`mensual`, `por_viaje`, `por_vuelo`, `por_periodo`), sin recalculos ni t
 que mezclen monedas o periodicidades. Suscripcion conserva su estado y saga actuales;
 el pago se identifica siempre como `simulada: true`, nunca como un cobro real.
 
-Con `POLIZAS_SERVICE_URL` habilitado en Cotizacion, `polizas` es un array de
+`POLIZAS_SERVICE_URL` es obligatorio para el dashboard de Cotizacion; `polizas` es un array de
 emisiones academicas persistidas por el nuevo servicio: `{id,suscripcionId,tipo,
 fechaInicio,fechaFin,estado,simulada:true}`. Fechas `YYYY-MM-DD` inclusivas;
 estado `programada`, `vigente` o `vencida` respecto del dia UTC. No acredita
 cobertura real ni convierte pagos historicos en polizas. El BFF valida el contrato,
 no calcula vigencias ni deriva polizas a partir de la saga.
-Sin habilitar Polizas se conserva `{disponibilidad:"no_implementado"}`, nunca una
-lista vacia artificial; el consumidor debe informar indisponibilidad.
+Si falta o falla Polizas, la consulta devuelve `503`; el descriptor legado de
+polizas ya no es valido. Nunca se devuelve una lista vacia artificial.
 `notificaciones` conserva ese marcador y no se genera desde eventos.
 Una coleccion vacia disponible si representa una consulta sin registros.
 La lectura historica no renueva ni exige perfiles de riesgo vigentes y

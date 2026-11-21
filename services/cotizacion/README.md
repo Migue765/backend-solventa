@@ -206,11 +206,11 @@ ni siquiera para registros historicos vencidos. Ordena cotizaciones de mas recie
 a mas antigua, con ID como desempate. No suma importes ni convierte monedas.
 La consulta sin filas devuelve tres arrays vacios reales. Fallos SQL o integridad
 (por ejemplo suscripcion sin saga) se notifican como errores, nunca como vacio.
-La respuesta tiene `Cache-Control: no-store`. Con `POLIZAS_SERVICE_URL` habilitado,
+La respuesta tiene `Cache-Control: no-store`. `POLIZAS_SERVICE_URL` es obligatorio:
 se agrega el array de polizas persistidas consultando el servicio por HTTP y
 propagando cliente y correlacion; su indisponibilidad responde `503`, no vacio.
-El BFF valida el contrato publico. Sin habilitarlo conserva el marcador legado;
-notificaciones sigue `no_implementado`.
+El BFF valida el contrato publico. Sin habilitarlo responde `503`, no omite
+polizas ni usa el descriptor legado. Notificaciones sigue `no_implementado`.
 
 ### Pago simulado
 

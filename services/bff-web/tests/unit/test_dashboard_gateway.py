@@ -27,6 +27,7 @@ def payload() -> dict[str, Any]:
             }
         ],
         "suscripciones": [],
+        "polizas": [],
         "pagos": [
             {
                 "id": str(uuid4()),
@@ -108,6 +109,17 @@ def test_dashboard_rejects_invalid_dependency_fields(
 )
 def test_dashboard_never_defaults_missing_or_malformed_collections(body: bytes) -> None:
     with patch("bff_web.infrastructure.http_quote_gateway.urlopen", return_value=BytesIO(body)):
+        with pytest.raises(QuoteServiceUnavailableError):
+            HttpQuoteGateway("http://cotizacion", internal_api_token="test").get_dashboard(uuid4())
+
+
+@pytest.mark.parametrize("policies", [None, {}, {"disponibilidad": "no_implementado"}])
+def test_dashboard_rejects_non_authoritative_policy_collections(policies: object) -> None:
+    response = {**payload(), "polizas": policies}
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(response).encode()),
+    ):
         with pytest.raises(QuoteServiceUnavailableError):
             HttpQuoteGateway("http://cotizacion", internal_api_token="test").get_dashboard(uuid4())
 

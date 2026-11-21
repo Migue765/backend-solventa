@@ -1,0 +1,3 @@
+# El rol debe existir y estar aprobado antes del bootstrap del bucket.
+aws_profile         = ""
+deployment_role_arn = ""

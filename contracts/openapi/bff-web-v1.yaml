@@ -1393,8 +1393,9 @@ paths:
         Lee exclusivamente registros persistidos del cliente derivado del JWT.
         No admite query ni cuerpo. Una coleccion vacia es una consulta real sin registros;
         polizas contiene emisiones academicas persistidas, no cobertura real.
-        Si la emision no esta habilitada conserva el marcador legado no_implementado;
-        el consumidor no debe presentarlo como lista vacia. Notificaciones no esta implementado.
+        Polizas es una dependencia obligatoria: si falta o falla devuelve 503,
+        nunca el marcador legado no_implementado ni una lista vacia artificial.
+        Notificaciones conserva el descriptor no_implementado.
         No recalcula primas, no renueva perfiles y no agrega importes de monedas
         o periodicidades distintas. Los pagos son exclusivamente simulados.
       responses:
@@ -4765,11 +4766,9 @@ components:
           items:
             $ref: "#/components/schemas/PagoDashboard"
         polizas:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/PolizaDashboard"
-            - $ref: "#/components/schemas/DominioNoImplementado"
+          type: array
+          items:
+            $ref: "#/components/schemas/PolizaDashboard"
         notificaciones:
           $ref: "#/components/schemas/DominioNoImplementado"
     PolizaDashboard:

@@ -47,10 +47,20 @@ run "preflight_routes_do_not_require_jwt" {
 
   assert {
     condition = (
+      aws_lb_listener_rule.cors_preflight.priority == 1 &&
+      one(one(aws_lb_listener_rule.cors_preflight.condition).http_request_method).values == toset(["OPTIONS"]) &&
+      one(aws_lb_listener_rule.cors_preflight.action).type == "fixed-response" &&
+      one(one(aws_lb_listener_rule.cors_preflight.action).fixed_response).status_code == "204"
+    )
+    error_message = "El ALB debe resolver OPTIONS con 204 sin depender de pods disponibles."
+  }
+
+  assert {
+    condition = (
       aws_apigatewayv2_route.v1_options.route_key == "OPTIONS /v1/{proxy+}" &&
       aws_apigatewayv2_route.v1_options.authorization_type == "NONE" &&
       aws_apigatewayv2_route.v1_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
-      aws_apigatewayv2_route.v1.authorization_type == "JWT"
+      aws_apigatewayv2_route.v1[0].authorization_type == "JWT"
     )
     error_message = "El preflight web debe ser publico sin quitar JWT de las demas solicitudes."
   }
@@ -60,7 +70,7 @@ run "preflight_routes_do_not_require_jwt" {
       aws_apigatewayv2_route.movil_options.route_key == "OPTIONS /movil/{proxy+}" &&
       aws_apigatewayv2_route.movil_options.authorization_type == "NONE" &&
       aws_apigatewayv2_route.movil_options.target == "integrations/${aws_apigatewayv2_integration.alb.id}" &&
-      aws_apigatewayv2_route.movil.authorization_type == "JWT"
+      aws_apigatewayv2_route.movil[0].authorization_type == "JWT"
     )
     error_message = "El preflight movil debe ser publico sin quitar JWT de las demas solicitudes."
   }
@@ -92,7 +102,26 @@ run "evidence_preflight_keeps_gateway_security" {
   }
 
   assert {
-    condition     = aws_apigatewayv2_route.v1.authorization_type == "JWT" && aws_apigatewayv2_route.movil.authorization_type == "JWT"
+    condition     = aws_apigatewayv2_route.v1[0].authorization_type == "JWT" && aws_apigatewayv2_route.movil[0].authorization_type == "JWT"
     error_message = "Las rutas web y movil deben seguir protegidas por JWT."
+  }
+}
+
+run "empty_bootstrap_never_exposes_unprotected_proxies" {
+  command = plan
+  variables {
+    enable_jwt_routes = false
+  }
+  assert {
+    condition = (
+      length(aws_apigatewayv2_authorizer.jwt) == 0 &&
+      length(aws_apigatewayv2_route.v1) == 0 &&
+      length(aws_apigatewayv2_route.movil) == 0
+    )
+    error_message = "Sin discovery aun no existen rutas protegidas; nunca deben degradarse a NONE."
+  }
+  assert {
+    condition     = aws_apigatewayv2_route.oidc_discovery.route_key == "GET /.well-known/openid-configuration"
+    error_message = "El arranque necesita publicar el discovery real antes del authorizer."
   }
 }

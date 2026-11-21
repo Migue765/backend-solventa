@@ -145,3 +145,16 @@ variable "cors_allowed_origins" {
     "http://localhost:4200",
   ]
 }
+
+variable "cors_expose_headers" {
+  description = "Cabeceras de respuesta accesibles al navegador."
+  type        = list(string)
+  default     = ["x-correlation-id", "retry-after", "date", "api-version", "location"]
+}
+
+variable "enable_jwt_routes" {
+  description = "False durante arranque vacio: no crea authorizer ni rutas protegidas; nunca las abre sin JWT."
+  type        = bool
+  default     = true
+  nullable    = false
+}

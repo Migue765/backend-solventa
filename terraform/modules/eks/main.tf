@@ -160,6 +160,43 @@ resource "aws_eks_node_group" "default" {
   depends_on = [aws_iam_role_policy_attachment.node]
 }
 
+resource "aws_eks_node_group" "additional" {
+  for_each = var.additional_node_groups
+
+  cluster_name    = aws_eks_cluster.this.name
+  node_group_name = "${var.cluster_name}-${each.key}"
+  node_role_arn   = aws_iam_role.node.arn
+  subnet_ids      = var.private_subnet_ids
+  instance_types  = each.value.instance_types
+  version         = var.kubernetes_version
+  release_version = each.value.release_version
+  ami_type        = "AL2023_x86_64_STANDARD"
+  capacity_type   = "ON_DEMAND"
+
+  launch_template {
+    id      = aws_launch_template.node.id
+    version = tostring(aws_launch_template.node.latest_version)
+  }
+
+  scaling_config {
+    min_size     = var.node_min_size
+    desired_size = var.node_desired_size
+    max_size     = var.node_max_size
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  tags = var.tags
+
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.node]
+}
+
 # ---------------------------------------------------------------------------
 # Add-ons
 # ---------------------------------------------------------------------------

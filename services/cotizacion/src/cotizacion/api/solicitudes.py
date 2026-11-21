@@ -60,10 +60,12 @@ def consultar_dashboard() -> tuple[Response, int] | Response:
     cliente_id = _cliente_id()
     if cliente_id is None:
         return jsonify(error="solicitud_invalida"), 400
-    dashboard = _repositorio().consultar_dashboard(cliente_id)
     polizas = cast(PolizasHttp | None, current_app.extensions["polizas"])
-    if polizas is not None:
-        dashboard["polizas"] = polizas.listar(cliente_id, g.correlation_id)
+    if polizas is None:
+        current_app.logger.error("Dashboard requiere POLIZAS_SERVICE_URL.")
+        return jsonify(error="servicio_no_disponible"), 503
+    dashboard = _repositorio().consultar_dashboard(cliente_id)
+    dashboard["polizas"] = polizas.listar(cliente_id, g.correlation_id)
     response = jsonify(dashboard)
     response.headers["Cache-Control"] = "no-store"
     return response

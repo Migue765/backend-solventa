@@ -118,6 +118,7 @@ class SqlUserRepository:
                     password_hash=password_hash,
                 )
             )
+            session.flush()
             session.add(AsesorSocioModel(asesor_id=user.user_id, socio_id=partner_id))
 
     def list_clients(self) -> tuple[User, ...]:

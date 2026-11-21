@@ -280,6 +280,10 @@ Ejecuta el comando de tipos por servicio solo si existe su `mypy.ini`; el flujo 
 
 El repositorio contempla módulos para red, EKS, API Gateway, WAF, RDS/Aurora, Redis, S3, KMS, Secrets Manager, mensajería, ECR, IAM y observabilidad.
 
+El [productivo de la cuenta nueva](terraform/environments/nueva-cuenta/README.md)
+usa nueve ECR privados, uno por API, sin reutilizar el estado anterior.
+Identidad, BFF Web, Perfilamiento, Cotización y Pólizas ya funcionan sobre EKS y una sola
+base relacional; el runbook distingue lo verificado de las APIs aún pendientes.
 
 ## Pruebas y verificación
 

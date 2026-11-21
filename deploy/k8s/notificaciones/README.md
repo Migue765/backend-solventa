@@ -24,9 +24,9 @@ como `proveedor_no_configurado` hasta que exista un adaptador.
 
 1. Aplicar Terraform desde la rama integrada (ver
    `terraform/environments/prod/primary/README.md`).
-2. Crear una base PostgreSQL propia y un usuario con permisos solo sobre ella
-   mediante el procedimiento de bases aprobado, sin imprimir credenciales ni
-   versionarlas.
+2. En la cuenta nueva usar `solventa_prod`, esquema `notificaciones`, owner
+   NOLOGIN y usuarios runtime/migrator separados; TLS `verify-full` con CA RDS
+   incluida en la imagen. No crear otra base ni imprimir/versionar credenciales.
 3. Aplicar `namespace.yaml` y sincronizar el Secret externo `notificaciones-runtime`
    con `NOTIFICACIONES_DATABASE_URL` (driver `postgresql+psycopg`) y el mismo
    `INTERNAL_API_TOKEN` de Polizas, copiado byte a byte. El pipeline no crea ni
@@ -58,6 +58,12 @@ BFF Movil se activa junto con Siniestros y Asistencias, segun su
 La publicacion desde Cotizacion es opcional. Al activarla, el conciliador tambien
 publica, uno por ciclo, los pagos confirmados anteriores que nunca se publicaron:
 los clientes recibiran avisos de pagos historicos. Decidirlo antes de activar:
+
+En la cuenta nueva no se restauraron datos: solo existen los eventos sinteticos
+del recorrido autorizado. La primera publicacion usa esos eventos persistidos,
+no genera nuevos pagos ni polizas. Esta conexion no cambia el dashboard Web:
+`notificaciones` conserva `{disponibilidad:"no_implementado"}` hasta acordar
+otro contrato. No habilita proveedores email/push.
 
 ```bash
 kubectl -n cotizacion set env deployment/cotizacion NOTIFICACIONES_SERVICE_URL=http://notificaciones.notificaciones.svc.cluster.local:8080
