@@ -12,6 +12,7 @@ from bff_web.api import (
     health,
     mortgage_profiling,
     open_finance_exceptions,
+    operational_reports,
     partner_quotes,
     policy_cancellations,
     policy_modifications,
@@ -32,6 +33,7 @@ from bff_web.application.policy_renewal_ports import (
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
+from bff_web.application.report_ports import ReportSources
 from bff_web.config import Config
 from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
@@ -57,6 +59,7 @@ from bff_web.infrastructure.http_policy_modification_gateway import (
 from bff_web.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
+from bff_web.infrastructure.http_report_sources import HttpReportSources
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_web.problems import problem_response
 
@@ -74,6 +77,7 @@ def create_app(
     policy_renewal_gateway: PolicyRenewalGateway | None = None,
     policy_modification_gateway: PolicyModificationGateway | None = None,
     policy_cancellation_gateway: PolicyCancellationGateway | None = None,
+    report_sources: ReportSources | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -144,6 +148,12 @@ def create_app(
             active_config.policies_service_url, active_config.internal_api_token
         )
     )
+    app.extensions["report_sources"] = report_sources or HttpReportSources(
+        active_config.policies_service_url,
+        active_config.quote_service_url,
+        active_config.claims_service_url,
+        active_config.internal_api_token,
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
 
     app.register_blueprint(health.bp)
@@ -160,10 +170,20 @@ def create_app(
     app.register_blueprint(policy_renewals.bp)
     app.register_blueprint(policy_modifications.bp)
     app.register_blueprint(policy_cancellations.bp)
+    app.register_blueprint(operational_reports.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
-        for key in ("audit_actor_id", "audit_partner_id", "audit_rejection_reason"):
+        for key in (
+            "audit_actor_id",
+            "audit_partner_id",
+            "audit_rejection_reason",
+            "report_action",
+            "report_filters",
+            "report_cut_off",
+            "report_fingerprint",
+            "report_source",
+        ):
             g.pop(key, None)
         g.correlation_id = _correlation_id(request.headers.get("X-Correlation-ID"))
 

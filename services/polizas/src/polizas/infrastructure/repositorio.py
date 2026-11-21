@@ -1,9 +1,10 @@
 import hashlib
-from datetime import datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from polizas.domain.emision import EvidenciaEmision, estado_vigencia
-from polizas.infrastructure.models import PolizaModel
+from polizas.domain.reporte import instante
+from polizas.infrastructure.models import CancelacionModel, PolizaModel, RenovacionModel
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -73,6 +74,62 @@ class RepositorioPolizas:
                     .order_by(PolizaModel.emitida_en.desc(), PolizaModel.poliza_id)
                 )
             ]
+
+    def reporte(self, corte: datetime) -> list[dict[str, object]]:
+        """Polizas emitidas hasta el corte, sin datos del cliente, con su estado al corte."""
+        with self.sesiones() as sesion:
+            polizas = sesion.scalars(
+                select(PolizaModel)
+                .where(PolizaModel.emitida_en <= corte)
+                .order_by(PolizaModel.poliza_id)
+            ).all()
+            canceladas = {
+                poliza_id
+                for poliza_id, creada_en in sesion.execute(
+                    select(CancelacionModel.poliza_id, CancelacionModel.creada_en)
+                )
+                if _utc(creada_en) <= corte
+            }
+            # La renovacion extiende fecha_fin en sitio; la primera confirmada despues del
+            # corte conserva el fin vigente a esa fecha.
+            fin_al_corte: dict[UUID, date] = {}
+            for poliza_id, fin_anterior, renovada_en in sesion.execute(
+                select(
+                    RenovacionModel.poliza_id,
+                    RenovacionModel.fin_anterior,
+                    RenovacionModel.actualizada_en,
+                )
+                .where(RenovacionModel.estado == "renovada")
+                .order_by(RenovacionModel.actualizada_en)
+            ):
+                if _utc(renovada_en) > corte:
+                    fin_al_corte.setdefault(poliza_id, fin_anterior)
+            registros: list[dict[str, object]] = []
+            for poliza in polizas:
+                if _utc(poliza.emitida_en) > corte:
+                    continue
+                fin = fin_al_corte.get(poliza.poliza_id, poliza.fecha_fin)
+                registros.append(
+                    {
+                        "id": str(poliza.poliza_id),
+                        "tipo": poliza.tipo,
+                        "pagoId": str(poliza.pago_id),
+                        "emitidaEn": instante(_utc(poliza.emitida_en)),
+                        "fechaInicio": poliza.fecha_inicio.isoformat(),
+                        "fechaFin": fin.isoformat(),
+                        "estado": (
+                            "cancelada"
+                            if poliza.poliza_id in canceladas
+                            else estado_vigencia(poliza.fecha_inicio, fin, corte)
+                        ),
+                    }
+                )
+            return registros
+
+
+def _utc(valor: datetime) -> datetime:
+    # SQLite devuelve instantes sin zona aunque la columna sea timezone=True.
+    return valor.replace(tzinfo=UTC) if valor.tzinfo is None else valor.astimezone(UTC)
 
 
 def _serializar(poliza: PolizaModel, ahora: datetime) -> dict[str, object]:

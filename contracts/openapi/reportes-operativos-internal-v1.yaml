@@ -1,0 +1,221 @@
+openapi: 3.1.0
+info:
+  title: Solventa fuentes internas de reportes operativos
+  version: 1.0.0
+  description: >
+    HU36 (SOL-322). Fuentes propietarias que el BFF Web consolida al mismo corte. Cada
+    fuente devuelve solo registros sin datos personales, su conteo y la huella SHA-256 del
+    JSON canonico (claves ordenadas, separadores compactos) de sus registros. El BFF
+    recalcula la huella, verifica corte y conteo y rechaza cualquier campo no documentado;
+    una discrepancia invalida la consolidacion completa.
+paths:
+  /v1/reportes/polizas:
+    servers:
+      - url: http://polizas.polizas.svc.cluster.local:8080
+    get:
+      operationId: reportePolizasAlCorte
+      description: >
+        Polizas emitidas hasta el corte con su estado al corte; una cancelacion registrada
+        hasta el corte prevalece y una renovacion confirmada despues del corte no se refleja.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/Corte"
+      responses:
+        "200":
+          description: Polizas al corte
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Fuente"
+                  - type: object
+                    required: [polizas]
+                    properties:
+                      fuente: {const: polizas}
+                      polizas:
+                        type: array
+                        description: La huella se calcula sobre esta lista.
+                        items: {$ref: "#/components/schemas/Poliza"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/reportes/primas:
+    servers:
+      - url: http://cotizacion.cotizacion.svc.cluster.local:8080
+    get:
+      operationId: reportePrimasAlCorte
+      description: Pagos simulados confirmados hasta el corte con su producto.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/Corte"
+      responses:
+        "200":
+          description: Primas al corte
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Fuente"
+                  - type: object
+                    required: [primas]
+                    properties:
+                      fuente: {const: primas}
+                      primas:
+                        type: array
+                        description: La huella se calcula sobre esta lista.
+                        items: {$ref: "#/components/schemas/Prima"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /internal/v1/reportes/consulta:
+    servers:
+      - url: http://siniestros.siniestros.svc.cluster.local:8080
+    post:
+      operationId: reporteSiniestrosAlCorte
+      description: >
+        Siniestros reportados y pagos parametricos creados hasta el corte, con el estado
+        vigente al corte reconstruido desde el historial. No admite query.
+      security: [{internalToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [corte]
+              properties:
+                corte: {type: string, format: date-time}
+      responses:
+        "200":
+          description: Siniestros y pagos al corte
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Fuente"
+                  - type: object
+                    required: [siniestros, pagos]
+                    description: >-
+                      La huella se calcula sobre el objeto {"siniestros": [...], "pagos": [...]}
+                      y registros es la suma de ambas listas.
+                    properties:
+                      fuente: {const: siniestros}
+                      siniestros:
+                        type: array
+                        items: {$ref: "#/components/schemas/Siniestro"}
+                      pagos:
+                        type: array
+                        items: {$ref: "#/components/schemas/Pago"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+  parameters:
+    Corte:
+      name: corte
+      in: query
+      required: true
+      description: Instante ISO 8601 con zona horaria, no futuro. Unico parametro admitido.
+      schema: {type: string, format: date-time}
+  schemas:
+    Fuente:
+      type: object
+      required: [corte, fuente, registros, huella]
+      properties:
+        corte: {type: string, format: date-time}
+        fuente: {type: string, enum: [polizas, primas, siniestros]}
+        registros: {type: integer, minimum: 0}
+        huella: {type: string, pattern: "^[0-9a-f]{64}$"}
+    Producto:
+      type: string
+      enum:
+        - automotive
+        - travel
+        - life
+        - device-protection
+        - parametric
+        - parametric-weather
+        - payment-protection
+        - mortgage-life
+    Monto: {type: string, pattern: "^\\d+\\.\\d{2}$"}
+    Poliza:
+      type: object
+      additionalProperties: false
+      required: [id, tipo, pagoId, emitidaEn, fechaInicio, fechaFin, estado]
+      properties:
+        id: {type: string, format: uuid}
+        tipo: {$ref: "#/components/schemas/Producto"}
+        pagoId: {type: string, format: uuid}
+        emitidaEn: {type: string, format: date-time}
+        fechaInicio: {type: string, format: date}
+        fechaFin: {type: string, format: date}
+        estado: {type: string, enum: [programada, vigente, vencida, cancelada]}
+    Prima:
+      type: object
+      additionalProperties: false
+      required: [pagoId, producto, monto, moneda, confirmadaEn]
+      properties:
+        pagoId: {type: string, format: uuid}
+        producto: {$ref: "#/components/schemas/Producto"}
+        monto: {$ref: "#/components/schemas/Monto"}
+        moneda: {type: string, pattern: "^[A-Z]{3}$"}
+        confirmadaEn: {type: string, format: date-time}
+    Siniestro:
+      type: object
+      additionalProperties: false
+      required: [id, polizaId, tipo, estado, reportadoEn]
+      properties:
+        id: {type: string, format: uuid}
+        polizaId: {type: string, format: uuid}
+        tipo:
+          oneOf:
+            - {type: string, enum: [asistido, parametrico]}
+            - {type: "null"}
+        estado:
+          type: string
+          enum:
+            - reportado
+            - en_evaluacion
+            - en_revision
+            - en_inspeccion
+            - aprobado
+            - rechazado
+            - pagado
+            - cerrado
+        reportadoEn: {type: string, format: date-time}
+    Pago:
+      type: object
+      additionalProperties: false
+      required: [id, siniestroId, estado, monto, moneda, creadoEn]
+      properties:
+        id: {type: string, format: uuid}
+        siniestroId: {type: string, format: uuid}
+        estado:
+          type: string
+          enum: [pendiente, confirmado, rechazado]
+          description: Un pago finalizado despues del corte se informa pendiente.
+        monto: {$ref: "#/components/schemas/Monto"}
+        moneda: {type: string, pattern: "^[A-Z]{3}$"}
+        creadoEn: {type: string, format: date-time}
+  responses:
+    Error:
+      description: >-
+        Rechazo seguro sin datos. Polizas y cotizacion responden {"error": codigo}; siniestros
+        responde application/problem+json.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: {type: string}
+        application/problem+json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: {type: string}
