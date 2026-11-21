@@ -1,13 +1,23 @@
 import hashlib
+import logging
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
+from polizas.domain.condiciones import PRODUCTOS
 from polizas.domain.emision import EvidenciaEmision, estado_vigencia
 from polizas.domain.reporte import instante
-from polizas.infrastructure.models import CancelacionModel, PolizaModel, RenovacionModel
+from polizas.infrastructure.models import (
+    CancelacionModel,
+    PolizaModel,
+    RenovacionModel,
+    VersionPolizaModel,
+)
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 
 class ConflictoEmision(Exception):
@@ -19,7 +29,12 @@ class RepositorioPolizas:
         self.sesiones = sesiones
 
     def emitir(self, evidencia: EvidenciaEmision, ahora: datetime) -> dict[str, object]:
-        huella = hashlib.sha256(evidencia.model_dump_json(by_alias=True).encode()).hexdigest()
+        huella = hashlib.sha256(
+            evidencia.model_dump_json(
+                by_alias=True,
+                exclude={"condiciones_emision"} if evidencia.condiciones_emision is None else set(),
+            ).encode()
+        ).hexdigest()
         inicio, fin = evidencia.vigencia()
         try:
             with self.sesiones.begin() as sesion:
@@ -40,6 +55,25 @@ class RepositorioPolizas:
                 )
                 sesion.add(poliza)
                 sesion.flush()
+                if evidencia.condiciones_emision is not None:
+                    condiciones = evidencia.condiciones_emision
+                    sesion.add(
+                        VersionPolizaModel(
+                            poliza_id=poliza.poliza_id,
+                            version=1,
+                            plan=condiciones.plan,
+                            prima=str(int(Decimal(condiciones.prima))),
+                            coberturas=[
+                                c.codigo
+                                for c in PRODUCTOS[evidencia.tipo].coberturas
+                                if c.nombre in condiciones.coberturas
+                            ],
+                            efectivo_desde=inicio,
+                            origen="emision",
+                            endoso_id=None,
+                            creada_en=ahora,
+                        )
+                    )
                 return _serializar(poliza, ahora)
         except IntegrityError:
             with self.sesiones() as sesion:
@@ -60,8 +94,18 @@ class RepositorioPolizas:
         ).all()
         if not existentes:
             return None
-        if len(existentes) != 1 or existentes[0].evidencia_hash != huella:
+        if len(existentes) != 1:
             raise ConflictoEmision()
+        if existentes[0].evidencia_hash != huella:
+            legacy = hashlib.sha256(
+                evidencia.model_dump_json(by_alias=True, exclude={"condiciones_emision"}).encode()
+            ).hexdigest()
+            if existentes[0].evidencia_hash != legacy:
+                raise ConflictoEmision()
+            logger.warning(
+                "Emision anterior repetida sin reconstruir condiciones historicas: pago=%s",
+                evidencia.pago_id,
+            )
         return existentes[0]
 
     def listar(self, cliente_id: UUID, ahora: datetime) -> list[dict[str, object]]:

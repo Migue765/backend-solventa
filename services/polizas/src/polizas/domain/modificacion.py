@@ -116,7 +116,7 @@ def impacto(
     vigencia: tuple[date, date],
     hoy: date,
 ) -> dict[str, object]:
-    if nuevas == actuales:
+    if nuevas.plan == actuales.plan and nuevas.coberturas == actuales.coberturas:
         raise SinCambios()
     inicio, fin = vigencia
     efectivo = hoy + timedelta(days=1)

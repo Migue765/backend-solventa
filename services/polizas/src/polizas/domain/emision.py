@@ -1,8 +1,10 @@
 import calendar
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Literal, Self
 from uuid import UUID
 
+from polizas.domain.condiciones import PRODUCTOS
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TipoPoliza = Literal[
@@ -36,6 +38,20 @@ class FechasContratadas(BaseModel):
         return self
 
 
+class CondicionesEmision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan: Literal["esencial", "integral", "premium"]
+    prima: str = Field(pattern=r"^[0-9]{1,16}(?:\.0{1,2})?$")
+    coberturas: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("prima")
+    @classmethod
+    def prima_positiva(cls, valor: str) -> str:
+        if Decimal(valor) <= 0:
+            raise ValueError("La prima de emision debe ser positiva.")
+        return valor
+
+
 class EvidenciaEmision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     cliente_id: UUID = Field(alias="clienteId")
@@ -45,6 +61,7 @@ class EvidenciaEmision(BaseModel):
     confirmada_en: AwareDatetime = Field(alias="confirmadaEn")
     simulada: Literal[True]
     fechas_contratadas: FechasContratadas | None = Field(alias="fechasContratadas")
+    condiciones_emision: CondicionesEmision | None = Field(default=None, alias="condicionesEmision")
 
     @field_validator("simulada", mode="before")
     @classmethod
@@ -55,6 +72,13 @@ class EvidenciaEmision(BaseModel):
 
     @model_validator(mode="after")
     def validar_fechas(self) -> Self:
+        if self.condiciones_emision is not None:
+            if self.tipo not in PRODUCTOS:
+                raise ValueError("Las condiciones mensuales no corresponden al producto.")
+            nombres = self.condiciones_emision.coberturas
+            permitidas = {c.nombre for c in PRODUCTOS[self.tipo].coberturas}
+            if len(set(nombres)) != len(nombres) or not set(nombres) <= permitidas:
+                raise ValueError("Las coberturas de emision no corresponden al producto.")
         requiere_fechas = self.tipo in {"travel", "parametric", "parametric-weather"}
         if requiere_fechas != (self.fechas_contratadas is not None):
             raise ValueError("Las fechas contratadas no corresponden al producto.")

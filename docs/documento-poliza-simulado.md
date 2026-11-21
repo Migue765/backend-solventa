@@ -39,7 +39,20 @@ Los demas errores son 400 `solicitud_invalida`, 401 de sesion, 403
 
 La fuente es la poliza persistida, su vigencia/estado, suscripcion, regla de emision,
 version de condiciones y catalogo academico ya usado por consultas/modificaciones.
-No se recalcula riesgo ni se inventan primas ausentes. Los productos por fechas
+En nuevas emisiones mensuales del modelo academico, Cotizacion transmite
+`condicionesEmision` desde el plan aceptado de su instantanea: plan, prima pagada
+y nombres de coberturas. Polizas valida las coberturas contra el producto y guarda
+la version 1 en la misma transaccion de emision. Documento, consultas, renovacion
+y liquidacion usan esa prima persistida, sin volver a calcular el riesgo ni
+sustituirla por la tarifa fija de endosos. Los cambios de plan siguen requiriendo
+la aceptacion explicita de su impacto y registran una nueva version.
+
+La compatibilidad con emisiones anteriores sin esas condiciones no reconstruye
+la oferta original: conserva el modelo anterior. No se modifican versiones,
+documentos ni aceptaciones historicas; su conciliacion requiere evidencia original
+y una operacion separada, no se acredita con esta correccion.
+
+Los productos por fechas
 conservan `versionPoliza: null`, `plan: null` y `prima: null`, con sus coberturas
 del modelo. Las primas de productos con plan son las del modelo academico existente,
 no una nueva valoracion financiera ni el precio real de una aseguradora.

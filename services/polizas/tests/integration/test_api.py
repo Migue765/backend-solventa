@@ -10,7 +10,13 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from flask import Flask
 from polizas.app import create_app
-from polizas.infrastructure.models import Base, CancelacionModel, PolizaModel, RenovacionModel
+from polizas.infrastructure.models import (
+    Base,
+    CancelacionModel,
+    PolizaModel,
+    RenovacionModel,
+    VersionPolizaModel,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -79,6 +85,62 @@ def test_api_persistente_idempotente_y_aislada(app: Flask) -> None:
 def test_migracion_coincide_con_modelos(app: Flask) -> None:
     with app.extensions["polizas_engine"].connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+
+
+def test_nuevas_condiciones_no_reescriben_emision_anterior(app: Flask) -> None:
+    client = app.test_client()
+    evidence = {
+        "clienteId": str(uuid4()),
+        "suscripcionId": str(uuid4()),
+        "pagoId": str(uuid4()),
+        "tipo": "automotive",
+        "confirmadaEn": datetime.now(UTC).isoformat(),
+        "simulada": True,
+        "fechasContratadas": None,
+    }
+    original = client.post("/v1/polizas", json=evidence, headers=HEADERS).get_json()
+    replay = client.post(
+        "/v1/polizas",
+        json={
+            **evidence,
+            "condicionesEmision": {
+                "plan": "esencial",
+                "prima": "41250",
+                "coberturas": ["Daños al vehículo"],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert replay.status_code == 200 and replay.get_json() == original
+    with Session(app.extensions["polizas_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(PolizaModel)) == 1
+        assert session.scalar(select(func.count()).select_from(VersionPolizaModel)) == 0
+
+
+def test_condiciones_emision_idempotentes_rechazan_prima_distinta(app: Flask) -> None:
+    client = app.test_client()
+    conditions = {
+        "plan": "esencial",
+        "prima": "41250",
+        "coberturas": ["Daños al vehículo"],
+    }
+    evidence = {
+        "clienteId": str(uuid4()),
+        "suscripcionId": str(uuid4()),
+        "pagoId": str(uuid4()),
+        "tipo": "automotive",
+        "confirmadaEn": datetime.now(UTC).isoformat(),
+        "simulada": True,
+        "fechasContratadas": None,
+        "condicionesEmision": conditions,
+    }
+    original = client.post("/v1/polizas", json=evidence, headers=HEADERS)
+    assert original.status_code == 200
+    assert (
+        client.post("/v1/polizas", json=evidence, headers=HEADERS).get_json() == original.get_json()
+    )
+    conditions["prima"] = "85000"
+    assert client.post("/v1/polizas", json=evidence, headers=HEADERS).status_code == 409
 
 
 def test_emisiones_concurrentes_no_duplican(app: Flask) -> None:

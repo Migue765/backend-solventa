@@ -280,7 +280,13 @@ resource "aws_lb_listener_rule" "bff_web_compliance" {
 
   condition {
     path_pattern {
-      values = ["/v1/reportes/regulatorios", "/v1/reportes/regulatorios/*", "/v1/reaseguros/*"]
+      values = [
+        "/v1/reportes/regulatorios",
+        "/v1/reportes/regulatorios/*",
+        "/v1/reaseguros/*",
+        "/v1/reportes/operativos",
+        "/v1/reportes/operativos/*",
+      ]
     }
   }
 

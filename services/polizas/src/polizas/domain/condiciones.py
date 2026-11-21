@@ -31,11 +31,11 @@ class Producto:
 class Condiciones:
     plan: str
     coberturas: frozenset[str]
+    prima_pactada: int | None = None
 
 
-# Tarifa academica fija: Polizas no conserva el perfil de riesgo de la emision, asi que no
-# recalcula la prima con Perfilamiento ni con Cotizacion. Con plan esencial y todas las
-# coberturas la prima coincide con la tarifa de renovacion publicada en SOL-317.
+# Tarifa para endosos y emisiones anteriores sin instantanea. Las nuevas emisiones
+# conservan la prima pagada y las coberturas aceptadas, sin volver a tarificarlas.
 PRODUCTOS: dict[str, Producto] = {
     "automotive": Producto(
         "Seguro Automotriz Total",
@@ -163,6 +163,8 @@ def opcionales(tipo: str) -> tuple[Cobertura, ...]:
 
 
 def prima(tipo: str, condiciones: Condiciones) -> int:
+    if condiciones.prima_pactada is not None:
+        return condiciones.prima_pactada
     producto = PRODUCTOS[tipo]
     recargos = sum(
         c.recargo or 0 for c in producto.coberturas if c.codigo in condiciones.coberturas
