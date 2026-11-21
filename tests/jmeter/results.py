@@ -41,6 +41,7 @@ def evaluate(
             *(f"journey.emission.{product}" for product in PRODUCTS),
             "journey.dashboard",
             "journey.claim.status",
+            "journey.claim.status.movil",
         ):
             if len(groups[label]) != expected:
                 errors.append(f"{label}: expected {expected}, observed {len(groups[label])}")
@@ -54,8 +55,12 @@ def evaluate(
                 limit95, limit99 = 1500, 3000
             elif label == "journey.quote.mortgage-life":
                 limit95, limit99 = 400, 800
-            elif label in {"journey.dashboard", "journey.claim.status"}:
-                # Claim status: Arquitectura v7 p95<=150 / p99<=300 ms.
+            elif label in {
+                "journey.dashboard",
+                "journey.claim.status",
+                "journey.claim.status.movil",
+            }:
+                # Claim status web/movil: Arquitectura v7 p95<=150 / p99<=300 ms.
                 limit95, limit99 = 150, 300
             else:
                 limit95, limit99 = 250, 500
