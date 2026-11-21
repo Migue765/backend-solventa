@@ -35,6 +35,30 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Cumplimiento academico (SOL-208 / SOL-324)
+
+`POST /v1/reportes/regulatorios` exige JWT de asesor, filtros `desde`, `hasta`,
+`corte`, `Idempotency-Key` UUID y `{aceptaSimulacion: true}`. Reutiliza las fuentes
+autenticadas de Polizas, Cotizacion y Siniestros; rechaza inconsistencias antes
+de confirmar. El BFF sigue sin base de datos: delega las instantaneas inmutables
+y la auditoria a Polizas. Configurar `POLIZAS_SERVICE_URL`,
+`COTIZACION_SERVICE_URL`, `SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`.
+
+La consulta y descarga por `reporteId` recuperan la instantanea persistida,
+incluso si despues cambia una fuente. Cada registro minimizado conserva su
+huella de version y las fuentes su huella al corte.
+
+`POST /v1/reaseguros/intercambios` recibe `{reporteId, aceptaSimulacion: true,
+escenario: "aceptado" | "diferencias"}` con clave UUID. Exporta cesiones y
+recuperaciones del periodo con cuota didactica fija de 20 %, sin ejecutar dinero.
+Un acuse local simulado se concilia; diferencias quedan `revision_pendiente`,
+consultables por `intercambioId`. Un reporte admite un solo intercambio: otra
+clave o contenido se rechaza, no duplica cesiones.
+
+Contrato integrado: `contracts/openapi/cumplimiento-academico-v1.yaml`.
+No hay UI nueva, adaptador ACORD, proveedor real ni formato oficial regulatorio.
+La validacion local no acredita despliegue ni cifrado del entorno; mantener HTTPS.
+
 ### Siniestros Web (SOL-313 y SOL-315)
 
 `POST /v1/siniestros` registra un aviso con `{polizaId, fechaEvento,

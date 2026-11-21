@@ -1,0 +1,263 @@
+openapi: 3.1.0
+info:
+  title: Cumplimiento academico de Solventa
+  version: 1.0.0
+  description: |
+    API backend integrada, sin UI nueva. Usa JWT Web con rol y scope asesor.
+    No implementa ACORD, un reasegurador real ni un formato oficial para autoridades.
+    Fuentes: Polizas, Cotizacion y Siniestros. Reportes y acuses simulados persistidos
+    en Polizas; el BFF no guarda datos. HTTPS debe mantenerse en el entorno objetivo.
+security:
+  - bearer: []
+paths:
+  /v1/reportes/regulatorios:
+    post:
+      operationId: generarReporteRegulatorioAcademico
+      summary: Consolida, valida y persiste un corte academico inmutable
+      parameters:
+        - $ref: '#/components/parameters/Clave'
+        - {name: desde, in: query, required: true, schema: {type: string, format: date}}
+        - {name: hasta, in: query, required: true, schema: {type: string, format: date}}
+        - {name: corte, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: producto, in: query, schema: {type: string}}
+        - {name: estado, in: query, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [aceptaSimulacion]
+              properties:
+                aceptaSimulacion: {const: true}
+      responses:
+        '201': {$ref: '#/components/responses/Reporte'}
+        '200': {$ref: '#/components/responses/Reporte'}
+        '400': {$ref: '#/components/responses/Problema'}
+        '401': {$ref: '#/components/responses/Problema'}
+        '403': {$ref: '#/components/responses/Problema'}
+        '409': {$ref: '#/components/responses/Problema'}
+        '422': {$ref: '#/components/responses/Problema'}
+        '503': {$ref: '#/components/responses/Problema'}
+        '413': {$ref: '#/components/responses/Problema'}
+  /v1/reportes/regulatorios/{reporteId}:
+    parameters:
+      - $ref: '#/components/parameters/ReporteId'
+    get:
+      operationId: consultarReporteRegulatorioAcademico
+      summary: Recupera el contenido persistido sin volver a consultar fuentes
+      responses:
+        '200': {$ref: '#/components/responses/Reporte'}
+        '400': {$ref: '#/components/responses/Problema'}
+        '413': {$ref: '#/components/responses/Problema'}
+        '401': {$ref: '#/components/responses/Problema'}
+        '403': {$ref: '#/components/responses/Problema'}
+        '404': {$ref: '#/components/responses/Problema'}
+        '503': {$ref: '#/components/responses/Problema'}
+  /v1/reportes/regulatorios/{reporteId}/descarga:
+    parameters:
+      - $ref: '#/components/parameters/ReporteId'
+    get:
+      operationId: descargarReporteRegulatorioAcademico
+      summary: Descarga JSON canonico privado, sin validez regulatoria
+      responses:
+        '200':
+          description: Contenido inmutable; SHA256 identifica los bytes UTF-8 descargados
+          headers:
+            X-Content-SHA256: {schema: {type: string, pattern: '^[a-f0-9]{64}$'}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Contenido'}
+        '401': {$ref: '#/components/responses/Problema'}
+        '400': {$ref: '#/components/responses/Problema'}
+        '413': {$ref: '#/components/responses/Problema'}
+        '403': {$ref: '#/components/responses/Problema'}
+        '404': {$ref: '#/components/responses/Problema'}
+        '503': {$ref: '#/components/responses/Problema'}
+  /v1/reaseguros/intercambios:
+    post:
+      operationId: intercambiarReaseguroAcademico
+      summary: Exporta partidas, recibe acuse simulado y registra diferencias
+      description: |
+        Cuota didactica fija de 20 por ciento. No modifica primas ni ejecuta dinero.
+        Una sola operacion por reporte; otro cuerpo o clave responde 409.
+        El escenario diferencias agrega 0.01 a una partida recibida y exige revision humana.
+      parameters:
+        - $ref: '#/components/parameters/Clave'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reporteId, aceptaSimulacion]
+              properties:
+                reporteId: {type: string, format: uuid}
+                aceptaSimulacion: {const: true}
+                escenario: {type: string, enum: [aceptado, diferencias], default: aceptado}
+      responses:
+        '201': {$ref: '#/components/responses/Intercambio'}
+        '200': {$ref: '#/components/responses/Intercambio'}
+        '413': {$ref: '#/components/responses/Problema'}
+        '400': {$ref: '#/components/responses/Problema'}
+        '401': {$ref: '#/components/responses/Problema'}
+        '403': {$ref: '#/components/responses/Problema'}
+        '404': {$ref: '#/components/responses/Problema'}
+        '409': {$ref: '#/components/responses/Problema'}
+        '422': {$ref: '#/components/responses/Problema'}
+        '503': {$ref: '#/components/responses/Problema'}
+  /v1/reaseguros/intercambios/{intercambioId}:
+    parameters:
+      - name: intercambioId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: consultarIntercambioReaseguroAcademico
+      responses:
+        '200': {$ref: '#/components/responses/Intercambio'}
+        '400': {$ref: '#/components/responses/Problema'}
+        '413': {$ref: '#/components/responses/Problema'}
+        '401': {$ref: '#/components/responses/Problema'}
+        '403': {$ref: '#/components/responses/Problema'}
+        '404': {$ref: '#/components/responses/Problema'}
+        '503': {$ref: '#/components/responses/Problema'}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    Clave:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, format: uuid}
+    ReporteId:
+      name: reporteId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    Reporte:
+      description: Reporte academico confirmado y auditable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Reporte'}
+    Intercambio:
+      description: Intercambio academico persistido, nunca un acuse real
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Intercambio'}
+    Problema:
+      description: Operacion no completada; no entregar resultados parciales como validos
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            required: [type, title, status, detail, code, correlationId]
+            properties:
+              type: {type: string}
+              title: {type: string}
+              status: {type: integer}
+              detail: {type: string}
+              code: {type: string}
+              correlationId: {type: string, format: uuid}
+  schemas:
+    Reporte:
+      type: object
+      additionalProperties: false
+      required: [reporteId, contenidoHash, generadoEn, contenido]
+      properties:
+        reporteId: {type: string, format: uuid}
+        contenidoHash: {type: string, pattern: '^[a-f0-9]{64}$'}
+        generadoEn: {type: string, format: date-time}
+        contenido: {$ref: '#/components/schemas/Contenido'}
+    Contenido:
+      type: object
+      additionalProperties: false
+      required: [formatoVersion, simulado, sinValidezRegulatoria, aviso, corte, filtros, indicadores, fuentes, trazabilidad]
+      properties:
+        formatoVersion: {const: solventa-regulatorio-academico-v1}
+        simulado: {const: true}
+        sinValidezRegulatoria: {const: true}
+        aviso: {type: string}
+        corte: {type: string, format: date-time}
+        filtros: {type: object}
+        indicadores: {type: object}
+        fuentes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [servicio, registros, huella]
+            properties:
+              servicio: {type: string, enum: [polizas, primas, siniestros]}
+              registros: {type: integer, minimum: 0}
+              huella: {type: string, pattern: '^[a-f0-9]{64}$'}
+        trazabilidad:
+          type: object
+          additionalProperties: false
+          required: [polizas, primas, siniestros, pagos]
+          properties:
+            polizas: {$ref: '#/components/schemas/Versiones'}
+            primas: {$ref: '#/components/schemas/Versiones'}
+            siniestros: {$ref: '#/components/schemas/Versiones'}
+            pagos: {$ref: '#/components/schemas/Versiones'}
+    Versiones:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [versionHash, datos]
+        properties:
+          versionHash: {type: string, pattern: '^[a-f0-9]{64}$'}
+          datos:
+            type: object
+            description: Registro minimizado de la fuente interna; sin nombre, correo ni documento.
+    Intercambio:
+      type: object
+      additionalProperties: false
+      required: [intercambioId, reporteId, generadoEn, adaptadorVersion, simulado, aviso, cuotaAcademica, envioId, acuse, partidas, diferencias, estado]
+      properties:
+        intercambioId: {type: string, format: uuid}
+        reporteId: {type: string, format: uuid}
+        generadoEn: {type: string, format: date-time}
+        adaptadorVersion: {const: solventa-reaseguro-academico-v1}
+        simulado: {const: true}
+        aviso: {type: string}
+        cuotaAcademica: {const: '0.20'}
+        envioId: {type: string, format: uuid}
+        estado: {type: string, enum: [conciliado, revision_pendiente]}
+        acuse:
+          type: object
+          additionalProperties: false
+          required: [envioId, simulado, partidas]
+          properties:
+            envioId: {type: string, format: uuid}
+            simulado: {const: true}
+            partidas: {$ref: '#/components/schemas/Partidas'}
+        partidas: {$ref: '#/components/schemas/Partidas'}
+        diferencias:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [partidaId, esperado, recibido]
+            properties:
+              partidaId: {type: string, format: uuid}
+              esperado: {type: string, pattern: '^\d+\.\d{2}$'}
+              recibido: {type: string, pattern: '^\d+\.\d{2}$'}
+    Partidas:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, tipo, moneda, monto]
+        properties:
+          id: {type: string, format: uuid}
+          tipo: {type: string, enum: [cesion, recuperacion]}
+          polizaId: {type: string, format: uuid}
+          siniestroId: {type: string, format: uuid}
+          moneda: {type: string, pattern: '^[A-Z]{3}$'}
+          monto: {type: string, pattern: '^\d+\.\d{2}$'}

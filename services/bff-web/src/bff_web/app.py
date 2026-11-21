@@ -8,6 +8,7 @@ from bff_web.api import (
     claim_status,
     claims,
     client_information,
+    compliance,
     consents,
     health,
     mortgage_profiling,
@@ -43,6 +44,7 @@ from bff_web.infrastructure.http_claim_gateway import HttpClaimGateway
 from bff_web.infrastructure.http_client_information_gateway import (
     HttpClientInformationGateway,
 )
+from bff_web.infrastructure.http_compliance_gateway import HttpComplianceGateway
 from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
 from bff_web.infrastructure.http_mortgage_profiling_gateway import (
     HttpMortgageProfilingGateway,
@@ -156,6 +158,9 @@ def create_app(
         active_config.claims_service_url,
         active_config.internal_api_token,
     )
+    app.extensions["compliance_gateway"] = HttpComplianceGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
     app.extensions["policy_document_gateway"] = HttpPolicyDocumentGateway(
         active_config.policies_service_url, active_config.internal_api_token
@@ -177,6 +182,7 @@ def create_app(
     app.register_blueprint(policy_modifications.bp)
     app.register_blueprint(policy_cancellations.bp)
     app.register_blueprint(operational_reports.bp)
+    app.register_blueprint(compliance.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:

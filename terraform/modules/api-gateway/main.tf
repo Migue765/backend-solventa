@@ -269,6 +269,24 @@ resource "aws_lb_listener_rule" "bff_web_consents" {
   tags = var.tags
 }
 
+resource "aws_lb_listener_rule" "bff_web_compliance" {
+  listener_arn = aws_lb_listener.this.arn
+  priority     = 19
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.bff_web.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/v1/reportes/regulatorios", "/v1/reportes/regulatorios/*", "/v1/reaseguros/*"]
+    }
+  }
+
+  tags = var.tags
+}
+
 # ---------------------------------------------------------------------------
 # bff-movil: tercer target group tras el mismo ALB; todo /movil/* se desvia a el.
 # ---------------------------------------------------------------------------

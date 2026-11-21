@@ -156,3 +156,41 @@ class AceptacionDocumentoModel(Base):
     idempotency_key: Mapped[UUID]
     solicitud_hash: Mapped[str] = mapped_column(String(64))
     aceptada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReporteRegulatorioModel(Base):
+    __tablename__ = "reportes_regulatorios_academicos"
+    __table_args__ = (UniqueConstraint("actor_id", "idempotency_key"),)
+
+    reporte_id: Mapped[UUID] = mapped_column(primary_key=True)
+    actor_id: Mapped[UUID]
+    idempotency_key: Mapped[UUID]
+    contenido_hash: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[str] = mapped_column(Text)
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class IntercambioReaseguroModel(Base):
+    __tablename__ = "intercambios_reaseguro_academicos"
+    __table_args__ = (UniqueConstraint("actor_id", "idempotency_key"),)
+
+    intercambio_id: Mapped[UUID] = mapped_column(primary_key=True)
+    reporte_id: Mapped[UUID] = mapped_column(
+        ForeignKey("reportes_regulatorios_academicos.reporte_id"), unique=True
+    )
+    actor_id: Mapped[UUID]
+    idempotency_key: Mapped[UUID]
+    solicitud_hash: Mapped[str] = mapped_column(String(64))
+    contenido: Mapped[dict[str, object]] = mapped_column(JSON)
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuditoriaCumplimientoModel(Base):
+    __tablename__ = "auditoria_cumplimiento"
+
+    auditoria_id: Mapped[UUID] = mapped_column(primary_key=True)
+    recurso_id: Mapped[UUID] = mapped_column(index=True)
+    actor_id: Mapped[UUID]
+    accion: Mapped[str] = mapped_column(String(40))
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    ocurrido_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))

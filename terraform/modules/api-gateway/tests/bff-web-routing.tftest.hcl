@@ -42,6 +42,25 @@ run "destinations_reach_bff_web" {
   }
 }
 
+run "academic_compliance_reaches_authenticated_web_bff" {
+  command = plan
+
+  assert {
+    condition     = one(aws_lb_listener_rule.bff_web_compliance.action).target_group_arn == aws_lb_target_group.bff_web.arn
+    error_message = "Los reportes regulatorios y reaseguros deben alcanzar el BFF Web."
+  }
+
+  assert {
+    condition = (
+      one(one(aws_lb_listener_rule.bff_web_compliance.condition).path_pattern).values == toset([
+        "/v1/reportes/regulatorios", "/v1/reportes/regulatorios/*", "/v1/reaseguros/*"
+      ]) &&
+      aws_apigatewayv2_route.v1[0].authorization_type == "JWT"
+    )
+    error_message = "El cumplimiento academico debe conservar JWT y su enrutamiento propio."
+  }
+}
+
 run "preflight_routes_do_not_require_jwt" {
   command = plan
 
