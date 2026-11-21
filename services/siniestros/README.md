@@ -152,6 +152,10 @@ historial permitido, aislamiento entre clientes, inexistencia, registros incoher
 fallo de persistencia, contrato OpenAPI y latencia. La latencia se mide con 200 consultas
 en proceso y extremo a extremo (BFF -> HTTP -> Siniestros sobre SQLite) contra
 p95 <= 150 ms y p99 <= 300 ms. Es una linea base local, no acredita el SLA desplegado.
+`tests\test_claims_mobile_status_flow.py` repite la compuerta por el canal movil
+(`/movil/v1/siniestros/{id}/estado`, BFF movil -> HTTP -> Siniestros, HU21/SOL-309) y
+verifica que una demora de Siniestros se corte en 0,8 s como 503 `servicio_no_disponible`,
+nunca como estado vigente.
 ## Registro y evidencia
 
 Servicio compartido para web y movil. Conserva siniestros, operaciones idempotentes,

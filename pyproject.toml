@@ -29,6 +29,7 @@ module = [
     "test_biometric_flow", "tests.test_biometric_flow",
     "tests.test_encrypted_local_stack",
     "test_claims_flow", "tests.test_claims_registration_flow",
+    "test_claims_mobile_status_flow", "tests.test_claims_mobile_status_flow",
     "tests.test_hu44_exception_process_http",
     "tests.jmeter.local_stack", "tests.jmeter.run",
     "scripts.local_database",

@@ -16,6 +16,7 @@ CLAIMS = "/v1/siniestros"
 CLAIM = CLAIMS + "/${claimId}"
 UPLOAD = CLAIM + "/cargas/${uploadId}"
 CLAIM_STATUS = "/v1/clientes/me/siniestros/${claimId}"
+CLAIM_STATUS_MOBILE = "/movil/v1/siniestros/${claimId}/estado"
 # Synthetic PNG without EXIF/location, written next to each plan (JMeter resolves it there).
 EVIDENCE = "evidencia-sintetica.png"
 PRODUCTS = (
@@ -473,7 +474,41 @@ class Plan:
             "assert data.historial[-1].estado == data.estado",
         )
         self.tree = tree
+        # HU21 (SOL-309): the same claim and history through BFF movil -> Siniestros.
+        self.request(
+            "claim.login.mobile",
+            "POST",
+            "/movil/v1/sesiones",
+            body=self.credentials(),
+            token=None,
+            service="mobile",
+            check="vars.put('claimMobileToken',data.accessToken)",
+        )
+        tree = self.transaction("journey.claim.status.movil")
+        self.request(
+            "claim.status.movil",
+            "GET",
+            CLAIM_STATUS_MOBILE,
+            check="assert data.id == vars.get('claimId'); assert data.estado == 'reportado'; "
+            "assert data.polizaId == vars.get('policyId'); assert data.historial.size() >= 1; "
+            "assert data.historial[-1].estado == data.estado",
+            token="claimMobileToken",
+            service="mobile",
+        )
+        self.tree = tree
         if extended:
+            self.request(
+                "claim.status.movil.web.token", "GET", CLAIM_STATUS_MOBILE, 401, service="mobile"
+            )
+            self.request(
+                "claim.status.movil.unknown",
+                "GET",
+                "/movil/v1/siniestros/${__UUID()}/estado",
+                404,
+                check="assert data.code == 'siniestro_no_encontrado'",
+                token="claimMobileToken",
+                service="mobile",
+            )
             self.request("claim.status.missing.token", "GET", CLAIM_STATUS, 401, token=None)
             self.request(
                 "claim.status.ownership",
