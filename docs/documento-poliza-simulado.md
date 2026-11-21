@@ -47,6 +47,12 @@ y liquidacion usan esa prima persistida, sin volver a calcular el riesgo ni
 sustituirla por la tarifa fija de endosos. Los cambios de plan siguen requiriendo
 la aceptacion explicita de su impacto y registran una nueva version.
 
+Los BFF Web y movil conservan por separado los indicadores `opcional` e `incluida`
+del catalogo de modificaciones. `opcional` indica si una cobertura puede elegirse
+como adicional en un endoso; no exige que este incluida en todas las emisiones.
+La inclusion vigente e historica procede de la version persistida del plan
+aceptado, sin agregar coberturas ni rechazar el documento de un plan Esencial.
+
 La compatibilidad con emisiones anteriores sin esas condiciones no reconstruye
 la oferta original: conserva el modelo anterior. No se modifican versiones,
 documentos ni aceptaciones historicas; su conciliacion requiere evidencia original
