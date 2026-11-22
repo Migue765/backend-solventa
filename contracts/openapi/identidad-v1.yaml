@@ -15,6 +15,12 @@ tags:
   - name: Asesores
   - name: Sesiones
 paths:
+  /v1/recuperacion-contrasena:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
+  /v1/recuperacion-contrasena/desafio:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1desafio"
+  /v1/recuperacion-contrasena/confirmar:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1confirmar"
   /v1/verificaciones-identidad:
     $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
   /v1/verificaciones-identidad/{verificacionId}:

@@ -2,6 +2,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from identidad.domain.verification import MOCK_OUTCOMES
 from identidad.infrastructure.passwords import DEFAULT_ITERATIONS
@@ -32,8 +33,31 @@ class Config:
     login_encryption_private_key: str = ""
     simulated_identity_enabled: bool = False
     simulated_identity_outcomes: tuple[str, ...] = ("aprobado",)
+    recovery_ses_region: str = ""
+    recovery_email_sender: str = ""
+    recovery_web_url: str = ""
 
     def __post_init__(self) -> None:
+        recovery_values = (
+            self.recovery_ses_region,
+            self.recovery_email_sender,
+            self.recovery_web_url,
+        )
+        if any(recovery_values):
+            if not all(value.strip() for value in recovery_values):
+                raise ValueError("Recuperacion requiere region SES, remitente y URL Web.")
+            parsed = urlsplit(self.recovery_web_url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("RECOVERY_WEB_URL requiere base HTTPS sin query ni fragmento.")
+            if not self.encrypted_login_enabled:
+                raise ValueError("Recuperacion requiere ENCRYPTED_LOGIN_ENABLED.")
         if not 1 <= len(self.simulated_identity_outcomes) <= 3 or any(
             value not in MOCK_OUTCOMES for value in self.simulated_identity_outcomes
         ):
@@ -63,6 +87,9 @@ class Config:
     @classmethod
     def from_environment(cls) -> "Config":
         return cls(
+            recovery_ses_region=os.getenv("RECOVERY_SES_REGION", "").strip(),
+            recovery_email_sender=os.getenv("RECOVERY_EMAIL_SENDER", "").strip(),
+            recovery_web_url=os.getenv("RECOVERY_WEB_URL", "").strip(),
             simulated_identity_enabled=_boolean("IDENTIDAD_SIMULADA_ENABLED"),
             simulated_identity_outcomes=tuple(
                 item.strip()

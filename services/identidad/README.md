@@ -37,6 +37,75 @@ La respuesta incluye `access_token`, `token_type: Bearer`, `expires_in: 3600`, `
 `refresh_expires_in`, `scope: cliente` y `usuario`. Los errores son siempre
 `application/problem+json` con `type`, `title`, `status`, `detail`, `code` y `correlationId`.
 
+## Recuperacion de contrasena (requiere habilitacion operativa)
+
+Identidad y BFF Web comparten las rutas publicas `POST /v1/recuperacion-contrasena`,
+`GET /v1/recuperacion-contrasena/desafio` y
+`POST /v1/recuperacion-contrasena/confirmar`.
+Contrato completo: `contracts/openapi/recuperacion-contrasena-v1.yaml`.
+No acepta cambiar una cuenta por correo sin verificar el enlace, ni devuelve el token
+al solicitante anonimo. La respuesta 202 es generica para cuentas existentes o ausentes.
+
+El token se genera con 48 bytes aleatorios (64 caracteres URL-safe); solo SHA-256 se
+persiste en `recuperaciones_contrasena` (migracion `0010`, posterior a `0009`), vence
+en 15 minutos y el consumo SQL condicional es atomico. La nueva contrasena conserva
+PBKDF2 y politica 8-128 caracteres. Contrasena, consumo, invalidacion de otros enlaces,
+revocacion de todas las familias refresh y de credenciales biometricas se confirman
+en una transaccion. No se inicia sesion automaticamente.
+
+La pantalla solo envia una contrasena nueva, cifrada: JWE del login reutilizado con
+`typ: solventa-reset+jwe`, payload exacto `{desafioId,token,contrasena}` y token externo
+coincidente. No acepta contrasena anterior, confirmacion, correo ni contrasena en claro.
+El desafio Redis exclusivo `identidad:reset-challenge:` vence en 60 segundos.
+Solicitud por IP/correo y desafio/confirmacion por IP usan el limitador existente;
+en replicas requiere Redis compartido. El BFF reenvia su `remote_addr` mediante
+`X-Recovery-Client-IP` junto al token interno; Identidad solo confia en esa cabecera
+si la autenticacion interna es valida. Sin ella limita la IP del peer. No se confia
+en X-Forwarded-For anonimo; el ingress debe configurar una IP remota confiable del
+cliente en el BFF antes de habilitarlo, para no agrupar usuarios bajo la IP del proxy.
+
+### Transporte Amazon SES
+
+La imagen instala boto3 y usa SESv2 con la cadena de credenciales AWS existente (IRSA
+en Kubernetes); no usa claves nuevas ni SMTP. Configurar las tres variables juntas:
+
+| Variable | Valor requerido |
+| --- | --- |
+| `RECOVERY_SES_REGION` | Region SES autorizada |
+| `RECOVERY_EMAIL_SENDER` | Direccion remitente elegida y verificada en SES |
+| `RECOVERY_WEB_URL` | Base Web publica HTTPS, incluyendo su base path, sin query ni fragmento |
+
+Tambien exige `ENCRYPTED_LOGIN_ENABLED=true`, Redis y clave RSA independiente del
+login existentes. El enlace apunta a la entrada real
+`<RECOVERY_WEB_URL>/?recuperacion=1#token=<token>`, compatible con GitHub Pages sin
+peticion HTTP a una ruta profunda. El bootstrap Web debe capturar el fragmento en
+memoria, quitarlo junto al marcador y navegar a `/recuperar-contrasena`, sin guardar
+el secreto en storage ni logs. No incluirlo en query; Web usa no-referrer.
+
+Antes de consultar la cuenta, SES `GetAccount` y `GetEmailIdentity` comprueban envio
+habilitado, acceso de produccion y remitente verificado. Sandbox, configuracion
+ausente/incompleta, AccessDenied o fallo del proveedor producen 503, nunca 202 simulado.
+Si falla SendEmail, se invalida el token recien persistido. MessageId confirma aceptacion
+de SES, no llegada a bandeja; no hay outbox ni reintentos de correo ficticios.
+
+Permisos minimos del rol IRSA de Identidad (no del BFF):
+`ses:GetAccount` sobre `*`; `ses:GetEmailIdentity` y `ses:SendEmail` sobre el ARN
+de **esa** identidad remitente. Restringir `aws:RequestedRegion` a la region autorizada
+y `ses:FromAddress` en SendEmail al remitente elegido. La permissions boundary del rol
+debe permitir esas mismas acciones. No necesita SendRawEmail, gestionar identidades
+ni IAM administrativo. SA/namespace `identidad/identidad`, definido en
+`deploy/k8s/identidad/serviceaccount.yaml`, con rol generado por
+`terraform/environments/nueva-cuenta/primary/platform.tf` (`identidad_irsa`).
+
+El codigo no cambia recursos AWS, policies, secretos ni despliegues. La habilitacion
+requiere verificar remitente, salir de sandbox mediante aprobacion SES, aplicar permisos
+minimos autorizados, migrar `0010` y desplegar versiones compatibles Identidad/BFF/Web.
+Los manifests existentes aun fijan el login cifrado deshabilitado: su configuracion
+debe actualizarse de forma autorizada y sincronizada. El BFF necesita el token interno
+para consultar `GET /v1/sesiones/{sid}`; JWT legacy sin sid conservan su expiracion previa.
+Las pruebas sinteticas HTTP/persistencia y SES Stubber no acreditan entrega real ni
+una habilitacion end-to-end del entorno.
+
 ## Login web cifrado (opt-in; no desplegado)
 
 `ENCRYPTED_LOGIN_ENABLED` acepta solo `true`/`false`, por defecto `false`.

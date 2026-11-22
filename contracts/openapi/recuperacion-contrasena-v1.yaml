@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: Recuperacion de contrasena Solventa
+  version: 1.0.0
+  description: >-
+    Contrato compartido Identidad/BFF Web. Solo permite cambiar la contrasena
+    mediante enlace enviado al correo registrado, de un uso y vigencia de 15 minutos.
+servers:
+  - url: /api
+paths:
+  /v1/recuperacion-contrasena:
+    post:
+      operationId: solicitarRecuperacionContrasena
+      security: []
+      summary: Solicita un enlace al correo registrado sin enumerar cuentas
+      description: >-
+        No devuelve tokens ni indica si la cuenta existe. Requiere transporte SES
+        operativo, fuera de sandbox y remitente verificado; sin ello responde 503
+        para todas las cuentas antes de consultarlas. 202 confirma aceptacion por
+        SES cuando existe una cuenta, no entrega en la bandeja.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [correo]
+              properties:
+                correo:
+                  type: string
+                  format: email
+                  maxLength: 254
+      responses:
+        "202":
+          description: Respuesta generica, Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [mensaje]
+                properties:
+                  mensaje:
+                    const: Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "429":
+          $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/recuperacion-contrasena/desafio:
+    get:
+      operationId: solicitarDesafioRecuperacion
+      security: []
+      summary: Emite un desafio exclusivo para el sobre de nueva contrasena
+      description: >-
+        Reutiliza la clave RSA independiente y Redis GETDEL del login cifrado.
+        El desafio vence en 60 segundos y no puede usarse en login o registro.
+      responses:
+        "200":
+          description: Cache-Control no-store, Pragma no-cache
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [desafioId, clavePublica, expiraEn]
+                properties:
+                  desafioId:
+                    type: string
+                    pattern: '^[A-Za-z0-9_-]{43}$'
+                  expiraEn:
+                    type: string
+                    format: date-time
+                  clavePublica:
+                    type: object
+                    additionalProperties: false
+                    required: [kty, n, e, alg, use, kid]
+                    properties:
+                      kty:
+                        const: RSA
+                      n:
+                        type: string
+                      e:
+                        type: string
+                      alg:
+                        const: RSA-OAEP-256
+                      use:
+                        const: enc
+                      kid:
+                        type: string
+        "429":
+          $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/recuperacion-contrasena/confirmar:
+    post:
+      operationId: confirmarRecuperacionContrasena
+      security: []
+      summary: Guarda una unica nueva contrasena del titular del enlace
+      description: >-
+        Solo acepta JWE compacto RSA-OAEP-256/A256GCM con cabecera protegida exacta
+        {alg,enc,kid,typ:"solventa-reset+jwe"} y JSON {desafioId,token,contrasena}.
+        Token interno y externo deben coincidir. Contrasena de 8 a 128 caracteres,
+        sin trim ni campo anterior/confirmacion. Consume desafio mediante GETDEL;
+        guarda PBKDF2 existente, consume token, invalida otros enlaces pendientes
+        y revoca familias refresh y credenciales biometricas en una transaccion.
+        El BFF verifica estado de sesion para JWT con sid; legacy sin sid conservan
+        expiracion previa. No inicia sesion automaticamente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, credencialCifrada]
+              properties:
+                token:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{64}$'
+                credencialCifrada:
+                  type: string
+                  minLength: 1
+                  maxLength: 8192
+      responses:
+        "204":
+          description: Cambio persistido sin cuerpo, Cache-Control no-store
+        "400":
+          description: >-
+            recuperacion_invalida para token desconocido, vencido o consumido;
+            solicitud_invalida para esquema, contrasena o sobre/desafio invalidos.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "429":
+          $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+components:
+  schemas:
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          enum: [solicitud_invalida, recuperacion_invalida, demasiados_intentos, servicio_no_disponible]
+        correlationId:
+          type: string
+          format: uuid
+  responses:
+    SolicitudInvalida:
+      description: solicitud_invalida, sin mutacion de credenciales
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    DemasiadosIntentos:
+      description: demasiados_intentos, limite de solicitud por IP y correo; desafio/confirmacion por IP
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    ServicioNoDisponible:
+      description: servicio_no_disponible, sin confirmacion ficticia
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
