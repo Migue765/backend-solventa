@@ -245,8 +245,17 @@ def run_terraform(command: list[str], cwd: Path, environment: dict[str, str]) ->
 def prepare_root(name: str, tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
     terraform = shutil.which("terraform")
     mirror = ENVIRONMENT / name / ".terraform" / "providers"
+    if not mirror.exists() and os.environ.get("TF_DATA_DIR"):
+        mirror = Path(os.environ["TF_DATA_DIR"]) / "providers"
     if terraform is None or not mirror.exists():
         pytest.skip("Requiere Terraform y providers previamente inicializados sin backend.")
+    providers = [
+        line.split('"')[1]
+        for line in (ENVIRONMENT / name / ".terraform.lock.hcl").read_text().splitlines()
+        if line.startswith("provider ")
+    ]
+    if any(not mirror.joinpath(*provider.split("/")).exists() for provider in providers):
+        pytest.skip("El mirror disponible no contiene todos los providers de este root.")
     checkout = tmp_path / "checkout"
     root = checkout / "terraform" / "environments" / "nueva-cuenta" / name
     shutil.copytree(ENVIRONMENT / name, root, ignore=shutil.ignore_patterns(".terraform"))
@@ -261,6 +270,7 @@ def prepare_root(name: str, tmp_path: Path) -> tuple[str, Path, dict[str, str]]:
     environment = {
         **os.environ,
         "TF_CLI_CONFIG_FILE": str(config),
+        "TF_DATA_DIR": str(tmp_path / "terraform-data"),
         "AWS_EC2_METADATA_DISABLED": "true",
         "CHECKPOINT_DISABLE": "1",
     }
@@ -291,6 +301,29 @@ run "four_small" {
     enable_small_node_group = true
     small_node_release_version = "1.35.9-20261119"
   }
+}
+run "remaining_runtime_assets" {
+  command = plan
+  variables {
+    enable_siniestros_evidence = true
+    bootstrap_build_sources = {
+      polizas = "$DIGEST"
+      notificaciones = "$DIGEST"
+      siniestros = "$DIGEST"
+      asistencias = "$DIGEST"
+      bff-movil = "$DIGEST"
+    }
+  }
+}
+run "reject_duplicate_pipeline_build" {
+  command = plan
+  variables { bootstrap_build_sources = { identidad = "$DIGEST" } }
+  expect_failures = [var.bootstrap_build_sources]
+}
+run "reject_unknown_bootstrap_api" {
+  command = plan
+  variables { bootstrap_build_sources = { desconocida = "$DIGEST" } }
+  expect_failures = [var.bootstrap_build_sources]
 }
 run "reject_small_without_release" {
   command = plan
@@ -378,7 +411,9 @@ run "reject_wrong_group_name" {
   }
   expect_failures = [data.aws_security_group.network["redis"]]
 }
-""".replace("$ACCOUNT", ACCOUNT).replace("$VPC", VPC),
+""".replace("$ACCOUNT", ACCOUNT)
+        .replace("$VPC", VPC)
+        .replace("$DIGEST", "a" * 64),
         encoding="utf-8",
     )
     existing = primary / "tests" / "ecr.tftest.hcl"
@@ -441,7 +476,12 @@ run "reject_wrong_group_name" {
         "upload-offset",
         "x-correlation-id",
     }
-    assert set(cors["expose_headers"]) == {"date", "retry-after"}
+    assert set(cors["expose_headers"]) == {
+        "date",
+        "retry-after",
+        "x-reporte-huella",
+        "x-content-sha256",
+    }
     routes = {route["route_key"]: route for route in by_type("aws_apigatewayv2_route")}
     for path in ("/v1/sesiones/desafio", "/v1/usuarios/desafio"):
         assert routes[f"GET {path}"]["authorization_type"] == "NONE"
@@ -452,6 +492,33 @@ run "reject_wrong_group_name" {
         "max_size": 2,
     }
     assert len(by_type("aws_eks_node_group")) == 1
+    runtime_plan = next(
+        event["test_plan"]
+        for line in output.splitlines()
+        if (event := json.loads(line)).get("type") == "test_plan"
+        and event.get("@testrun") == "remaining_runtime_assets"
+    )
+    runtime_resources = {
+        item["address"]: item["change"]["after"]
+        for item in runtime_plan["resource_changes"]
+        if item["mode"] == "managed"
+    }
+    for service in ("polizas", "notificaciones", "siniestros", "asistencias", "bff-movil"):
+        build = runtime_resources[f'aws_codebuild_project.bootstrap_build["{service}"]']
+        assert build["source"][0]["location"].endswith(f"/bootstrap-source/{'a' * 64}.zip")
+        role = runtime_resources[f'aws_iam_role.bootstrap_build["{service}"]']
+        assert role["permissions_boundary"] == f"arn:aws:iam::{ACCOUNT}:policy/test-ci"
+    assert "module.siniestros_evidence[0].aws_s3_bucket.this" in runtime_resources
+    assert not any(
+        name.startswith(("module.siniestros_evidence", "module.siniestros_irsa"))
+        for name in resources
+    )
+    runtime_role = runtime_resources["module.siniestros_irsa[0].aws_iam_role.this"]
+    assert runtime_role["name"] == "solventa-nueva-siniestros"
+    assert runtime_role["permissions_boundary"] == f"arn:aws:iam::{ACCOUNT}:policy/test-application"
+    assert (
+        sum(item["type"] == "aws_eks_node_group" for item in runtime_plan["resource_changes"]) == 1
+    )
     medium_plan = next(
         event["test_plan"]
         for line in output.splitlines()

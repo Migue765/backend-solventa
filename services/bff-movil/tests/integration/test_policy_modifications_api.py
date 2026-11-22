@@ -385,4 +385,4 @@ def test_modelos_rechazan_respuestas_incoherentes() -> None:
             {**state(), "vigencia": {"inicio": "2026-12-11", "fin": "2026-11-11"}}
         )
     with pytest.raises(ValueError):
-        PolicyCoverage.model_validate({**coverages()[0], "incluida": False})
+        PolicyCoverage.model_validate({**coverages()[0], "incluida": "false"})

@@ -74,6 +74,31 @@ def test_rechaza_evidencia_invalida(cambios: dict[str, object]) -> None:
 
 
 @pytest.mark.parametrize(
+    "cambios",
+    [
+        {"prima": "0"},
+        {"prima": "41250.50"},
+        {"prima": "-41250"},
+        {"plan": "desconocido"},
+        {"coberturas": ["Daños al vehículo", "Daños al vehículo"]},
+        {"coberturas": ["Fallecimiento"]},
+    ],
+)
+def test_rechaza_condiciones_emision_que_no_corresponden(cambios: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        EvidenciaEmision.model_validate(
+            evidencia(
+                condicionesEmision={
+                    "plan": "esencial",
+                    "prima": "41250.00",
+                    "coberturas": ["Daños al vehículo"],
+                    **cambios,
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize(
     ("dia", "esperado"),
     [
         (1, "programada"),

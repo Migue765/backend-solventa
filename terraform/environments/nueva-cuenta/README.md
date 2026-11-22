@@ -44,6 +44,25 @@ lugar de inventar vacios. Notificaciones conserva el descriptor
 `{disponibilidad: "no_implementado"}` en ese contrato.
 Quedan cuatro APIs por integrar; no se declara terminado todo el backend.
 
+El plan de integracion puede agregar builds aislados para las APIs sin pipeline
+mediante `bootstrap_build_sources`; cada rol solo lee su ZIP SHA256 y publica en
+su propio ECR. No duplicar los cuatro proyectos que ya tienen pipeline ni omitir
+la entrada existente de Polizas. Un build por snapshot no acredita un commit:
+registrar por separado el SHA Git y el checksum del ZIP.
+
+`enable_siniestros_evidence=true` propone un bucket privado versionado y un rol
+IRSA exclusivo de `siniestros/siniestros`, limitado a `evidencias/*`. Reutiliza la
+CMK existente, no el rol de Identidad, y no agrega nodos ni otra base de datos.
+El output `siniestros_context` entrega solamente bucket y rol. El flag permanece
+deshabilitado por defecto; revisar altas, cambios, costes y rollback antes de
+aplicar. Los Secrets runtime/migrator de los dominios faltantes deben provenir del
+Secret existente `solventa-prod-database-domains`, por operador autorizado, sin
+regenerar usuarios ni imprimir valores. Estos recursos no despliegan los pods,
+no ejecutan migraciones y no acreditan sus recorridos funcionales.
+Las imagenes de Siniestros y Asistencias incluyen la CA RDS y
+`PGSSLROOTCERT`, igual que los demas dominios PostgreSQL; conservar
+`sslmode=verify-full` en los DSN runtime y migrator.
+
 ## Identidad y guardas
 
 El usuario admin asume `arn:aws:iam::096571798698:role/solventa-infra-deploy`

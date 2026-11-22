@@ -1,5 +1,28 @@
 # Polizas academicas
 
+## Cumplimiento academico integrado
+
+La migracion `polizas_0006` agrega `reportes_regulatorios_academicos`,
+`intercambios_reaseguro_academicos` y `auditoria_cumplimiento`. Las instantaneas
+son inmutables; el envio, acuse simulado, diferencias y auditoria se confirman
+juntos. No se usan archivos locales ni una base de datos en el BFF.
+
+Las rutas privadas `/internal/v1/cumplimiento/reportes` e
+`/internal/v1/cumplimiento/intercambios` exigen el token interno, `X-Actor-ID`
+UUID derivado del JWT en el BFF y `X-Actor-Rol: asesor`. Las escrituras requieren
+`Idempotency-Key` UUID. La clave y el actor identifican la generacion; se recupera
+por `/reportes/operaciones/{clave}` si se perdio una respuesta, sin repetir fuentes.
+Consulta y descarga por identificador quedan auditadas en SQL. Una falla de
+persistencia devuelve 503, no un acuse simulado de exito.
+
+El adaptador academico usa una cuota fija didactica del 20 % y nunca ejecuta
+pagos, contratos legales ni envios externos. Los datos se minimizan mediante las
+fuentes propietarias; las huellas versionan el contenido, no certifican cifras
+ante autoridades. Mantener el transporte privado y HTTPS del entorno aprobado.
+No se aplica infraestructura ni se habilita huella productiva desde este PR.
+
+Validacion desde la raiz: `python -m pytest -q tests\test_backend_compliance_flow.py`.
+
 Servicio interno con base de datos propia. Una suscripcion aprobada y un **pago
 simulado nuevo confirmado** generan una poliza academica persistida. No hay aseguradora,
 firma, cobro ni cobertura real. Cada respuesta incluye `simulada: true`.

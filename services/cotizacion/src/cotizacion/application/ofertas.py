@@ -335,6 +335,10 @@ def _generar_ofertas(
     )
 
 
+def identificador_oferta(solicitud_id: str, key: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{key}")
+
+
 def _oferta(
     solicitud_id: str,
     key: str,
@@ -345,7 +349,7 @@ def _oferta(
     factor_prima: Decimal,
     oferta_aceptada_id: UUID | None = None,
 ) -> Oferta:
-    oferta_id = uuid5(NAMESPACE_URL, f"solventa:{solicitud_id}:{key}")
+    oferta_id = identificador_oferta(solicitud_id, key)
     return Oferta(
         oferta_id=oferta_id,
         version=1,

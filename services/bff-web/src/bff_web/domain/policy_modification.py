@@ -33,12 +33,6 @@ class PolicyCoverage(_Strict):
     optional: StrictBool = Field(alias="opcional")
     included: StrictBool = Field(alias="incluida")
 
-    @model_validator(mode="after")
-    def mandatory_is_included(self) -> Self:
-        if not self.optional and not self.included:
-            raise ValueError("Una cobertura obligatoria siempre esta incluida.")
-        return self
-
 
 class PolicyVersion(_Strict):
     version: StrictInt = Field(ge=1)

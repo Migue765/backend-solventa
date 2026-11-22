@@ -6,9 +6,9 @@ variable "bootstrap_build_sources" {
   validation {
     condition = alltrue([
       for service, digest in var.bootstrap_build_sources :
-      contains(["polizas", "notificaciones"], service) && can(regex("^[0-9a-f]{64}$", digest))
+      contains(local.api_services, service) && can(regex("^[0-9a-f]{64}$", digest))
     ])
-    error_message = "Solo Polizas/Notificaciones preparadas y una fuente SHA256 verificable."
+    error_message = "Solo APIs de este entorno y una fuente SHA256 verificable."
   }
 
   validation {

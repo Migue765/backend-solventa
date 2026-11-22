@@ -1,3 +1,4 @@
+from decimal import Decimal
 from uuid import UUID
 
 from polizas.domain.condiciones import Condiciones, iniciales
@@ -20,4 +21,6 @@ def condiciones_vigentes(sesion: Session, poliza: PolizaModel) -> tuple[int, Con
     ultima = ultima_version(sesion, poliza.poliza_id)
     if ultima is None:
         return 1, iniciales(poliza.tipo)
-    return ultima.version, Condiciones(ultima.plan, frozenset(ultima.coberturas))
+    return ultima.version, Condiciones(
+        ultima.plan, frozenset(ultima.coberturas), int(Decimal(ultima.prima))
+    )
