@@ -35,14 +35,12 @@ def request_recovery() -> Response:
     except (ValidationError, TypeError, RequestEntityTooLarge):
         return invalid_request_response()
     try:
-        identity_gateway().request_password_recovery(
+        message = identity_gateway().request_password_recovery(
             str(payload.correo), correlation_id(), request.remote_addr
         )
     except IdentityRejectedError as error:
         return rejection_response(error)
-    response = jsonify(
-        {"mensaje": "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion."}
-    )
+    response = jsonify({"mensaje": message})
     response.status_code = 202
     return response
 

@@ -13,7 +13,7 @@ class IdentityGateway(Protocol):
 
     def request_password_recovery(
         self, email: str, correlation_id: str, client_address: str | None = None
-    ) -> None: ...
+    ) -> str: ...
 
     def recovery_challenge(
         self, correlation_id: str, client_address: str | None = None

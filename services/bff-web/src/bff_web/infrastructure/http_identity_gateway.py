@@ -55,7 +55,7 @@ class HttpIdentityGateway:
 
     def request_password_recovery(
         self, email: str, correlation_id: str, client_address: str | None = None
-    ) -> None:
+    ) -> str:
         result = self._post(
             "/v1/recuperacion-contrasena",
             {"correo": email},
@@ -63,10 +63,19 @@ class HttpIdentityGateway:
             expected_status=202,
             extra_headers=self._recovery_headers(client_address),
         )
-        if result.get("mensaje") != (
-            "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion."
+        message = result.get("mensaje")
+        if (
+            set(result) != {"mensaje"}
+            or not isinstance(message, str)
+            or message
+            not in (
+                "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.",
+                "Si existe una cuenta con ese correo, "
+                "el administrador recibira un enlace de recuperacion.",
+            )
         ):
             raise IdentityUnavailableError()
+        return message
 
     def recovery_challenge(
         self, correlation_id: str, client_address: str | None = None

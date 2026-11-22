@@ -4,7 +4,9 @@ info:
   version: 1.0.0
   description: >-
     Contrato compartido Identidad/BFF Web. Solo permite cambiar la contrasena
-    mediante enlace enviado al correo registrado, de un uso y vigencia de 15 minutos.
+    mediante enlace de un uso y vigencia de 15 minutos. Por defecto se envia al
+    correo registrado. El modo academico administrado explicito delega la autoridad
+    de recuperacion al administrador y envia todos los enlaces solo a su buzon verificado.
 servers:
   - url: /api
 paths:
@@ -12,12 +14,15 @@ paths:
     post:
       operationId: solicitarRecuperacionContrasena
       security: []
-      summary: Solicita un enlace al correo registrado sin enumerar cuentas
+      summary: Solicita un enlace al destino configurado sin enumerar cuentas
       description: >-
         No devuelve tokens ni indica si la cuenta existe. Requiere transporte SES
-        operativo, fuera de sandbox y remitente verificado; sin ello responde 503
-        para todas las cuentas antes de consultarlas. 202 confirma aceptacion por
-        SES cuando existe una cuenta, no entrega en la bandeja.
+        operativo y remitente verificado; modo usuario requiere salir de sandbox.
+        El modo academico administrado permite sandbox solo con destinatario
+        administrador verificado, nunca el correo solicitado. Estos requisitos se
+        comprueban antes de consultar cuentas y fallan 503 para todas por igual.
+        202 confirma aceptacion por SES cuando existe una cuenta, no entrega en
+        la bandeja. El cliente no puede elegir modo ni destinatario.
       requestBody:
         required: true
         content:
@@ -42,7 +47,9 @@ paths:
                 required: [mensaje]
                 properties:
                   mensaje:
-                    const: Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.
+                    enum:
+                      - Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.
+                      - Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion.
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "429":

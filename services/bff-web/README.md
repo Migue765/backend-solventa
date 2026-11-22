@@ -56,6 +56,14 @@ Esto aplica a las sesiones emitidas por TokenService; JWT legacy sin sid mantien
 su validacion y expiracion anteriores, no tienen revocacion inmediata.
 Identidad revoca refresh de todos los canales y credenciales biometricas tras reset.
 
+Identidad mantiene recuperacion normal `usuario` por defecto. El modo explicito
+`academico_administrado` envia los enlaces solo al administrador verificado, que
+autoriza el cambio de la cuenta vinculada al token; no acredita su correo original.
+El BFF propaga solo `{mensaje}` con uno de los dos literales genericos del contrato,
+incluido `Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion.`.
+La Web valida los dos textos permitidos pero conserva copy neutro; ni modo ni
+destinatario se pueden configurar mediante el API publico.
+
 SES y la migracion/configuracion operativa se documentan en `services/identidad/README.md`.
 La Web debe abrir el root real `<base>/?recuperacion=1#token=<token>` (base path Pages
 incluido), consumir el fragmento antes del router y mostrar solo la nueva contrasena.

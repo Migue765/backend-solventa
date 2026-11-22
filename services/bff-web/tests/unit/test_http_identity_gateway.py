@@ -60,6 +60,25 @@ def test_recovery_rejects_unexpected_upstream_success_status(
             gateway.confirm_password_recovery("a" * 64, "test-jwe", CID)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"mensaje": "unknown"},
+        {"mensaje": None},
+        {
+            "mensaje": "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.",
+            "token": "must-not-be-exposed",
+        },
+    ],
+)
+def test_recovery_rejects_unknown_or_extra_fields_from_identity(
+    identity_server: IdentityServer, payload: dict[str, object]
+) -> None:
+    identity_server.respond("POST", "/v1/recuperacion-contrasena", 202, payload)
+    with pytest.raises(IdentityUnavailableError):
+        HttpIdentityGateway(identity_server.url).request_password_recovery("test@example.com", CID)
+
+
 def registration_request() -> dict[str, object]:
     return {
         "nombre": "Ana",

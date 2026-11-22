@@ -133,6 +133,8 @@ def create_app(
                 active_config.recovery_ses_region,
                 active_config.recovery_email_sender,
                 active_config.recovery_web_url,
+                delivery_mode=active_config.recovery_delivery_mode,
+                admin_mailbox=active_config.recovery_admin_mailbox,
             )
             if active_config.recovery_ses_region
             else None

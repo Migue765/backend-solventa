@@ -55,6 +55,36 @@ spec:
                   optional: true
             - name: AWS_REGION
               value: ${AWS_REGION}
+            - name: RECOVERY_DELIVERY_MODE
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: RECOVERY_DELIVERY_MODE
+                  optional: true
+            - name: RECOVERY_ADMIN_MAILBOX
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: RECOVERY_ADMIN_MAILBOX
+                  optional: true
+            - name: RECOVERY_SES_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: RECOVERY_SES_REGION
+                  optional: true
+            - name: RECOVERY_EMAIL_SENDER
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: RECOVERY_EMAIL_SENDER
+                  optional: true
+            - name: RECOVERY_WEB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: RECOVERY_WEB_URL
+                  optional: true
             - name: WEB_CONCURRENCY
               value: "2"
             - name: GUNICORN_THREADS

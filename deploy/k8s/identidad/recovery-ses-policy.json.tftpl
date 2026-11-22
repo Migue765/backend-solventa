@@ -1,0 +1,40 @@
+${jsonencode({
+  Version = "2012-10-17"
+  Statement = [
+    {
+      Sid      = "IdentidadRecuperacionConsultarCuenta"
+      Effect   = "Allow"
+      Action   = ["ses:GetAccount"]
+      Resource = ["*"]
+      Condition = {
+        ArnEquals = { "aws:PrincipalArn" = identity_role_arn }
+        StringEquals = { "aws:RequestedRegion" = ses_region }
+      }
+    },
+    {
+      Sid      = "IdentidadRecuperacionVerificarBuzones"
+      Effect   = "Allow"
+      Action   = ["ses:GetEmailIdentity"]
+      Resource = distinct([sender_identity_arn, admin_identity_arn])
+      Condition = {
+        ArnEquals = { "aws:PrincipalArn" = identity_role_arn }
+        StringEquals = { "aws:RequestedRegion" = ses_region }
+      }
+    },
+    {
+      Sid      = "IdentidadRecuperacionEnviarAlAdministrador"
+      Effect   = "Allow"
+      Action   = ["ses:SendEmail"]
+      Resource = [sender_identity_arn]
+      Condition = {
+        ArnEquals = { "aws:PrincipalArn" = identity_role_arn }
+        StringEquals = {
+          "aws:RequestedRegion" = ses_region
+          "ses:FromAddress"     = sender
+        }
+        "ForAllValues:StringEquals" = { "ses:Recipients" = [admin_mailbox] }
+        Null = { "ses:Recipients" = "false" }
+      }
+    },
+  ]
+})}

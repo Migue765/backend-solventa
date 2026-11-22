@@ -23,6 +23,9 @@ from identidad.problems import problem_response
 
 bp = Blueprint("password_recovery", __name__, url_prefix="/v1/recuperacion-contrasena")
 GENERIC_MESSAGE = "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion."
+GENERIC_ADMIN_MESSAGE = (
+    "Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion."
+)
 
 
 class RecoveryRequest(BaseModel):
@@ -47,7 +50,12 @@ def request_recovery() -> Response:
         return _invalid_request()
     except TooManyAttemptsError as error:
         return too_many_attempts(error)
-    response = jsonify({"mensaje": GENERIC_MESSAGE})
+    message = (
+        GENERIC_ADMIN_MESSAGE
+        if _config().recovery_delivery_mode == "academico_administrado"
+        else GENERIC_MESSAGE
+    )
+    response = jsonify({"mensaje": message})
     response.status_code = 202
     return response
 

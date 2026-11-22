@@ -45,6 +45,8 @@ Identidad y BFF Web comparten las rutas publicas `POST /v1/recuperacion-contrase
 Contrato completo: `contracts/openapi/recuperacion-contrasena-v1.yaml`.
 No acepta cambiar una cuenta por correo sin verificar el enlace, ni devuelve el token
 al solicitante anonimo. La respuesta 202 es generica para cuentas existentes o ausentes.
+Por defecto el titular recibe el enlace; el modo academico administrado descrito abajo
+delega explicitamente esa autoridad al administrador, no verifica el correo del titular.
 
 El token se genera con 48 bytes aleatorios (64 caracteres URL-safe); solo SHA-256 se
 persiste en `recuperaciones_contrasena` (migracion `0010`, posterior a `0009`), vence
@@ -67,13 +69,16 @@ cliente en el BFF antes de habilitarlo, para no agrupar usuarios bajo la IP del 
 ### Transporte Amazon SES
 
 La imagen instala boto3 y usa SESv2 con la cadena de credenciales AWS existente (IRSA
-en Kubernetes); no usa claves nuevas ni SMTP. Configurar las tres variables juntas:
+en Kubernetes); no usa claves nuevas ni SMTP. Configurar region/remitente/URL juntos;
+modo y buzon determinan explicitamente la autoridad y el destino:
 
 | Variable | Valor requerido |
 | --- | --- |
 | `RECOVERY_SES_REGION` | Region SES autorizada |
 | `RECOVERY_EMAIL_SENDER` | Direccion remitente elegida y verificada en SES |
 | `RECOVERY_WEB_URL` | Base Web publica HTTPS, incluyendo su base path, sin query ni fragmento |
+| `RECOVERY_DELIVERY_MODE` | `usuario` por defecto; `academico_administrado` solo con eleccion explicita |
+| `RECOVERY_ADMIN_MAILBOX` | Buzon del administrador, obligatorio y valido solo en modo academico |
 
 Tambien exige `ENCRYPTED_LOGIN_ENABLED=true`, Redis y clave RSA independiente del
 login existentes. El enlace apunta a la entrada real
@@ -83,28 +88,73 @@ memoria, quitarlo junto al marcador y navegar a `/recuperar-contrasena`, sin gua
 el secreto en storage ni logs. No incluirlo en query; Web usa no-referrer.
 
 Antes de consultar la cuenta, SES `GetAccount` y `GetEmailIdentity` comprueban envio
-habilitado, acceso de produccion y remitente verificado. Sandbox, configuracion
-ausente/incompleta, AccessDenied o fallo del proveedor producen 503, nunca 202 simulado.
+habilitado y remitente verificado. El modo `usuario` exige acceso de produccion:
+sandbox, configuracion ausente/incompleta, AccessDenied o fallo del proveedor producen
+503, nunca 202 simulado. Configuracion de modo/buzon invalida impide arrancar.
 Si falla SendEmail, se invalida el token recien persistido. MessageId confirma aceptacion
 de SES, no llegada a bandeja; no hay outbox ni reintentos de correo ficticios.
 
 Permisos minimos del rol IRSA de Identidad (no del BFF):
-`ses:GetAccount` sobre `*`; `ses:GetEmailIdentity` y `ses:SendEmail` sobre el ARN
-de **esa** identidad remitente. Restringir `aws:RequestedRegion` a la region autorizada
-y `ses:FromAddress` en SendEmail al remitente elegido. La permissions boundary del rol
-debe permitir esas mismas acciones. No necesita SendRawEmail, gestionar identidades
+`ses:GetAccount` sobre `*`; `ses:GetEmailIdentity` sobre los ARN de remitente y,
+en modo academico, administrador; `ses:SendEmail` solo sobre el ARN remitente.
+Restringir `aws:RequestedRegion` a la region autorizada y `ses:FromAddress` al remitente.
+En modo academico, `ForAllValues:StringEquals ses:Recipients` admite solo el administrador
+y `Null ses:Recipients=false` requiere destinatario presente. La boundary compartida
+debe permitir esas mismas acciones **solo** para `aws:PrincipalArn` del rol Identidad.
+No necesita SendRawEmail, gestionar identidades
 ni IAM administrativo. SA/namespace `identidad/identidad`, definido en
 `deploy/k8s/identidad/serviceaccount.yaml`, con rol generado por
 `terraform/environments/nueva-cuenta/primary/platform.tf` (`identidad_irsa`).
 
-El codigo no cambia recursos AWS, policies, secretos ni despliegues. La habilitacion
-requiere verificar remitente, salir de sandbox mediante aprobacion SES, aplicar permisos
-minimos autorizados, migrar `0010` y desplegar versiones compatibles Identidad/BFF/Web.
+Estos cambios no aplican recursos AWS, policies, secretos ni despliegues. La habilitacion
+requiere verificar remitente y destino academico, permisos minimos autorizados,
+migracion `0010` y versiones compatibles Identidad/BFF/Web. Solo el modo `usuario`
+requiere salir de sandbox mediante aprobacion SES.
 Los manifests existentes aun fijan el login cifrado deshabilitado: su configuracion
 debe actualizarse de forma autorizada y sincronizada. El BFF necesita el token interno
 para consultar `GET /v1/sesiones/{sid}`; JWT legacy sin sid conservan su expiracion previa.
 Las pruebas sinteticas HTTP/persistencia y SES Stubber no acreditan entrega real ni
 una habilitacion end-to-end del entorno.
+
+### Modo academico administrado: autoridad delegada
+
+Solo se activa con `RECOVERY_DELIVERY_MODE=academico_administrado` y
+`RECOVERY_ADMIN_MAILBOX` explicito. No se infiere por sandbox, remitente igual a
+destinatario, peticion HTTP ni ausencia de proveedor. Configuracion desconocida,
+buzon invalido/ausente, buzon configurado en modo `usuario` o transporte incompleto
+impiden arrancar, sin consultar cuentas ni degradarse a otro modo.
+
+Todos los enlaces de cuentas existentes se envian **exclusivamente al administrador**,
+nunca al correo solicitado. Antes de buscar la cuenta se verifican remitente y destino
+administrador en SES y envio habilitado; permite sandbox solo en esta modalidad.
+Si ambos buzones son la misma identidad, su verificacion se reutiliza. Ausencia,
+rechazo o AccessDenied de cualquier identidad produce 503 para todo solicitante.
+
+Cada mensaje al administrador identifica el correo de la cuenta cuya recuperacion
+administra. El token sigue vinculado en SQL a esa cuenta: no acepta otro correo/id
+en la confirmacion ni puede usarse para cambiar una cuenta distinta. Las cuentas
+ausentes no generan correo, pero reciben el mismo 202 que las presentes.
+
+**No acredita posesion del correo del usuario.** El titular del buzon administrador
+autoriza el cambio de contrasena de las cuentas academicas al usar cada enlace.
+Es una delegacion deliberada de administracion, no recuperacion normal de produccion.
+No compartir, publicar ni registrar enlaces; el acceso al buzon controla esta autoridad.
+Se conservan hash, politica, token de 15 minutos y un uso, JWE, antiabuso y revocaciones.
+
+El cuerpo 202 sigue siendo solo `{mensaje}`. En modo `usuario` mantiene
+`Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.`;
+en modo academico usa
+`Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion.`.
+Ambos son ASCII exactos, genericos y permitidos por BFF/Web; no contienen cuenta,
+modo, destinatario ni token. No se promete envio al solicitante en modo academico.
+
+La plantilla `deploy/k8s/identidad/recovery-ses-policy.json.tftpl` contiene solo los
+tres Allow SES academicos con region, principal, remitente y destino restringidos.
+Se renderiza mediante `templatefile` con los valores aprobados fuera de Git.
+No contiene datos reales ni reemplaza/importa/gestiona la boundary compartida.
+El propietario debe incorporar estos statements en su fuente vigente conservando
+los anteriores y usar la misma politica restringida en el inline de Identidad.
+No ampliar SES a todos los roles que comparten la boundary.
 
 ## Login web cifrado (opt-in; no desplegado)
 

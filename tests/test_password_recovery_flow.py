@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -30,6 +31,7 @@ from identidad.infrastructure.persistence.models import (
 from identidad.infrastructure.persistence.password_recovery_repository import (
     SqlPasswordRecoveryRepository,
 )
+from identidad.infrastructure.persistence.user_repository import SqlUserRepository
 from identidad.infrastructure.ses_recovery_mail import SesRecoveryMailSender
 from jwcrypto import jwe, jwk
 from sqlalchemy import create_engine, event, select
@@ -470,3 +472,162 @@ def test_ses_access_denied_is_an_explicit_unavailable_error() -> None:
             SesRecoveryMailSender(
                 "us-east-2", EMAIL, "https://web.example.com", client
             ).ensure_available()
+
+
+ADMIN_MAILBOX = "academic-admin@example.com"
+
+
+def install_academic_sender(
+    flow: Flow,
+    monkeypatch: pytest.MonkeyPatch,
+    client: Any,
+    admin_mailbox: str = ADMIN_MAILBOX,
+) -> SqlUserRepository:
+    monkeypatch.setattr(
+        "identidad.infrastructure.ses_recovery_mail.boto3.client",
+        lambda *args, **kwargs: client,
+    )
+    config = replace(
+        flow.identity.extensions["identidad_config"],
+        recovery_ses_region="us-east-2",
+        recovery_email_sender=EMAIL,
+        recovery_web_url="https://web.example.com/app",
+        recovery_delivery_mode="academico_administrado",
+        recovery_admin_mailbox=admin_mailbox,
+    )
+    configured = create_app(config, flow.clock)
+    flow.identity.extensions["password_recovery_service"] = configured.extensions[
+        "password_recovery_service"
+    ]
+    flow.identity.extensions["identidad_config"] = config
+    repository: SqlUserRepository = configured.extensions["user_repository"]
+    return repository
+
+
+@pytest.mark.parametrize("admin_mailbox", [ADMIN_MAILBOX, EMAIL])
+def test_academic_sandbox_routes_all_existing_accounts_only_to_verified_administrator(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch, admin_mailbox: str
+) -> None:
+    client = boto3.client(
+        "sesv2",
+        region_name="us-east-2",
+        aws_access_key_id="synthetic",
+        aws_secret_access_key="synthetic",
+    )
+    install_academic_sender(flow, monkeypatch, client, admin_mailbox)
+    other_email = "other-academic@example.com"
+    assert (
+        flow.identity.test_client()
+        .post(
+            "/v1/usuarios",
+            json={"nombre": "Other academic", "correo": other_email, "contrasena": OLD_PASSWORD},
+        )
+        .status_code
+        == 201
+    )
+    messages: list[dict[str, Any]] = []
+
+    def capture(params: dict[str, Any], **kwargs: Any) -> None:
+        messages.append(params)
+
+    client.meta.events.register("before-parameter-build.sesv2.SendEmail", capture)
+    with Stubber(client) as stub:
+        for _ in range(3):
+            stub.add_response(
+                "get_account", {"ProductionAccessEnabled": False, "SendingEnabled": True}
+            )
+            stub.add_response(
+                "get_email_identity",
+                {"VerifiedForSendingStatus": True},
+                {"EmailIdentity": EMAIL},
+            )
+            if admin_mailbox != EMAIL:
+                stub.add_response(
+                    "get_email_identity",
+                    {"VerifiedForSendingStatus": True},
+                    {"EmailIdentity": admin_mailbox},
+                )
+            if _ < 2:
+                stub.add_response("send_email", {"MessageId": "accepted-academic"})
+        web = flow.web.test_client()
+        responses = [
+            web.post(BASE, json={"correo": email})
+            for email in (EMAIL, other_email, "unknown-academic@example.com")
+        ]
+        assert all(response.status_code == 202 for response in responses)
+        assert all(response.get_json() == responses[0].get_json() for response in responses)
+        assert "el administrador recibira" in responses[0].get_json()["mensaje"]
+        stub.assert_no_pending_responses()
+    assert len(messages) == 2
+    tokens = []
+    for email, message in zip((EMAIL, other_email), messages, strict=True):
+        assert message["Destination"] == {"ToAddresses": [admin_mailbox]}
+        text = message["Content"]["Simple"]["Body"]["Text"]["Data"]
+        assert f"Cuenta solicitante: {email}" in text
+        match = re.search(r"#token=([A-Za-z0-9_-]{64})", text)
+        assert match is not None
+        tokens.append(match.group(1))
+        assert match.group(1) not in json.dumps(responses[0].get_json())
+    assert tokens[0] != tokens[1]
+    rejected = web.post(
+        BASE + "/confirmar", json={**confirm_body(flow, tokens[0]), "correo": other_email}
+    )
+    assert rejected.status_code == 400
+    assert web.post(BASE + "/confirmar", json=confirm_body(flow, tokens[0])).status_code == 204
+    with flow.sessions() as session:
+        primary = session.scalar(select(UsuarioModel).where(UsuarioModel.correo == EMAIL))
+        other = session.scalar(select(UsuarioModel).where(UsuarioModel.correo == other_email))
+        assert primary is not None and verify_password(NEW_PASSWORD, primary.password_hash)
+        assert other is not None and verify_password(OLD_PASSWORD, other.password_hash)
+        pending = session.get(PasswordRecoveryModel, hashlib.sha256(tokens[1].encode()).hexdigest())
+        assert pending is not None and pending.consumida_en is None
+
+
+@pytest.mark.parametrize(
+    "sending,sender_verified,admin_verified",
+    [(False, True, True), (True, False, True), (True, True, False)],
+)
+def test_academic_transport_failure_precedes_any_account_lookup(
+    flow: Flow,
+    monkeypatch: pytest.MonkeyPatch,
+    sending: bool,
+    sender_verified: bool,
+    admin_verified: bool,
+) -> None:
+    client = boto3.client(
+        "sesv2",
+        region_name="us-east-2",
+        aws_access_key_id="synthetic",
+        aws_secret_access_key="synthetic",
+    )
+    repository = install_academic_sender(flow, monkeypatch, client)
+
+    def forbid_lookup(email: str) -> None:
+        raise AssertionError("Account lookup occurred before transport readiness")
+
+    monkeypatch.setattr(repository, "find_credential", forbid_lookup)
+    with Stubber(client) as stub:
+        for _ in range(2):
+            stub.add_response(
+                "get_account", {"ProductionAccessEnabled": False, "SendingEnabled": sending}
+            )
+            stub.add_response(
+                "get_email_identity",
+                {"VerifiedForSendingStatus": sender_verified},
+                {"EmailIdentity": EMAIL},
+            )
+            if sending and sender_verified:
+                stub.add_response(
+                    "get_email_identity",
+                    {"VerifiedForSendingStatus": admin_verified},
+                    {"EmailIdentity": ADMIN_MAILBOX},
+                )
+        responses = [
+            flow.web.test_client().post(BASE, json={"correo": email})
+            for email in (EMAIL, "unknown-academic@example.com")
+        ]
+        assert all(response.status_code == 503 for response in responses)
+        assert all(
+            response.get_json()["code"] == "servicio_no_disponible" for response in responses
+        )
+        stub.assert_no_pending_responses()

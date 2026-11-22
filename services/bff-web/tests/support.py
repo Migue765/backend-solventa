@@ -214,7 +214,7 @@ class FakeIdentity:
 
     def request_password_recovery(
         self, email: str, correlation_id: str, client_address: str | None = None
-    ) -> None:
+    ) -> str:
         self._record("request_password_recovery", email, correlation_id)
         raise IdentityUnavailableError()
 
