@@ -1,6 +1,7 @@
 import hmac
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -9,15 +10,30 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import HTTPException
 
+from siniestros.api.fraude import registrar_rutas_fraude
 from siniestros.domain import ClaimInput, Config, Problem, UploadInput
+from siniestros.domain.decision import DecisionRevision, ResultadoEvaluacion
 from siniestros.domain.estado import SiniestroNoIntegro
+from siniestros.domain.evaluacion import ConjuntoReglasEvaluacion, SolicitudEvaluacion
+from siniestros.domain.fraude import ConfiguracionFraude
+from siniestros.domain.indemnizaciones import SolicitudIndemnizacion
 from siniestros.domain.parametricos import (
     ConfirmacionCaso,
     LimiteProcesamiento,
     LoteEventosParametricos,
     ReglaParametrica,
 )
+from siniestros.infrastructure.decisiones import ServicioDecisiones
+from siniestros.infrastructure.evaluacion import RepositorioEvaluaciones
+from siniestros.infrastructure.fraude import MotorFraude
+from siniestros.infrastructure.indemnizaciones import ServicioIndemnizaciones
+from siniestros.infrastructure.notificaciones import (
+    EnviadorNotificacionesHttp,
+    PublicadorNotificaciones,
+)
+from siniestros.infrastructure.pagos_parametricos import ProcesadorPagosParametricos
 from siniestros.infrastructure.parametricos import RepositorioEventosParametricos
+from siniestros.infrastructure.reportes import ConsultaReporte, RepositorioReportes
 from siniestros.infrastructure.repositorio import RepositorioSiniestros
 from siniestros.policies import policies
 from siniestros.repository import Repository
@@ -25,7 +41,7 @@ from siniestros.repository import Repository
 logger = logging.getLogger(__name__)
 
 
-def create_app(config: Config | None = None) -> Flask:
+def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None = None) -> Flask:
     config = config or Config.from_environment()
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = max(
@@ -36,7 +52,28 @@ def create_app(config: Config | None = None) -> Flask:
     app.extensions["siniestros_engine"] = repo.engine
     estados = RepositorioSiniestros(repo.sessions)
     parametricos = RepositorioEventosParametricos(repo, config)
+    pagos_parametricos = ProcesadorPagosParametricos(repo)
+    indemnizaciones = ServicioIndemnizaciones(repo)
     app.extensions["eventos_parametricos_repository"] = parametricos
+    app.extensions["pagos_parametricos_processor"] = pagos_parametricos
+    decisiones = ServicioDecisiones(repo)
+    app.extensions["decisiones_siniestro_service"] = decisiones
+    app.extensions["indemnizaciones_service"] = indemnizaciones
+    motor_fraude = MotorFraude(repo, fraude or ConfiguracionFraude.from_environment())
+    app.extensions["motor_fraude"] = motor_fraude
+    registrar_rutas_fraude(app, motor_fraude)
+    reportes = RepositorioReportes(repo.sessions)
+    notificaciones = (
+        PublicadorNotificaciones(
+            repo.sessions,
+            EnviadorNotificacionesHttp(config.notifications_url, config.internal_token),
+        )
+        if config.notifications_url
+        else None
+    )
+    app.extensions["notificaciones_publisher"] = notificaciones
+    evaluaciones = RepositorioEvaluaciones(repo)
+    app.extensions["evaluaciones_repository"] = evaluaciones
 
     @app.before_request
     def authorize() -> None:
@@ -132,6 +169,123 @@ def create_app(config: Config | None = None) -> Flask:
         entrada = ConfirmacionCaso.model_validate(body())
         return jsonify(parametricos.confirmar_caso(caso_id, entrada.entregadoEn))
 
+    @app.post("/internal/v1/pagos-parametricos/procesamiento")
+    def procesar_pagos_parametricos() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(pagos_parametricos.procesar(entrada.limite))
+
+    @app.post("/internal/v1/pagos-parametricos/conciliacion")
+    def conciliar_pagos_parametricos() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(pagos_parametricos.procesar(entrada.limite))
+
+    @app.get("/internal/v1/pagos-parametricos/casos/<uuid:caso_id>")
+    def consultar_pago_parametrico(caso_id: UUID) -> Response:
+        empty()
+        return jsonify(pagos_parametricos.detalle(caso_id))
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones/automatica")
+    def decidir_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        evaluacion = ResultadoEvaluacion.model_validate(body())
+        registro, status = decisiones.decidir_automaticamente(
+            siniestro_id, evaluacion, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones/revision")
+    def revisar_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        entrada = DecisionRevision.model_validate(body())
+        registro, status = decisiones.decidir_revision(
+            siniestro_id, operation(), entrada, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones")
+    def consultar_decisiones(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(decisiones.consultar(siniestro_id))
+
+    @app.get("/internal/v1/colas-revision/<cola>/asignaciones")
+    def asignaciones_cola(cola: str) -> Response:
+        empty()
+        return jsonify(decisiones.asignaciones("cola", cola))
+
+    @app.get("/internal/v1/peritos/<uuid:perito_id>/asignaciones")
+    def asignaciones_perito(perito_id: UUID) -> Response:
+        empty()
+        return jsonify(decisiones.asignaciones("perito", str(perito_id)))
+
+    @app.get("/internal/v1/pagos-parametricos/siniestros/<uuid:siniestro_id>")
+    def consultar_pago_parametrico_por_siniestro(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(pagos_parametricos.detalle_por_siniestro(siniestro_id))
+
+    @app.post("/internal/v1/reportes/consulta")
+    def consultar_reporte() -> Response:
+        entrada = ConsultaReporte.model_validate(body())
+        try:
+            return jsonify(reportes.consultar(entrada.corte, datetime.now(UTC)))
+        except ValueError as error:
+            raise Problem(400, "solicitud_invalida") from error
+
+    @app.post("/internal/v1/notificaciones/publicacion")
+    def publicar_notificaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        publicador = app.extensions["notificaciones_publisher"]
+        if publicador is None:
+            raise Problem(503, "notificaciones_no_configuradas")
+        return jsonify(publicador.publicar(entrada.limite))
+
+    @app.post("/internal/v1/reglas-evaluacion-siniestros")
+    def registrar_reglas_evaluacion() -> tuple[Response, int]:
+        registro, status = evaluaciones.registrar_reglas(
+            ConjuntoReglasEvaluacion.model_validate(body())
+        )
+        return jsonify(registro), status
+
+    @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/evaluacion")
+    def evaluar_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
+        solicitud = SolicitudEvaluacion.model_validate(body())
+        registro, status = evaluaciones.evaluar(
+            siniestro_id, solicitud.senalesFraude, g.correlation_id
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/evaluaciones")
+    def historial_evaluaciones(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(evaluaciones.historial(siniestro_id))
+
+    @app.post("/internal/v1/evaluaciones-siniestros/procesamiento")
+    def procesar_evaluaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(evaluaciones.procesar(entrada.limite))
+
+    @app.post("/internal/v1/siniestros/<uuid:claim_id>/indemnizacion")
+    def solicitar_indemnizacion(claim_id: UUID) -> tuple[Response, int]:
+        registro, status = indemnizaciones.solicitar(
+            claim_id,
+            operation(),
+            SolicitudIndemnizacion.model_validate(body()),
+            g.correlation_id,
+        )
+        return jsonify(registro), status
+
+    @app.get("/internal/v1/siniestros/<uuid:claim_id>/indemnizacion")
+    def consultar_indemnizacion(claim_id: UUID) -> Response:
+        empty()
+        return jsonify(indemnizaciones.detalle(claim_id))
+
+    @app.post("/internal/v1/indemnizaciones/procesamiento")
+    def procesar_indemnizaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(indemnizaciones.procesar(entrada.limite))
+
+    @app.post("/internal/v1/indemnizaciones/conciliacion")
+    def conciliar_indemnizaciones() -> Response:
+        entrada = LimiteProcesamiento.model_validate(body())
+        return jsonify(indemnizaciones.procesar(entrada.limite))
+
     @app.get("/v1/siniestros/<claim_id>/estado")
     def consultar(claim_id: str) -> Response:
         empty()
@@ -169,6 +323,8 @@ def create_app(config: Config | None = None) -> Flask:
         record, status = repo.create_claim(
             g.owner, operation(), ClaimInput.model_validate(body()), g.correlation_id
         )
+        if status == 201:
+            motor_fraude.detectar_en_flujo(UUID(record["id"]), "registro", g.correlation_id)
         return jsonify(record), status
 
     @app.get("/v1/siniestros/<uuid:claim_id>")
@@ -222,7 +378,10 @@ def create_app(config: Config | None = None) -> Flask:
     @app.post("/v1/siniestros/<uuid:claim_id>/cargas/<uuid:upload_id>/confirmacion")
     def confirm(claim_id: UUID, upload_id: UUID) -> Response:
         empty()
-        return jsonify(repo.confirm(g.owner, str(claim_id), str(upload_id), g.correlation_id))
+        record = repo.confirm(g.owner, str(claim_id), str(upload_id), g.correlation_id)
+        if record["estado"] == "confirmada":
+            motor_fraude.detectar_en_flujo(claim_id, "evidencia", g.correlation_id)
+        return jsonify(record)
 
     @app.delete("/v1/siniestros/<uuid:claim_id>/cargas/<uuid:upload_id>")
     def cancel(claim_id: UUID, upload_id: UUID) -> Response:

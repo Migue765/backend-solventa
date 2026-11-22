@@ -12,6 +12,7 @@ from cotizacion.api import (
     health,
     operaciones_hipotecarias,
     operaciones_socios,
+    reportes,
     solicitudes,
 )
 from cotizacion.application.calculadora_cotizacion import CalculadoraCotizacion
@@ -65,10 +66,11 @@ from cotizacion.infrastructure.persistence.repositorio_reglas import (
     ReglasConCache,
     RepositorioReglasSqlAlchemy,
 )
+from cotizacion.infrastructure.persistence.repositorio_reportes import RepositorioReportePrimas
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cotizacion.infrastructure.publicador_notificaciones import (
     NotificationHttpSender,
-    PaymentNotificationPublisher,
+    OutboxNotificationPublisher,
 )
 from cotizacion.infrastructure.tarificador_por_regla import TarificadorPorRegla
 
@@ -103,6 +105,7 @@ def create_app(config: Config | None = None) -> Flask:
         conciliar_emision=config.conciliacion_emision_habilitada,
     )
     app.extensions["repositorio_pagos"] = pagos
+    app.extensions["reporte_primas"] = RepositorioReportePrimas(sesiones)
     polizas_gateway = (
         PolizasHttp(config.polizas_url, config.internal_api_token) if config.polizas_url else None
     )
@@ -113,7 +116,7 @@ def create_app(config: Config | None = None) -> Flask:
         config.pago_simulado_resultado,
         conciliar_emision=config.conciliacion_emision_habilitada,
         publicador_notificaciones=(
-            PaymentNotificationPublisher(
+            OutboxNotificationPublisher(
                 sesiones,
                 NotificationHttpSender(config.notificaciones_url, config.internal_api_token),
             )
@@ -171,6 +174,7 @@ def create_app(config: Config | None = None) -> Flask:
     app.register_blueprint(solicitudes.bp)
     app.register_blueprint(operaciones_hipotecarias.bp)
     app.register_blueprint(operaciones_socios.bp)
+    app.register_blueprint(reportes.bp)
 
     @app.cli.command("configure-partner-limit")
     @click.option("--partner-id", required=True)

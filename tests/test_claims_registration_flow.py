@@ -300,6 +300,8 @@ def test_database_failure_does_not_confirm_or_return_partial_results(
 ) -> None:
     engine = runtime["app"].extensions["siniestros_engine"]
     with engine.begin() as connection:
+        connection.execute(text("DROP TABLE casos_revision_fraude"))
+        connection.execute(text("DROP TABLE evaluaciones_fraude"))
         connection.execute(text("DROP TABLE historial_estados_siniestro"))
         connection.execute(text("DROP TABLE siniestros"))
     with runtime["webApp"].test_client() as client:

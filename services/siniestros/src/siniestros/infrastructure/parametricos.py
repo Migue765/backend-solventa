@@ -76,6 +76,9 @@ class RepositorioEventosParametricos:
                 ubicacion_codigo=regla.ubicacionCodigo,
                 cliente_id=str(regla.clienteId),
                 poliza_id=str(regla.polizaId),
+                beneficiario_id=str(regla.beneficiarioId),
+                monto_indemnizacion=regla.montoIndemnizacion,
+                moneda=regla.moneda,
                 vigente_desde=regla.vigenteDesde,
                 vigente_hasta=regla.vigenteHasta,
                 creada_en=creada,
@@ -232,7 +235,10 @@ class RepositorioEventosParametricos:
         with self.repository.sessions() as session:
             casos = session.scalars(
                 select(AutomaticPaymentCase)
-                .where(AutomaticPaymentCase.estado == "pendiente")
+                .where(
+                    AutomaticPaymentCase.estado == "pendiente",
+                    AutomaticPaymentCase.rechazado_en.is_(None),
+                )
                 .order_by(AutomaticPaymentCase.creado_en, AutomaticPaymentCase.id)
                 .limit(limite)
             ).all()
@@ -243,6 +249,8 @@ class RepositorioEventosParametricos:
             caso = session.get(AutomaticPaymentCase, str(caso_id), with_for_update=True)
             if caso is None:
                 raise Problem(404, "caso_no_encontrado")
+            if caso.rechazado_en is not None:
+                raise Problem(409, "caso_no_pagable")
             instante = _utc(entregado_en)
             if caso.entregado_en is not None and _utc(caso.entregado_en) != instante:
                 raise Problem(409, "confirmacion_conflictiva")
@@ -339,6 +347,11 @@ class RepositorioEventosParametricos:
             "siniestroId": siniestro_id,
             "clienteId": regla.cliente_id,
             "polizaId": regla.poliza_id,
+            "beneficiarioId": regla.beneficiario_id,
+            "indemnizacion": {
+                "monto": str(regla.monto_indemnizacion),
+                "moneda": regla.moneda,
+            },
             "fuente": evento.fuente,
             "eventoId": evento.evento_id,
             "reglaId": regla.regla_id,

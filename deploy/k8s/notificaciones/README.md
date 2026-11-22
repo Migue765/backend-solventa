@@ -1,8 +1,12 @@
 # Despliegue de Notificaciones
 
+Para una cuenta vacia seguir primero [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+bases/Secrets nuevos, migraciones y dependencias antes del cutover.
+
 Servicio interno (`http://notificaciones.notificaciones.svc.cluster.local:8080`), sin
-ruta publica ni TargetGroupBinding. Lo llaman BFF Movil (bandeja y preferencias) y,
-si se activa, Cotizacion (pagos confirmados). `terraform/environments/prod/primary/notificaciones.tf`
+ruta publica ni TargetGroupBinding. Lo llaman BFF Movil (bandeja y preferencias),
+Siniestros (cambios de estado y pagos parametricos, por su CronJob de publicacion) y,
+si se activa, Cotizacion (pagos confirmados y polizas emitidas). `terraform/environments/prod/primary/notificaciones.tf`
 crea ECR `solventa/notificaciones` y el pipeline `solventa-prod-notificaciones` (tag
 `notificaciones-v*`). No usa rol IRSA ni volumenes: todo el estado vive en su base.
 Revisar el plan antes del apply; este documento no autoriza cambiar recursos ajenos.
@@ -20,21 +24,22 @@ como `proveedor_no_configurado` hasta que exista un adaptador.
 
 1. Aplicar Terraform desde la rama integrada (ver
    `terraform/environments/prod/primary/README.md`).
-2. Crear una base PostgreSQL propia y un usuario con permisos solo sobre ella
-   mediante el procedimiento de bases aprobado, sin imprimir credenciales ni
-   versionarlas.
+2. En la cuenta nueva usar `solventa_prod`, esquema `notificaciones`, owner
+   NOLOGIN y usuarios runtime/migrator separados; TLS `verify-full` con CA RDS
+   incluida en la imagen. No crear otra base ni imprimir/versionar credenciales.
 3. Aplicar `namespace.yaml` y sincronizar el Secret externo `notificaciones-runtime`
    con `NOTIFICACIONES_DATABASE_URL` (driver `postgresql+psycopg`) y el mismo
    `INTERNAL_API_TOKEN` de Polizas, copiado byte a byte. El pipeline no crea ni
    obtiene secretos.
 4. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
    estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
-   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   y la configuracion nueva exige aprobacion manual antes de Deploy. Aprobar solo
+   con los prerrequisitos verificados. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml`, `deployment.yaml` y el CronJob.
 
 ```bash
 aws codepipeline start-pipeline-execution \
-  --name solventa-prod-notificaciones --region us-east-2 \
+  --name solventa-prod-notificaciones --profile "$AWS_PROFILE" --region us-east-2 \
   --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
 ```
 
@@ -53,6 +58,12 @@ BFF Movil se activa junto con Siniestros y Asistencias, segun su
 La publicacion desde Cotizacion es opcional. Al activarla, el conciliador tambien
 publica, uno por ciclo, los pagos confirmados anteriores que nunca se publicaron:
 los clientes recibiran avisos de pagos historicos. Decidirlo antes de activar:
+
+En la cuenta nueva no se restauraron datos: solo existen los eventos sinteticos
+del recorrido autorizado. La primera publicacion usa esos eventos persistidos,
+no genera nuevos pagos ni polizas. Esta conexion no cambia el dashboard Web:
+`notificaciones` conserva `{disponibilidad:"no_implementado"}` hasta acordar
+otro contrato. No habilita proveedores email/push.
 
 ```bash
 kubectl -n cotizacion set env deployment/cotizacion NOTIFICACIONES_SERVICE_URL=http://notificaciones.notificaciones.svc.cluster.local:8080
@@ -74,7 +85,8 @@ Conservar la base. Desactivar primero los productores y consumidores:
 ```bash
 kubectl -n cotizacion set env deployment/cotizacion NOTIFICACIONES_SERVICE_URL-
 kubectl -n bff-movil set env deployment/bff-movil NOTIFICACIONES_SERVICE_URL-
+kubectl -n siniestros patch cronjob siniestros-notificaciones -p '{"spec":{"suspend":true}}'
 kubectl -n notificaciones patch cronjob notificaciones-despachos -p '{"spec":{"suspend":true}}'
 ```
 
-Cotizacion conserva los eventos no publicados y los reintenta al reactivar la URL.
+Cotizacion y Siniestros conservan los eventos no publicados y los reintentan al reactivar.

@@ -2,17 +2,19 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  account_id   = data.aws_caller_identity.current.account_id
-  region       = data.aws_region.current.name
-  pipeline     = "${var.name}-${var.service_name}"
-  prefix       = coalesce(var.resource_prefix, var.name)
-  service_dir  = coalesce(var.service_dir, "services/${var.service_name}")
-  cluster_arn  = "arn:aws:eks:${local.region}:${local.account_id}:cluster/${var.cluster_name}"
-  buildspec    = "deploy/codebuild"
-  logs_prefix  = "logs"
-  source_vars  = "SourceVariables"
-  build_vars   = "BuildVariables"
-  build_action = "Build"
+  account_id                = data.aws_caller_identity.current.account_id
+  region                    = data.aws_region.current.name
+  pipeline                  = "${var.name}-${var.service_name}"
+  prefix                    = coalesce(var.resource_prefix, var.name)
+  service_dir               = coalesce(var.service_dir, "services/${var.service_name}")
+  cluster_arn               = "arn:aws:eks:${local.region}:${local.account_id}:cluster/${var.cluster_name}"
+  buildspec                 = "deploy/codebuild"
+  logs_prefix               = "logs"
+  source_vars               = "SourceVariables"
+  build_vars                = "BuildVariables"
+  build_action              = "Build"
+  deploy_security_group_id  = var.existing_security_group_id != null ? var.existing_security_group_id : one(aws_security_group.deploy[*].id)
+  deploy_security_group_arn = "arn:aws:ec2:${local.region}:${local.account_id}:security-group/${local.deploy_security_group_id}"
 
   connection_arn     = coalesce(var.github_connection_arn, one(aws_codestarconnections_connection.github[*].arn))
   connection_service = split(":", local.connection_arn)[2]
@@ -70,7 +72,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 # ---------------------------------------------------------------------------
 # Con github_connection_arn se reutiliza una conexion ya autorizada (otro servicio) y no se crea otra.
 resource "aws_codestarconnections_connection" "github" {
-  count = var.github_connection_arn == null ? 1 : 0
+  count = var.create_github_connection == null ? (var.github_connection_arn == null ? 1 : 0) : (var.create_github_connection ? 1 : 0)
 
   name          = "${local.prefix}-github"
   provider_type = "GitHub"
@@ -87,6 +89,8 @@ moved {
 # Red del CodeBuild de despliegue
 # ---------------------------------------------------------------------------
 resource "aws_security_group" "deploy" {
+  count = var.existing_security_group_id == null ? 1 : 0
+
   name        = "${local.prefix}-codebuild-deploy"
   description = var.restrict_service_access ? "CodeBuild de despliegue: HTTPS y paquetes HTTP, sin entrada" : "CodeBuild de despliegue: salida libre, sin entrada"
   vpc_id      = var.vpc_id
@@ -94,8 +98,13 @@ resource "aws_security_group" "deploy" {
   tags = merge(var.tags, { Name = "${local.prefix}-codebuild-deploy" })
 }
 
+moved {
+  from = aws_security_group.deploy
+  to   = aws_security_group.deploy[0]
+}
+
 resource "aws_vpc_security_group_egress_rule" "deploy_all" {
-  security_group_id = aws_security_group.deploy.id
+  security_group_id = local.deploy_security_group_id
   ip_protocol       = var.restrict_service_access ? "tcp" : "-1"
   from_port         = var.restrict_service_access ? 443 : null
   to_port           = var.restrict_service_access ? 443 : null
@@ -106,7 +115,7 @@ resource "aws_vpc_security_group_egress_rule" "deploy_all" {
 resource "aws_vpc_security_group_egress_rule" "deploy_http" {
   count = var.restrict_service_access ? 1 : 0
 
-  security_group_id = aws_security_group.deploy.id
+  security_group_id = local.deploy_security_group_id
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
@@ -116,7 +125,7 @@ resource "aws_vpc_security_group_egress_rule" "deploy_http" {
 
 resource "aws_vpc_security_group_ingress_rule" "cluster_from_deploy" {
   security_group_id            = var.cluster_security_group_id
-  referenced_security_group_id = aws_security_group.deploy.id
+  referenced_security_group_id = local.deploy_security_group_id
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
@@ -163,8 +172,9 @@ data "aws_iam_policy_document" "codebuild_restricted_assume" {
 }
 
 resource "aws_iam_role" "build" {
-  name               = "${local.prefix}-codebuild-build"
-  assume_role_policy = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["build"].json : data.aws_iam_policy_document.codebuild_assume.json
+  permissions_boundary = var.permissions_boundary_arn
+  name                 = "${local.prefix}-codebuild-build"
+  assume_role_policy   = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["build"].json : data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
 }
@@ -208,8 +218,9 @@ resource "aws_iam_role_policy" "build" {
 # IAM: CodeBuild (despliegue)
 # ---------------------------------------------------------------------------
 resource "aws_iam_role" "deploy" {
-  name               = "${local.prefix}-codebuild-deploy"
-  assume_role_policy = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["deploy"].json : data.aws_iam_policy_document.codebuild_assume.json
+  permissions_boundary = var.permissions_boundary_arn
+  name                 = "${local.prefix}-codebuild-deploy"
+  assume_role_policy   = var.restrict_service_access ? data.aws_iam_policy_document.codebuild_restricted_assume["deploy"].json : data.aws_iam_policy_document.codebuild_assume.json
 
   tags = var.tags
 }
@@ -269,7 +280,7 @@ data "aws_iam_policy_document" "deploy" {
       actions = ["ec2:CreateNetworkInterface"]
       # EC2 autoriza por separado la nueva ENI, cada SG y la subnet.
       resources = concat(
-        ["arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*", aws_security_group.deploy.arn],
+        ["arn:aws:ec2:${local.region}:${local.account_id}:network-interface/*", local.deploy_security_group_arn],
         local.subnet_arns,
       )
     }
@@ -438,7 +449,15 @@ resource "aws_codebuild_project" "deploy" {
       value = var.service_name
     }
 
-    # Solo se define cuando el servicio no migra (los demas proyectos quedan sin cambios).
+    dynamic "environment_variable" {
+      for_each = var.siniestros_evidence_bucket == null ? [] : [var.siniestros_evidence_bucket]
+      content {
+        name  = "SINIESTROS_EVIDENCIAS_BUCKET"
+        value = environment_variable.value
+      }
+    }
+
+    # Los BFF no tienen base propia.
     dynamic "environment_variable" {
       for_each = var.run_migrations ? [] : [1]
 
@@ -457,7 +476,7 @@ resource "aws_codebuild_project" "deploy" {
   vpc_config {
     vpc_id             = var.vpc_id
     subnets            = var.private_subnet_ids
-    security_group_ids = [aws_security_group.deploy.id]
+    security_group_ids = [local.deploy_security_group_id]
   }
 
   logs_config {
@@ -491,8 +510,9 @@ data "aws_iam_policy_document" "pipeline_assume" {
 }
 
 resource "aws_iam_role" "pipeline" {
-  name               = "${local.prefix}-codepipeline"
-  assume_role_policy = data.aws_iam_policy_document.pipeline_assume.json
+  permissions_boundary = var.permissions_boundary_arn
+  name                 = "${local.prefix}-codepipeline"
+  assume_role_policy   = data.aws_iam_policy_document.pipeline_assume.json
 
   tags = var.tags
 }

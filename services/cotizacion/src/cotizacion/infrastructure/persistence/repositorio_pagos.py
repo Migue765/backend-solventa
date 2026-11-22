@@ -1,12 +1,14 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from cotizacion.application.ports import ReservaEmision, ReservaPagoSimulado
+from cotizacion.application.ofertas import identificador_oferta
+from cotizacion.application.ports import PolizaEmitida, ReservaEmision, ReservaPagoSimulado
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.errors import (
     ConflictoIdempotenciaError,
@@ -17,6 +19,7 @@ from cotizacion.domain.errors import (
     SolicitudNoEncontradaError,
     SuscripcionNoEncontradaError,
 )
+from cotizacion.domain.modelo_academico import VERSION_ACADEMICA
 from cotizacion.domain.pago import (
     PagoSimulado,
     PagoSimuladoPendiente,
@@ -76,6 +79,45 @@ class RepositorioPagosSqlAlchemy:
                 fechas = {"inicio": datos["flightDate"], "fin": datos["flightDate"]}
             elif tipo == "parametric-weather":
                 fechas = {"inicio": datos["startDate"], "fin": datos["endDate"]}
+            condiciones = None
+            detalle = (
+                solicitud.instantanea.contenido.get("tarificacion")
+                if solicitud.instantanea is not None
+                else None
+            )
+            if modelo.periodicidad == "mensual" and detalle is not None:
+                plan = next(
+                    (
+                        p
+                        for p in detalle["planes"]
+                        if identificador_oferta(
+                            modelo.solicitud_id, f"{VERSION_ACADEMICA}:{p['codigo']}"
+                        )
+                        == modelo.oferta_id
+                    ),
+                    None,
+                )
+                if (
+                    plan is None
+                    or modelo.oferta_version != 1
+                    or Decimal(plan["prima"]) != modelo.monto
+                    or modelo.moneda != "COP"
+                    or detalle["periodicidad"] != modelo.periodicidad
+                ):
+                    raise ServicioPolizasNoDisponibleError()
+                condiciones = {
+                    "plan": plan["codigo"],
+                    "prima": str(modelo.monto),
+                    "coberturas": [
+                        cobertura.split(":", 1)[0]
+                        for cobertura in plan["presentacion"]["coberturas"]
+                    ],
+                }
+            elif modelo.periodicidad == "mensual":
+                logger.warning(
+                    "Emision anterior sin condiciones de oferta persistidas: pago=%s",
+                    modelo.pago_id,
+                )
             return {
                 "clienteId": str(modelo.cliente_id),
                 "suscripcionId": str(modelo.suscripcion_id),
@@ -84,9 +126,10 @@ class RepositorioPagosSqlAlchemy:
                 "confirmadaEn": _utc(modelo.confirmada_en).isoformat(),
                 "simulada": True,
                 "fechasContratadas": fechas,
+                **({"condicionesEmision": condiciones} if condiciones is not None else {}),
             }
 
-    def marcar_emitida(self, pago: PagoSimulado, poliza_id: UUID) -> None:
+    def marcar_emitida(self, pago: PagoSimulado, poliza: PolizaEmitida) -> None:
         with self._sesiones.begin() as sesion:
             ahora = datetime.now(UTC)
             actualizada = sesion.scalar(
@@ -113,7 +156,11 @@ class RepositorioPagosSqlAlchemy:
                         evento_id=uuid4(),
                         tipo="PolizaAcademicaEmitida",
                         agregado_id=pago.suscripcion_id,
-                        payload={"polizaId": str(poliza_id), "simulada": True},
+                        payload={
+                            "polizaId": str(poliza.poliza_id),
+                            "fechaFin": poliza.fecha_fin.isoformat(),
+                            "simulada": True,
+                        },
                         creado_en=ahora,
                         intentos=0,
                     )

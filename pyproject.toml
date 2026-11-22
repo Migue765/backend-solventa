@@ -22,6 +22,7 @@ exclude = ["services/.*/migrations/"]
 
 [[tool.mypy.overrides]]
 module = [
+    "tests.test_policy_document_flow",
     "test_profiling_flow", "test_dashboard_flow", "test_policies_flow",
     "tests.test_dashboard_flow", "tests.test_policies_flow", "tests.test_claims_flow",
     "tests.test_profiling_flow",
@@ -29,11 +30,22 @@ module = [
     "test_biometric_flow", "tests.test_biometric_flow",
     "tests.test_encrypted_local_stack",
     "test_claims_flow", "tests.test_claims_registration_flow",
+    "test_claims_mobile_status_flow", "tests.test_claims_mobile_status_flow",
     "tests.test_hu44_exception_process_http",
     "tests.jmeter.local_stack", "tests.jmeter.run",
+    "scripts.local_database",
     "tests.claims_local_stack",
+    "tests.test_mobile_policy_modification_flow",
     "tests.test_claims_evidence_flow",
     "tests.test_claims_sync_results",
+    "tests.test_policy_renewal_flow",
+    "tests.test_mobile_policy_renewal_flow",
+    "tests.test_policy_modification_flow",
+    "tests.test_policy_cancellation_flow",
+    "tests.test_claims_notifications_flow",
+    "tests.test_parametric_acceptance_flow",
+    "tests.test_simulated_identity_flow", "test_simulated_identity_flow",
+    "tests.test_backend_compliance_flow", "test_backend_compliance_flow",
 ]
 disable_error_code = ["import-untyped"]
 

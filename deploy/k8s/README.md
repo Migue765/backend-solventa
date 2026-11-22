@@ -1,5 +1,8 @@
 # Manifiestos Kubernetes - cotizacion
 
+Para reconstruir una cuenta vacia seguir [ARRANQUE-VACIO.md](ARRANQUE-VACIO.md).
+Los procedimientos historicos de retirada mas abajo no aplican a ese arranque.
+
 ## Perfil academico de bajo consumo
 
 Las nueve APIs (`bff-movil`, `bff-web`, `cotizacion`, `identidad`, `perfilamiento`,
@@ -74,10 +77,78 @@ Los manifiestos `serviceaccount`, `deployment` y `targetgroupbinding` usan varia
 | `IMAGE` | `$(terraform output -raw ecr_repository_url):<tag>` |
 | `AWS_REGION` | `us-east-2` |
 
+## Migraciones en una base logica
+
+Contrato pendiente de aprovisionamiento autorizado: una base `solventa_prod`,
+siete esquemas con propietarios `<dominio>_owner` **NOLOGIN**, roles runtime sin
+DDL ni pertenencia al owner, y logins `<dominio>_migrator` separados. Cada DSN
+migrador conserva `options=-crole=<dominio>_owner` y su `search_path` exclusivo.
+La sesion debe mostrar `session_user=<dominio>_migrator`,
+`current_user=<dominio>_owner` y `current_schema()=<dominio>`.
+No basta con que los DSN apunten a una sola instancia RDS.
+
+Antes de ejecutar Jobs, entregar privadamente los siguientes Secrets en el
+namespace de su dominio. Cada uno contiene **solo** la clave indicada; no
+versionar ni imprimir el DSN, YAML renderizado o passwords.
+
+| Secret | Clave DSN |
+|---|---|
+| `cotizacion-migrator` | `DATABASE_URL` |
+| `identidad-migrator` | `DATABASE_URL` |
+| `perfilamiento-migrator` | `PERFILAMIENTO_DATABASE_URL` |
+| `polizas-migrator` | `POLIZAS_DATABASE_URL` |
+| `siniestros-migrator` | `SINIESTROS_DATABASE_URL` |
+| `notificaciones-migrator` | `NOTIFICACIONES_DATABASE_URL` |
+| `asistencias-migrator` | `ASISTENCIAS_DATABASE_URL` |
+
+Los Deployments y sus Secrets runtime no cambian. Perfilamiento conserva su
+`INTERNAL_API_TOKEN` en `perfilamiento-runtime` e inicializa tablas nuevas mediante
+`flask --app perfilamiento.app init-db`; no tiene historial Alembic.
+Los seis Jobs Alembic declaran `DB_RUNTIME_ROLE=<dominio>_runtime`. Sus `env.py`
+revocan al rol runtime todos los permisos sobre su propia tabla de version,
+dentro de la transaccion online, tambien cuando `upgrade head` no tiene cambios.
+Los errores abortan el Job; con esa variable no se admite SQLite.
+Los nombres/historiales existentes no se fusionan ni reinician.
+Las ejecuciones ad hoc deben declarar tambien `DB_RUNTIME_ROLE`; omitirlo
+conserva el comportamiento legado, no acredita esta restriccion.
+
+Identidad mantiene las opciones libpq del DSN y configura el `search_path` en
+la conexion. Si el esquema ya existe, no intenta crearlo de nuevo con un rol
+sin `CREATE` sobre la base. No se conceden permisos elevados para eludir errores.
+No se cambian los contextos Docker: el postpaso se empaqueta con cada `env.py`.
+
+Estos manifiestos no crean Secrets, roles, esquemas ni bases, ni instalan
+External Secrets/CSI. Entrega, rotacion, aislamiento y estado previo de datos
+siguen siendo gates de despliegue. No ejecutar el helper local contra RDS:
+sus operaciones de cluster nuevo/`CREATE DATABASE` no son un procedimiento de
+migracion de una base administrada existente.
+
+Comprobacion sintetica local, una vez disponible el bootstrap PostgreSQL de PR129:
+
+```powershell
+$env:SOLVENTA_TEST_POSTGRES_BIN = $pgBin
+.\.venv\Scripts\python.exe -m pytest tests\test_postgres_migration_jobs.py -q
+```
+
+Requiere los paquetes del bootstrap documentado en el README raiz y las
+dependencias de desarrollo existentes (`requirements-dev.txt`); `$pgBin` apunta a
+la distribucion PostgreSQL 17 verificada, no a una instalacion descargada por el
+test. Ejecuta los comandos de los siete Jobs en procesos locales sobre dos
+clusters sinteticos nuevos (Identidad con/sin `DB_SCHEMA`), repite migraciones
+sin cambios y comprueba que reparan permisos del historial concedidos de nuevo
+solo por el test. Valida 73 tablas de dominio (70 de los seis dominios web mas
+3 de Asistencias), seis historiales, propietarios,
+roles, CRUD y denegaciones cruzadas. No ejecuta Kubernetes ni servicios AWS;
+sin binarios explicitos omite los casos PostgreSQL, sin sustituirlos por SQLite.
+
 ## Orden de aplicacion
 
-Prerrequisito: `terraform apply` de `terraform/environments/prod/primary` (instala AWS Load Balancer Controller y metrics-server)
-y `kubectl` apuntando al cluster (`terraform output kubeconfig_command`).
+Prerrequisito: infraestructura `terraform/environments/prod/primary` y despues
+`terraform/environments/prod/addons` (AWS Load Balancer Controller y metrics-server),
+con planes y ejecucion autorizados. Para una cuenta nueva seguir primero el
+[procedimiento de reconstruccion](../../terraform/environments/prod/primary/README.md#preparacion-y-primer-despliegue):
+state nuevo, bases/Secrets y Deployment semilla sin pods antes de migrar.
+Apuntar `kubectl` al cluster aprobado (`terraform output kubeconfig_command`).
 
 ```bash
 cd terraform/environments/prod/primary
@@ -90,7 +161,7 @@ cd ../../../../deploy/k8s
 # 1. Namespace
 kubectl apply -f namespace.yaml
 
-# 2. Secreto DATABASE_URL (externo: no se versiona). Ver nota abajo.
+# 2. Secrets runtime cotizacion-db y cotizacion-migrator (externos). Ver contrato anterior.
 
 # 3. ServiceAccount (anotacion IRSA)
 envsubst < serviceaccount.yaml | kubectl apply -f -
@@ -115,23 +186,23 @@ Verificacion: `kubectl -n cotizacion get pods,hpa,targetgroupbinding` y `curl "$
 
 ## Secreto `cotizacion-db` (DATABASE_URL)
 
-El deployment lee `DATABASE_URL` del Secret `cotizacion-db`. Las credenciales viven en Secrets Manager
-(`terraform output db_secret_arn`, generado por RDS). Opciones:
-
-- Recomendada: External Secrets Operator o Secrets Store CSI Driver sincronizando el secreto de Secrets Manager
-  (el rol IRSA del servicio ya puede leerlo). No se instala por Terraform en dev.
-- Manual (dev), con una identidad que tenga acceso al secreto:
+El Deployment lee `DATABASE_URL` del Secret `cotizacion-db`. Para el destino nuevo,
+preparar un usuario de aplicacion aislado, no copiar las credenciales master
+generadas por RDS. Las imagenes usan psycopg3: DSN `postgresql+psycopg://`,
+con TLS/CA y caracteres de password codificados para URL.
+Un operador autorizado entrega el DSN por un archivo privado nuevo, fuera de Git:
 
 ```bash
-SECRET=$(aws secretsmanager get-secret-value --secret-id "$(terraform output -raw db_secret_arn)" \
-  --query SecretString --output text --profile tesis --region us-east-2)
-DB_USER=$(echo "$SECRET" | jq -r .username)
-DB_PASS=$(echo "$SECRET" | jq -r .password | jq -sRr @uri)
-kubectl -n cotizacion create secret generic cotizacion-db \
-  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/solventa_prod"
+set -euo pipefail
+: "${CONTEXT:?}" "${DATABASE_URL_FILE:?}"
+kubectl --context "$CONTEXT" -n cotizacion create secret generic cotizacion-db \
+  --from-file=DATABASE_URL="$DATABASE_URL_FILE" --dry-run=client -o yaml |
+  kubectl --context "$CONTEXT" -n cotizacion apply -f -
 ```
 
-Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.
+No imprimir el archivo/YAML ni usar `set -x`. Si rota la contrasena hay que
+sincronizar el Secret. External Secrets/CSI no estan instalados por este cambio;
+su instalacion no es un prerrequisito implicitamente autorizado.
 
 ## Notas de operacion
 
@@ -141,8 +212,9 @@ Si la contrasena cambia (rotacion), hay que volver a sincronizar el Secret.
 - `GET /ping` a traves de API Gateway lo responde el propio gateway (`Healthy Connection`) y no llega a
   los pods; probar con un endpoint real (`POST /v1/cotizaciones`). El health check del ALB si usa `/ping`
   del pod.
-- Las credenciales de la base se copiaron al Secret `cotizacion-db`. RDS rota el secreto gestionado, asi
-  que ese Secret quedara desactualizado: pendiente leerlo en runtime con el rol IRSA o usar External Secrets.
+- Rotar coordinadamente los DSN de aplicacion/migracion y sus Secrets Kubernetes.
+  La rotacion del master RDS no actualiza esos usuarios ni sus Secrets.
+  IRSA por si solo no entrega variables de entorno ni instala External Secrets.
 
 ## Consolidacion y retirada acotada de duplicados
 

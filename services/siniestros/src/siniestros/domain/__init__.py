@@ -88,6 +88,7 @@ class Config:
     parametric_batch_size: int = 5_000
     parametric_max_body_bytes: int = 16 * 1024 * 1024
     evidence_bucket: str | None = None
+    notifications_url: str | None = None
 
     def __post_init__(self) -> None:
         if not self.internal_token.strip() or not self.database_url.strip():
@@ -108,6 +109,10 @@ class Config:
             raise ValueError("SINIESTROS_EVIDENCIAS_BUCKET must be a valid S3 bucket name.")
         if not self.policies_url.startswith(("http://", "https://")):
             raise ValueError("POLIZAS_SERVICE_URL must be an HTTP service URL.")
+        if self.notifications_url is not None and not self.notifications_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("NOTIFICACIONES_SERVICE_URL must be an HTTP service URL.")
         if any(
             value <= 0
             for value in (
@@ -171,6 +176,8 @@ class Config:
                 os.getenv("EVENTOS_PARAMETRICOS_MAX_BODY_BYTES", str(16 * 1024 * 1024))
             ),
             evidence_bucket=os.getenv("SINIESTROS_EVIDENCIAS_BUCKET", "").strip() or None,
+            notifications_url=os.getenv("NOTIFICACIONES_SERVICE_URL", "").strip().rstrip("/")
+            or None,
         )
 
     @property

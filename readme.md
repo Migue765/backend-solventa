@@ -135,7 +135,122 @@ Activación en Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
 ```
 
-No se incluye un comando universal para iniciar todos los servicios porque el punto de entrada y el gestor de dependencias deben verificarse por servicio. Cada microservicio debe documentar sus propios comandos una vez implementado.
+### Web local: una base PostgreSQL, datos exclusivamente sinteticos
+
+El recorrido local para comprobar **una BD logica** usa PostgreSQL 17 nativo
+en Windows: no necesita virtualizacion ni Docker. Conserva `solventa_prod` como
+nombre de BD de aplicacion. Cada dominio posee su esquema, un rol propietario
+NOLOGIN, un migrador propio y un runtime separado sin DDL ni acceso a los otros
+esquemas. No se conectan bases preexistentes: cada arranque inicializa un cluster
+dedicado nuevo con autenticacion SCRAM en `127.0.0.1`, sin servicio de Windows,
+autostart, cambios de PATH global ni reglas de firewall.
+
+Prepara Python 3.12 y PostgreSQL 17 para tu equipo. Para Windows, parte de
+[postgresql.org](https://www.postgresql.org/download/windows/), que enlaza los
+[binarios ZIP de EDB](https://www.enterprisedb.com/download-postgresql-binaries).
+Descarga la version 17 x64 y su archivo `.zip.sha256` del mismo proveedor,
+compara `Get-FileHash -Algorithm SHA256` con el checksum publicado **antes**
+de ejecutar y extrae el ZIP en una carpeta local. No uses binarios de terceros
+ni el instalador como administrador. La preparacion comprobada usa 17.12-1:
+`postgresql-17.12-1-windows-x64-binaries.zip`, SHA256
+`a2cd8a774389347b70be7748ac4a37ef43cb6ee539c5fc3e85ae264b15e4a04c`.
+
+Desde la raiz del checkout (PowerShell):
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\services\identidad[dev,postgres]" -e ".\services\bff-web" -e ".\services\bff-movil" -e ".\services\cotizacion" -e ".\services\perfilamiento" -e ".\services\polizas" -e ".\services\siniestros" -e ".\services\notificaciones" -e ".\services\asistencias"
+$pgBin = (Resolve-Path "$env:LOCALAPPDATA\PostgreSQL17\pgsql\bin").Path # ZIP verificado extraido aqui.
+.\.venv\Scripts\python.exe -m scripts.local_web --postgres --postgres-bin $pgBin --postgres-port 55417 --web-port 5001
+```
+
+La carpeta de PostgreSQL es una ubicacion local elegida por quien prepara el
+equipo, fuera del repositorio; los binarios y los datos no se agregan a Git. El script no
+descarga ni instala PostgreSQL. Rechaza falta de binarios, puerto ocupado y errores
+de migracion; **nunca pasa de PostgreSQL a SQLite por un error**.
+
+En cada arranque se migran Identidad, Cotizacion, Polizas, Siniestros,
+Notificaciones y Asistencias con sus historiales Alembic existentes en esquemas
+distintos. Perfilamiento reutiliza su inicializacion existente, solo sobre
+esquema nuevo; `create_all` no es una migracion de datos existentes. Se repite
+la inicializacion para comprobar que no colisionan los historiales. Son 75 tablas
+de los seis dominios web mas 3 de Asistencias (78 en total), sin contar las tablas
+Alembic. Polizas incluye 7 tablas tras `polizas_0004` y Siniestros 23 tras
+`0010_evaluacion_indemnizaciones`, que une evaluacion automatica e indemnizaciones.
+Notificaciones y Asistencias quedan preparadas en SQL sin arrancar sus APIs
+porque no las necesita este recorrido web.
+
+Antes de `ready:true`, ademas del recorrido JWE descrito abajo, se comprueban
+`current_database`, `current_schema`, usuario efectivo/runtime/migrador, CRUD
+propio, rechazo de DDL runtime, acceso runtime denegado al historial Alembic y
+denegacion de lectura/escritura entre dominios.
+`databaseEvidence` muestra solo estos resultados, nunca DSN ni contrasenas.
+Las conexiones generadas quedan en `postgres\connections.json` dentro del
+directorio privado nuevo de esa ejecucion. No uses esas credenciales fuera de
+la instancia sintetica. Ctrl+C detiene los servicios HTTP propios y ese cluster;
+conserva los datos para inspeccion. `--check --web-port 0` comprueba y cierra todo.
+
+Este modo acredita el aislamiento local de BD, **no** API Gateway administrado,
+TLS, WAF, Multi-AZ ni recuperacion de desastres. El BFF local sigue siendo HTTP
+directo en loopback: no presentar esa URL como cumplimiento de la entrada
+web/app por API Gateway del despliegue. La comunicacion interna permanece privada.
+Redis simulado, fuentes sinteticas y archivos locales se explican abajo; no
+sustituyen Redis/S3 reales ni autorizan despliegue, corte o movimiento de datos.
+
+Para ejecutar la comprobacion focal contra PostgreSQL real:
+
+```powershell
+$env:SOLVENTA_TEST_POSTGRES_BIN = $pgBin
+.\.venv\Scripts\python.exe -m pytest tests\test_local_web.py -q
+```
+
+Sin esa variable, la prueba PostgreSQL se informa omitida, no acreditada por
+SQLite. Cada ejecucion requiere un directorio nuevo; no hay reanudacion ni
+migracion de una BD con datos reales.
+
+### Web local anterior: SQLite sintetico, no arquitectura de BD unica
+
+Desde la raiz del checkout, con Python 3.12, prepara una vez estas dependencias
+versionadas (PowerShell; no necesita Docker, AWS, PostgreSQL ni Redis externos):
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\services\identidad[dev]" -e ".\services\bff-web" -e ".\services\bff-movil" -e ".\services\cotizacion" -e ".\services\perfilamiento" -e ".\services\polizas" -e ".\services\siniestros"
+.\.venv\Scripts\python.exe -m scripts.local_web --web-port 5001
+```
+
+El ultimo comando inicia BFF web, Identidad, Cotizacion, Perfilamiento, Polizas y
+Siniestros con HTTP real en loopback. El BFF queda en `http://127.0.0.1:5001/v1`;
+los servicios internos usan puertos libres. No inicia BFF movil, Asistencias ni
+Notificaciones; bff-movil se instala solo porque el harness compartido lo importa.
+El proxy web debe reenviar `/v1` sin quitarlo; la configuracion y compilacion del
+frontend corresponden a su repositorio. No expone CORS ni escucha en la red:
+otro PC debe arrancar su propio checkout, no conectar a este proceso.
+
+Antes de imprimir `ready:true`, el bootstrap crea cliente/socio sinteticos,
+consentimiento de prueba y una poliza academica; verifica login JWE, replay,
+rechazo de plaintext, portal socio, denegacion cliente, consulta por documento y
+cotizacion. Las contrasenas nuevas solo quedan en el `accountsFile` indicado;
+no se imprimen tokens ni contrasenas. El directorio tiene ACL del usuario actual
+en Windows (whoami/icacls incluidos en el sistema) o modo0700 en POSIX.
+Cada arranque usa un directorio nuevo bajo `reports/`, ignorado por Git;
+`--data-dir` permite elegir otro NUEVO y rechaza reutilizar datos existentes.
+SQLite/uploads permanecen alli para inspeccion: no se copian datos de origen.
+RSA/JWT/JWE y token interno se generan en memoria; no hay secretos preexistentes.
+
+Ambos recorridos son modos sinteticos explicitos: fakeredis para desafios, FuenteMock para
+OpenFinance/OpenData y pago/poliza academicos. Un error API aborta el arranque;
+no se sustituye por un resultado mock. No prueba proveedores ni almacenamiento
+productivos. El alta del fixture usa el contrato directo existente de Identidad;
+no ejercita ni acredita el registro JWE publico del BFF.
+No ejecuta Terraform ni modifica servidores, demos o instalaciones Android.
+
+Para comprobar arranque y cierre sin dejar servicios, usa
+`python -m scripts.local_web --check --web-port 0`. Para el proceso interactivo,
+Ctrl+C cierra solo sus servicios. Si `DATABASE_URL`, `DB_SCHEMA` o
+`POLIZAS_DATABASE_URL` estan definidas, el bootstrap falla: eliminalas del proceso
+de prueba, no de configuraciones compartidas. Un puerto ocupado tambien falla;
+elige otro con `--web-port` y actualiza el proxy del frontend.
 
 ## Comandos de calidad
 
@@ -165,6 +280,10 @@ Ejecuta el comando de tipos por servicio solo si existe su `mypy.ini`; el flujo 
 
 El repositorio contempla módulos para red, EKS, API Gateway, WAF, RDS/Aurora, Redis, S3, KMS, Secrets Manager, mensajería, ECR, IAM y observabilidad.
 
+El [productivo de la cuenta nueva](terraform/environments/nueva-cuenta/README.md)
+usa nueve ECR privados, uno por API, sin reutilizar el estado anterior.
+Identidad, BFF Web, Perfilamiento, Cotización y Pólizas ya funcionan sobre EKS y una sola
+base relacional; el runbook distingue lo verificado de las APIs aún pendientes.
 
 ## Pruebas y verificación
 

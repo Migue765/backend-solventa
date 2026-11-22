@@ -4,12 +4,19 @@ from typing import Protocol
 from uuid import UUID
 
 from identidad.domain.auth import NewRefreshToken, RotationResult, StoredCredential, User
+from identidad.domain.consent import Consent
 
 Clock = Callable[[], datetime]
 
 
 class UserRepository(Protocol):
-    def add(self, user: User, password_hash: str) -> None: ...
+    def add(
+        self,
+        user: User,
+        password_hash: str,
+        consent: Consent | None = None,
+        correlation_id: str = "",
+    ) -> None: ...
 
     def find_credential(self, email: str) -> StoredCredential | None: ...
 
@@ -32,10 +39,17 @@ class RefreshTokenRepository(Protocol):
 
     def revoke_family(self, token_hash: str, now: datetime) -> None: ...
 
+    def is_session_active(self, family_id: UUID, now: datetime) -> bool: ...
+
 
 class AccessTokenIssuer(Protocol):
     def issue(
-        self, user: User, client_id: str, issued_at: datetime, expires_at: datetime
+        self,
+        user: User,
+        client_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+        session_id: UUID | None = None,
     ) -> str: ...
 
 
@@ -45,3 +59,17 @@ class LoginAttemptLimiter(Protocol):
     def register_failure(self, key: str, now: datetime) -> None: ...
 
     def reset(self, key: str) -> None: ...
+
+
+class RecoveryMailSender(Protocol):
+    def ensure_available(self) -> None: ...
+
+    def send(self, email: str, token: str) -> None: ...
+
+
+class PasswordRecoveryRepository(Protocol):
+    def add(self, token_hash: str, user_id: UUID, now: datetime, expires_at: datetime) -> None: ...
+
+    def discard(self, token_hash: str, now: datetime) -> None: ...
+
+    def consume(self, token_hash: str, password_hash: str, now: datetime) -> bool: ...

@@ -38,8 +38,9 @@ variable "service_account_name" {
 }
 
 variable "db_secret_arn" {
-  description = "ARN del secreto de la base de datos."
+  description = "Lectura opcional de un secreto DB para consumidores existentes; null no concede acceso."
   type        = string
+  default     = null
 }
 
 variable "evidence_bucket_arn" {
@@ -55,6 +56,18 @@ variable "sns_topic_arn" {
 variable "kms_key_arn" {
   description = "ARN de la CMK que protege secreto, bucket y topic."
   type        = string
+}
+
+variable "permissions_boundary_arn" {
+  description = "Boundary externa del servicio Cotizacion; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
+variable "alb_permissions_boundary_arn" {
+  description = "Boundary externa del controlador ALB, separada de aplicaciones; null conserva consumidores anteriores."
+  type        = string
+  default     = null
 }
 
 variable "tags" {

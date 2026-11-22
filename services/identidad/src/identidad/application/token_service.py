@@ -68,17 +68,18 @@ class TokenService:
         now = self._clock()
         refresh_token = _new_refresh_token()
         ttl = self._refresh_ttl(client_id)
+        family_id = self._id_factory()
         return (
             NewRefreshToken(
                 token_hash=_hash(refresh_token),
                 user_id=user.user_id,
-                family_id=self._id_factory(),
+                family_id=family_id,
                 client_id=client_id,
                 created_at=now,
                 expires_at=now + ttl,
                 biometric_credential_id=biometric_credential_id,
             ),
-            self._issued(user, client_id, refresh_token, ttl),
+            self._issued(user, client_id, refresh_token, ttl, family_id),
         )
 
     def refresh_grant(self, refresh_token: str, client_id: str) -> IssuedTokens:
@@ -92,22 +93,36 @@ class TokenService:
             now,
             now + ttl,
         )
-        if result.outcome is not RotationOutcome.ROTATED or result.user_id is None:
+        if (
+            result.outcome is not RotationOutcome.ROTATED
+            or result.user_id is None
+            or result.family_id is None
+        ):
             raise InvalidRefreshTokenError()
 
         user = self._users.find_by_id(result.user_id)
         if user is None:
             raise InvalidRefreshTokenError()
-        return self._issued(user, client_id, new_refresh_token, ttl)
+        return self._issued(user, client_id, new_refresh_token, ttl, result.family_id)
 
     def revoke(self, refresh_token: str) -> None:
         self._refresh_tokens.revoke_family(_hash(refresh_token), self._clock())
 
+    def is_session_active(self, session_id: UUID) -> bool:
+        return self._refresh_tokens.is_session_active(session_id, self._clock())
+
     def _issued(
-        self, user: User, client_id: str, refresh_token: str, refresh_ttl: timedelta
+        self,
+        user: User,
+        client_id: str,
+        refresh_token: str,
+        refresh_ttl: timedelta,
+        session_id: UUID,
     ) -> IssuedTokens:
         now = self._clock()
-        access_token = self._access_tokens.issue(user, client_id, now, now + self._access_ttl)
+        access_token = self._access_tokens.issue(
+            user, client_id, now, now + self._access_ttl, session_id
+        )
         return IssuedTokens(
             access_token=access_token,
             expires_in=int(self._access_ttl.total_seconds()),

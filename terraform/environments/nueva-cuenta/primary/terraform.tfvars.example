@@ -1,0 +1,38 @@
+account_id = "096571798698"
+aws_region = "us-east-2"
+
+# Completar solo despues de aprobar y establecer el rol de despliegue.
+aws_profile         = ""
+deployment_role_arn = ""
+
+name_prefix         = "solventa-nueva"
+adopt_created_ecr   = true # Solo tras confirmar los nueve ECR nuevos y sus lifecycle.
+public_access_cidrs = [] # IPv4 /32 del administrador; no 0.0.0.0/0.
+permissions_boundary_arns = {
+  network     = ""
+  ci          = ""
+  application = ""
+}
+
+# Output real ../network bajo network_context en network.auto.tfvars.json.
+# No copiar state, datos antiguos ni IDs de ejemplo.
+node_count         = 2
+kubernetes_version = "1.35" # Confirmar soporte estandar antes del plan conectado.
+
+# Ampliacion a cuatro small: dos originales y dos adicionales.
+enable_small_node_group = false
+# small_node_release_version = "RELEASE_OBSERVADA_DEL_GRUPO_ACTUAL"
+# Requiere node_count=2 y medium deshabilitado; no reemplaza el grupo original.
+
+# Solo tras revisar y aprobar coexistencia, coste y migracion de fase A.
+enable_medium_node_group = false
+# medium_node_release_version = "RELEASE_OBSERVADA_DEL_GRUPO_ACTUAL"
+# True agrega dos medium, no reemplaza ni permite retirar los dos small.
+
+api_listener_protocol = "" # Elegir HTTP privado o HTTPS, sin valor implicito.
+# api_certificate_arn = "ARN_ACM_REAL"  # Solo si se aprueba HTTPS interno.
+# api_tls_server_name = "NOMBRE_TLS_REAL"
+
+release_branch    = "" # Rama aprobada para el SHA a construir.
+pipeline_services = ["identidad", "bff-web", "perfilamiento"]
+# [] difiere los pipelines; crearlos puede iniciar Source/Build aun sin triggers.

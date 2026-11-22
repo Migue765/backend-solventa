@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Iterator
 from http.client import HTTPException
 from typing import Any
@@ -13,6 +14,11 @@ from bff_movil.domain.errors import InvalidAccessTokenError
 from bff_movil.problems import problem_response
 
 bp = Blueprint("claims", __name__, url_prefix="/movil/v1/siniestros")
+# HU21 (SOL-309): la consulta de estado no espera como una carga. Igual que el BFF web,
+# una demora se corta y se responde 503 identificable, nunca como un estado vigente.
+STATUS_PATH = re.compile(r"[^/]+/estado")
+STATUS_TIMEOUT_SECONDS = 0.8
+TRANSFER_TIMEOUT_SECONDS = 180
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -79,9 +85,14 @@ def forward(tail: str = "") -> Response:
         headers=headers,
         data=request.stream if length else None,
     )
+    timeout = (
+        STATUS_TIMEOUT_SECONDS
+        if request.method == "GET" and STATUS_PATH.fullmatch(tail)
+        else TRANSFER_TIMEOUT_SECONDS
+    )
     try:
         try:
-            upstream = build_opener(NoRedirect).open(outgoing, timeout=180)
+            upstream = build_opener(NoRedirect).open(outgoing, timeout=timeout)
         except HTTPError as error:
             upstream = error
         if upstream.status == 401:

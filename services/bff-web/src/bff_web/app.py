@@ -8,11 +8,18 @@ from bff_web.api import (
     claim_status,
     claims,
     client_information,
+    compliance,
     consents,
     health,
     mortgage_profiling,
     open_finance_exceptions,
+    operational_reports,
     partner_quotes,
+    password_recovery,
+    policy_cancellations,
+    policy_documents,
+    policy_modifications,
+    policy_renewals,
     quotes,
     sessions,
     users,
@@ -21,9 +28,15 @@ from bff_web.application.claim_ports import ClaimGateway
 from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.open_finance_exception_ports import OpenFinanceExceptionGateway
+from bff_web.application.policy_renewal_ports import (
+    PolicyCancellationGateway,
+    PolicyModificationGateway,
+    PolicyRenewalGateway,
+)
 from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.application.profiling_ports import ProfilingGateway
 from bff_web.application.quote_ports import QuoteGateway
+from bff_web.application.report_ports import ReportSources
 from bff_web.config import Config
 from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
@@ -32,6 +45,7 @@ from bff_web.infrastructure.http_claim_gateway import HttpClaimGateway
 from bff_web.infrastructure.http_client_information_gateway import (
     HttpClientInformationGateway,
 )
+from bff_web.infrastructure.http_compliance_gateway import HttpComplianceGateway
 from bff_web.infrastructure.http_identity_gateway import HttpIdentityGateway
 from bff_web.infrastructure.http_mortgage_profiling_gateway import (
     HttpMortgageProfilingGateway,
@@ -40,8 +54,17 @@ from bff_web.infrastructure.http_open_finance_exception_gateway import (
     HttpOpenFinanceExceptionGateway,
 )
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
+from bff_web.infrastructure.http_policy_cancellation_gateway import (
+    HttpPolicyCancellationGateway,
+)
+from bff_web.infrastructure.http_policy_document_gateway import HttpPolicyDocumentGateway
+from bff_web.infrastructure.http_policy_modification_gateway import (
+    HttpPolicyModificationGateway,
+)
+from bff_web.infrastructure.http_policy_renewal_gateway import HttpPolicyRenewalGateway
 from bff_web.infrastructure.http_profiling_gateway import HttpProfilingGateway
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
+from bff_web.infrastructure.http_report_sources import HttpReportSources
 from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_jwks_fetcher
 from bff_web.problems import problem_response
 
@@ -56,6 +79,10 @@ def create_app(
     client_information_gateway: ClientInformationGateway | None = None,
     open_finance_exception_gateway: OpenFinanceExceptionGateway | None = None,
     claim_gateway: ClaimGateway | None = None,
+    policy_renewal_gateway: PolicyRenewalGateway | None = None,
+    policy_modification_gateway: PolicyModificationGateway | None = None,
+    policy_cancellation_gateway: PolicyCancellationGateway | None = None,
+    report_sources: ReportSources | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     app = Flask(__name__)
@@ -111,11 +138,40 @@ def create_app(
     app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
         active_config.claims_service_url, active_config.internal_api_token
     )
+    app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or HttpPolicyRenewalGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
+    app.extensions["policy_modification_gateway"] = (
+        policy_modification_gateway
+        or HttpPolicyModificationGateway(
+            active_config.policies_service_url, active_config.internal_api_token
+        )
+    )
+    app.extensions["policy_cancellation_gateway"] = (
+        policy_cancellation_gateway
+        or HttpPolicyCancellationGateway(
+            active_config.policies_service_url, active_config.internal_api_token
+        )
+    )
+    app.extensions["report_sources"] = report_sources or HttpReportSources(
+        active_config.policies_service_url,
+        active_config.quote_service_url,
+        active_config.claims_service_url,
+        active_config.internal_api_token,
+    )
+    app.extensions["compliance_gateway"] = HttpComplianceGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
     app.register_error_handler(ProfilingError, consents.profiling_error)
+    app.extensions["policy_document_gateway"] = HttpPolicyDocumentGateway(
+        active_config.policies_service_url, active_config.internal_api_token
+    )
+    app.register_blueprint(policy_documents.bp)
 
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
+    app.register_blueprint(password_recovery.bp)
     app.register_blueprint(consents.bp)
     app.register_blueprint(quotes.bp)
     app.register_blueprint(mortgage_profiling.bp)
@@ -124,18 +180,33 @@ def create_app(
     app.register_blueprint(client_information.bp)
     app.register_blueprint(claims.bp)
     app.register_blueprint(claim_status.bp)
+    app.register_blueprint(policy_renewals.bp)
+    app.register_blueprint(policy_modifications.bp)
+    app.register_blueprint(policy_cancellations.bp)
+    app.register_blueprint(operational_reports.bp)
+    app.register_blueprint(compliance.bp)
 
     @app.before_request
     def assign_correlation_id() -> None:
-        for key in ("audit_actor_id", "audit_partner_id", "audit_rejection_reason"):
+        for key in (
+            "audit_actor_id",
+            "audit_partner_id",
+            "audit_rejection_reason",
+            "report_action",
+            "report_filters",
+            "report_cut_off",
+            "report_fingerprint",
+            "report_source",
+        ):
             g.pop(key, None)
         g.correlation_id = _correlation_id(request.headers.get("X-Correlation-ID"))
 
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
-        if request.path.startswith("/v1/sesiones"):
+        if request.path.startswith(("/v1/sesiones", "/v1/recuperacion-contrasena")):
             response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         return response
 
     @app.errorhandler(BadRequest)

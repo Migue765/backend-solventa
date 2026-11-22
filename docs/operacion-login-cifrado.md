@@ -7,6 +7,32 @@ JWE, usuarios, gateway, migraciones o autenticación de socios.
 
 ## Requisitos antes del cambio
 
+El registro web usa ahora el mismo flag en ambos servicios: desafio
+`GET /v1/usuarios/desafio`, JWE con `typ=solventa-register+jwe` y POST
+`/v1/usuarios` con datos maestros y decision explicita de consentimiento.
+Los desafios de registro usan otro prefijo Redis; no admiten desafios de login.
+TTL60, clave persistente y algoritmos son los mismos; no se agrega un Secret.
+Identidad mantiene su registro heredado para otros consumidores; el BFF Web
+con el flag activo no admite password exterior ni fallback.
+
+La decision de alta es para cotizacion, Open Finance/Open Data e indicador de
+riesgo, terminos1.0 y 30 dias desde el reloj de Identidad. True registra
+autorizacion; false registra rechazo, nunca una autorizacion por defecto.
+Usuario, decision inicial(version1) y outbox comparten una transaccion.
+La revocacion posterior usa version1, no versionTerminos, en la API existente.
+El alta devuelve201{usuario}, sin tokens; login sigue siendo una operacion aparte.
+No requiere tablas ni migraciones nuevas: se usan las de usuario/consentimiento/outbox.
+
+Antes de apertura validar el nuevo GET publico y su throttling en un NUEVO plan.
+La nueva ruta invalida el sello de fuentes y el plan881 anteriores; la preparacion
+local no autoriza regeneracion conectada, apply ni publicacion. Mantener los
+bindings de BFF cerrados mientras se verifican ambos flags y rutas.
+Aceptacion sintetica autorizada: registro true/false, datos maestros persistidos,
+ausencia de tokens, login posterior, consentimiento/revocacion, replay400,
+password exterior400, duplicados409 y Redis503. No copiar cuentas del origen.
+Comprobar ambos desafios200/no-store; el helper previo de login no sustituye
+estas pruebas de registro.
+
 - Revisiones externas y CI verdes para el SHA exacto de backend y de web.
 - Imágenes inmutables de identidad y BFF-web del mismo SHA; guardar las imágenes
   previas y revisiones de ambos Deployments y la versión previa de web.
@@ -33,7 +59,8 @@ JWE, usuarios, gateway, migraciones o autenticación de socios.
   cambios ajenos. Conservar JWT en `ANY /v1/{proxy+}` y `/movil/{proxy+}`.
   Mantener ALB prioridad 13 y CORS `API-Version` de socios. No exponer `/oauth/*`.
 - Coordinar ventana o compuerta de tráfico web: el cambio de dos flags no es atómico.
-  Mobile, renovación y registro no cambian; el registro sigue usando HTTPS sin JWE.
+  Mobile y renovacion no cambian. Registro Web requiere su desafio y JWE dedicado
+  con ambos flags activos; no publicar el consumidor cifrado antes de verificarlo.
 
 ## Preparación explícita (no basta `set image`)
 

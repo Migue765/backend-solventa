@@ -33,4 +33,5 @@ def test_only_biometric_login_and_challenge_are_public_and_auth_throttled() -> N
     for name, route_key in {"v1": "ANY /v1/{proxy+}", "movil": "ANY /movil/{proxy+}"}.items():
         assert f'route_key          = "{route_key}"' in routes[name]
         assert 'authorization_type = "JWT"' in routes[name]
-        assert "authorizer_id      = aws_apigatewayv2_authorizer.jwt.id" in routes[name]
+        assert "authorizer_id      = aws_apigatewayv2_authorizer.jwt[0].id" in routes[name]
+        assert "count              = var.enable_jwt_routes ? 1 : 0" in routes[name]

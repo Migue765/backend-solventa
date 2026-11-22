@@ -37,3 +37,8 @@ output "node_role_arn" {
   description = "ARN del rol de los nodos."
   value       = aws_iam_role.node.arn
 }
+
+output "additional_node_groups" {
+  description = "Nombres de los grupos adicionales, sin alterar el grupo original."
+  value       = { for name, group in aws_eks_node_group.additional : name => group.node_group_name }
+}

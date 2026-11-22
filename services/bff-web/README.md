@@ -35,6 +35,64 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Recuperacion de contrasena
+
+Rutas publicas compartidas con Identidad:
+`POST /v1/recuperacion-contrasena` recibe `{correo}` y solo devuelve 202 generico;
+`GET /v1/recuperacion-contrasena/desafio` devuelve JWK/desafio;
+`POST /v1/recuperacion-contrasena/confirmar` recibe `{token,credencialCifrada}` y exige
+204 de Identidad antes de confirmar exito. No descifra ni almacena credenciales.
+Contrato: `contracts/openapi/recuperacion-contrasena-v1.yaml`.
+
+Desafio/confirmacion requieren `ENCRYPTED_LOGIN_ENABLED=true` en ambos servicios.
+Errores `application/problem+json`: `code=recuperacion_invalida` para enlace vencido,
+desconocido o usado; `solicitud_invalida` para sobre/politica/esquema; 429 conserva
+Retry-After; proveedor/dependencias producen 503. No hay fallback a texto claro.
+
+Para JWT firmados con `sid`, toda autenticacion Web consulta el estado persistido de
+la familia mediante `GET` interno `/v1/sesiones/{sid}` y `INTERNAL_API_TOKEN`; una
+familia revocada se rechaza con 401 y un servicio ausente/malformado con 503.
+Esto aplica a las sesiones emitidas por TokenService; JWT legacy sin sid mantienen
+su validacion y expiracion anteriores, no tienen revocacion inmediata.
+Identidad revoca refresh de todos los canales y credenciales biometricas tras reset.
+
+Identidad mantiene recuperacion normal `usuario` por defecto. El modo explicito
+`academico_administrado` envia los enlaces solo al administrador verificado, que
+autoriza el cambio de la cuenta vinculada al token; no acredita su correo original.
+El BFF propaga solo `{mensaje}` con uno de los dos literales genericos del contrato,
+incluido `Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion.`.
+La Web valida los dos textos permitidos pero conserva copy neutro; ni modo ni
+destinatario se pueden configurar mediante el API publico.
+
+SES y la migracion/configuracion operativa se documentan en `services/identidad/README.md`.
+La Web debe abrir el root real `<base>/?recuperacion=1#token=<token>` (base path Pages
+incluido), consumir el fragmento antes del router y mostrar solo la nueva contrasena.
+No publicar ni registrar el secreto. Estos cambios no despliegan ni habilitan SES.
+
+### Cumplimiento academico (SOL-208 / SOL-324)
+
+`POST /v1/reportes/regulatorios` exige JWT de asesor, filtros `desde`, `hasta`,
+`corte`, `Idempotency-Key` UUID y `{aceptaSimulacion: true}`. Reutiliza las fuentes
+autenticadas de Polizas, Cotizacion y Siniestros; rechaza inconsistencias antes
+de confirmar. El BFF sigue sin base de datos: delega las instantaneas inmutables
+y la auditoria a Polizas. Configurar `POLIZAS_SERVICE_URL`,
+`COTIZACION_SERVICE_URL`, `SINIESTROS_SERVICE_URL` e `INTERNAL_API_TOKEN`.
+
+La consulta y descarga por `reporteId` recuperan la instantanea persistida,
+incluso si despues cambia una fuente. Cada registro minimizado conserva su
+huella de version y las fuentes su huella al corte.
+
+`POST /v1/reaseguros/intercambios` recibe `{reporteId, aceptaSimulacion: true,
+escenario: "aceptado" | "diferencias"}` con clave UUID. Exporta cesiones y
+recuperaciones del periodo con cuota didactica fija de 20 %, sin ejecutar dinero.
+Un acuse local simulado se concilia; diferencias quedan `revision_pendiente`,
+consultables por `intercambioId`. Un reporte admite un solo intercambio: otra
+clave o contenido se rechaza, no duplica cesiones.
+
+Contrato integrado: `contracts/openapi/cumplimiento-academico-v1.yaml`.
+No hay UI nueva, adaptador ACORD, proveedor real ni formato oficial regulatorio.
+La validacion local no acredita despliegue ni cifrado del entorno; mantener HTTPS.
+
 ### Siniestros Web (SOL-313 y SOL-315)
 
 `POST /v1/siniestros` registra un aviso con `{polizaId, fechaEvento,
@@ -350,7 +408,7 @@ Cotizacion, la base o la validacion del contrato, el BFF devuelve `503`, no un r
 Credenciales JWT invalidas devuelven `401`; parametros o cuerpo devuelven `400`.
 La respuesta satisfactoria tiene `Cache-Control: no-store`.
 
-El contrato devuelve arrays reales `cotizaciones`, `suscripciones` y `pagos`.
+El contrato devuelve arrays reales `cotizaciones`, `suscripciones`, `pagos` y `polizas`.
 Los importes son strings decimales de dos posiciones y las fechas incluyen zona horaria.
 Cada cotizacion conserva ID, solicitud (null en registros antiguos), producto, estado,
 fechas, prima estimada y seleccion opcional. La prima estimada no tiene periodicidad
@@ -359,14 +417,14 @@ exacta (`mensual`, `por_viaje`, `por_vuelo`, `por_periodo`), sin recalculos ni t
 que mezclen monedas o periodicidades. Suscripcion conserva su estado y saga actuales;
 el pago se identifica siempre como `simulada: true`, nunca como un cobro real.
 
-Con `POLIZAS_SERVICE_URL` habilitado en Cotizacion, `polizas` es un array de
+`POLIZAS_SERVICE_URL` es obligatorio para el dashboard de Cotizacion; `polizas` es un array de
 emisiones academicas persistidas por el nuevo servicio: `{id,suscripcionId,tipo,
 fechaInicio,fechaFin,estado,simulada:true}`. Fechas `YYYY-MM-DD` inclusivas;
 estado `programada`, `vigente` o `vencida` respecto del dia UTC. No acredita
 cobertura real ni convierte pagos historicos en polizas. El BFF valida el contrato,
 no calcula vigencias ni deriva polizas a partir de la saga.
-Sin habilitar Polizas se conserva `{disponibilidad:"no_implementado"}`, nunca una
-lista vacia artificial; el consumidor debe informar indisponibilidad.
+Si falta o falla Polizas, la consulta devuelve `503`; el descriptor legado de
+polizas ya no es valido. Nunca se devuelve una lista vacia artificial.
 `notificaciones` conserva ese marcador y no se genera desde eventos.
 Una coleccion vacia disponible si representa una consulta sin registros.
 La lectura historica no renueva ni exige perfiles de riesgo vigentes y
@@ -388,6 +446,81 @@ Un siniestro inexistente o de otro cliente responde el mismo `404 siniestro_no_e
 sin datos del caso. Fallo de red, timeout (0,8 s), credencial interna ausente, registro
 incoherente o respuesta fuera de contrato devuelven `503` con `Retry-After`, nunca un
 estado ni un historial vacio. El BFF no calcula transiciones; solo valida la respuesta.
+
+### Renovacion de poliza (SOL-317, HU33)
+
+`GET /v1/clientes/me/polizas/{polizaId}/renovacion` y
+`POST /v1/clientes/me/polizas/{polizaId}/renovaciones` requieren JWT del canal Web, rol y
+scope `cliente`; el cliente procede del principal y se envia a Polizas como `X-Cliente-ID`
+(`POLIZAS_SERVICE_URL` + `INTERNAL_API_TOKEN`). GET no admite query ni cuerpo y devuelve
+elegibilidad, oferta y ultimo intento. POST exige `Idempotency-Key` UUID y
+`{aceptaCondiciones:true, condicionesHash}`; el BFF valida la aceptacion explicita y no
+calcula reglas, vigencias ni primas.
+
+El BFF propaga `201`/`200`/`202` (pendiente, con `Retry-After`) solo si la respuesta
+corresponde a la poliza, al hash aceptado y al estado informado. `404 poliza_no_encontrada`,
+`422 poliza_no_renovable` (con `motivo`) y `409` (`condiciones_cambiaron`,
+`idempotencia_conflictiva`, `renovacion_en_curso` con `renovacionId`) se publican como
+problemas. Timeout (0,8 s en consulta, 5 s en renovacion), credencial ausente o respuesta
+fuera de contrato devuelven `503`: no confirma ni descarta la renovacion, y se debe
+reintentar con la misma clave. Reglas y recuperacion: `services/polizas/README.md`.
+
+### Modificacion versionada de poliza (SOL-319, HU34)
+
+`GET /v1/clientes/me/polizas/{polizaId}/modificacion`,
+`POST .../modificaciones/simulacion` y `POST .../modificaciones` requieren JWT del canal Web,
+rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. El BFF valida que
+solo se envien `versionBase`, `plan` y `coberturasOpcionales` (y en la confirmacion
+`confirma:true` e `impactoHash` con `Idempotency-Key`), y que las respuestas sean coherentes:
+historial ordenado que inicia en la version vigente, diferencia mensual igual a la resta de
+primas y endoso que avanza exactamente una version con el hash confirmado. Los rechazos se
+publican como problemas: `422 poliza_no_modificable` (`motivo`), `cambio_no_permitido`
+(`campo`) y `sin_cambios`, y `409` `version_desactualizada` (`versionActual`),
+`impacto_cambio` e `idempotencia_conflictiva`. Un `503` no confirma ni descarta la
+modificacion. Reglas: `services/polizas/README.md`.
+
+### Cancelacion de poliza (SOL-321, HU35)
+
+`GET /v1/clientes/me/polizas/{polizaId}/cancelacion` y `POST .../cancelaciones` requieren JWT
+del canal Web, rol y scope `cliente`; el cliente se envia a Polizas como `X-Cliente-ID`. GET
+devuelve elegibilidad, fecha efectiva, coberturas que terminan, devolucion y valor pendiente.
+POST exige `Idempotency-Key` UUID y `{confirma:true, motivoCancelacion, liquidacionHash}`. El
+BFF valida que la liquidacion sea coherente (devolucion = proporcional + periodos anulados) y
+que la cancelacion corresponda a la poliza, al hash y al motivo confirmados. Los rechazos se
+publican como problemas: `422 poliza_no_cancelable` (`motivo`) y `409` `liquidacion_cambio` e
+`idempotencia_conflictiva`. Un `503` no confirma ni descarta la cancelacion; se reintenta con
+la misma clave. Reglas: `services/polizas/README.md`.
+
+### Reportes operativos consolidados (SOL-322, HU36)
+
+`GET /v1/reportes/operativos?desde=&hasta=[&producto=][&estado=][&corte=]` requiere JWT del
+canal Web con rol y scope `asesor`; cualquier otro rol responde `403 alcance_insuficiente`.
+`desde` y `hasta` (`YYYY-MM-DD`, UTC, maximo 366 dias, sin pasar del dia del corte) son
+obligatorios; `producto` y `estado` (de poliza al corte) son opcionales y se validan contra
+`GET /v1/reportes/operativos/opciones`. Se rechazan filtros desconocidos, repetidos o cuerpo.
+Sin `corte`, el BFF fija uno a 60 s antes del reloj del servidor, truncado al segundo.
+
+El BFF consulta, al mismo corte y con `INTERNAL_API_TOKEN`, a Polizas
+(`POLIZAS_SERVICE_URL`, `GET /v1/reportes/polizas`), Cotizacion (`QUOTE_SERVICE_URL`,
+`GET /v1/reportes/primas`) y Siniestros (`SINIESTROS_SERVICE_URL`,
+`POST /internal/v1/reportes/consulta`); contrato en
+`contracts/openapi/reportes-operativos-internal-v1.yaml`. Las fuentes no exponen clientes,
+documentos, contactos, direcciones ni evidencias, y el BFF rechaza cualquier campo extra.
+Verifica corte, conteo y huella SHA-256 de cada fuente, identificadores unicos y que ningun
+registro sea posterior al corte. Cualquier falla, timeout (3 s por fuente) o discrepancia responde
+`503 consolidacion_incompleta` con `fuente` y `Retry-After`; nunca entrega datos parciales.
+
+La respuesta trae indicadores de polizas, primas (totales por moneda), siniestros y pagos
+parametricos, el desglose `porProducto`, `inconsistencias` informativas entre fuentes, la
+huella de cada fuente y la `huella` del reporte (sin `generadoEn`). Para descargar el mismo
+resultado, `GET /v1/reportes/operativos/descarga` recibe los mismos filtros, el `corte`
+devuelto y la `huella`; recalcula el reporte y entrega CSV solo si la huella coincide, si no
+responde `409 reporte_no_reproducible`. Toda consulta, descarga o rechazo deja el evento de
+auditoria `sol322.reporte` con actor, filtros, corte, huella, codigo y `correlationId`.
+
+Para activarlo sin redesplegar el manifiesto completo:
+`kubectl -n bff-web set env deployment/bff-web POLIZAS_SERVICE_URL=http://polizas.polizas.svc.cluster.local:8080`.
+Sin esa variable las consultas responden `503` con `fuente=polizas`.
 
 ### Pago exclusivamente simulado
 
@@ -554,6 +687,7 @@ para validar la vigencia con el reloj del servidor.
 | `IDENTIDAD_TIMEOUT_SECONDS` | `5`                     | Timeout de las llamadas a identidad y al JWKS        |
 | `QUOTE_SERVICE_URL`         | `http://localhost:5000` | Servicio de cotización                               |
 | `SINIESTROS_SERVICE_URL`    | Sin valor; devuelve 503 | Servicio de siniestros                               |
+| `POLIZAS_SERVICE_URL`       | Sin valor; devuelve 503 | Servicio de polizas (renovacion y reportes)          |
 
 Las claves públicas se cachean 600 s. Ante un `kid` desconocido se recarga el JWKS, como máximo
 una vez cada 10 s, para tolerar rotaciones sin permitir que un `kid` falso sature a identidad.

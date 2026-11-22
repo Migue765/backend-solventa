@@ -50,6 +50,28 @@ class SocioModel(Base):
     activo: Mapped[bool] = mapped_column(default=True, server_default="1")
 
 
+class IdentityVerificationModel(Base):
+    __tablename__ = "verificaciones_identidad_simuladas"
+
+    verificacion_id: Mapped[UUID] = mapped_column(primary_key=True)
+    usuario_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"), unique=True)
+    estado: Mapped[str] = mapped_column(String(12))
+    intentos: Mapped[int]
+    motivo: Mapped[str | None] = mapped_column(String(32))
+    resultados: Mapped[list[str]] = mapped_column(JSON)
+
+
+class IdentityVerificationAttemptModel(Base):
+    __tablename__ = "intentos_identidad_simulados"
+
+    verificacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("verificaciones_identidad_simuladas.verificacion_id"), primary_key=True
+    )
+    intento_id: Mapped[UUID] = mapped_column(primary_key=True)
+    solicitud: Mapped[dict[str, str]] = mapped_column(JSON)
+    respuesta: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
 class AsesorSocioModel(Base):
     __tablename__ = "asesores_socios"
 
@@ -86,6 +108,16 @@ class RefreshTokenModel(Base):
     credencial_biometrica_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("credenciales_biometricas.credencial_id"), index=True
     )
+
+
+class PasswordRecoveryModel(Base):
+    __tablename__ = "recuperaciones_contrasena"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    usuario_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"), index=True)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumida_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class BiometricCredentialModel(Base):

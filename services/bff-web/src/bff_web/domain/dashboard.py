@@ -112,7 +112,7 @@ class DashboardPolicy(DashboardModel):
     ] = Field(alias="tipo")
     start_date: date = Field(alias="fechaInicio")
     end_date: date = Field(alias="fechaFin")
-    status: Literal["programada", "vigente", "vencida"] = Field(alias="estado")
+    status: Literal["programada", "vigente", "vencida", "cancelada"] = Field(alias="estado")
     simulated: Literal[True] = Field(alias="simulada")
 
     @field_validator("simulated", mode="before")
@@ -142,5 +142,5 @@ class Dashboard(DashboardModel):
     payments: list[DashboardPayment | DashboardRejectedPayment | DashboardPendingPayment] = Field(
         alias="pagos"
     )
-    policies: list[DashboardPolicy] | UnimplementedDomain = Field(alias="polizas")
+    policies: list[DashboardPolicy] = Field(alias="polizas")
     notifications: UnimplementedDomain = Field(alias="notificaciones")

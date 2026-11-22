@@ -1,0 +1,65 @@
+# Variable: IMAGE. deploy.sh lo aplica solo tras un rollout correcto de siniestros.
+# Programador de POST /internal/v1/notificaciones/publicacion (outbox de cambios de
+# estado y pagos parametricos hacia Notificaciones). Sin signo de dolar en el script:
+# envsubst sustituiria cualquier referencia a variable.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: siniestros-notificaciones
+  namespace: siniestros
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: publicacion
+              image: ${IMAGE}
+              command:
+                - python
+                - -c
+                - |
+                  import os
+                  import urllib.request
+
+                  token = os.environ["INTERNAL_API_TOKEN"]
+                  solicitud = urllib.request.Request(
+                      "http://siniestros.siniestros.svc.cluster.local:8080/internal/v1/notificaciones/publicacion",
+                      data=b'{"limite": 500}',
+                      headers={
+                          "Authorization": "Bearer " + token,
+                          "Content-Type": "application/json",
+                      },
+                  )
+                  with urllib.request.urlopen(solicitud, timeout=100) as respuesta:
+                      print(respuesta.status, respuesta.read().decode())
+              env:
+                - name: INTERNAL_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: siniestros-runtime
+                      key: INTERNAL_API_TOKEN
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]

@@ -1,8 +1,9 @@
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import pytest
+from bff_web.domain import product_data
 from flask import Flask
 from support import CLIENT_PROFILE, USER, FakeJwks, KeyPair, StubQuoteGateway, bearer, sign_token
 from werkzeug.test import TestResponse
@@ -11,6 +12,17 @@ REQUEST = {
     "productoId": "automotive",
     "datosProducto": {"vehiclePlate": "ABC123"},
 }
+TODAY = date(2026, 11, 14)
+
+
+@pytest.fixture(autouse=True)
+def product_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FixedDate(date):
+        @classmethod
+        def today(cls) -> Self:
+            return cls(TODAY.year, TODAY.month, TODAY.day)
+
+    monkeypatch.setattr(product_data, "date", FixedDate)
 
 
 def body(response: TestResponse) -> dict[str, Any]:
@@ -145,8 +157,8 @@ PRODUCT_DATA = {
     "automotive": {"vehiclePlate": "ABC123"},
     "travel": {
         "destinationCountryCode": "CO",
-        "departureDate": (date.today() + timedelta(days=1)).isoformat(),
-        "returnDate": (date.today() + timedelta(days=30)).isoformat(),
+        "departureDate": (TODAY + timedelta(days=1)).isoformat(),
+        "returnDate": (TODAY + timedelta(days=30)).isoformat(),
     },
     "life": {"birthDate": "1990-06-15"},
     "device-protection": {
@@ -157,13 +169,13 @@ PRODUCT_DATA = {
     "parametric": {
         "airline": "Aerolínea de prueba",
         "flightNumber": "AV123",
-        "flightDate": (date.today() + timedelta(days=1)).isoformat(),
+        "flightDate": (TODAY + timedelta(days=1)).isoformat(),
     },
     "parametric-weather": {
         "location": "Medellín, Antioquia",
         "weatherEvent": "heavy-rain",
-        "startDate": (date.today() + timedelta(days=1)).isoformat(),
-        "endDate": (date.today() + timedelta(days=30)).isoformat(),
+        "startDate": (TODAY + timedelta(days=1)).isoformat(),
+        "endDate": (TODAY + timedelta(days=30)).isoformat(),
         "insuredAmount": "10000000",
     },
     "payment-protection": {"creditType": "Consumo", "monthlyPayment": "850000"},

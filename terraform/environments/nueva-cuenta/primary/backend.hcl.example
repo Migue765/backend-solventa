@@ -1,0 +1,7 @@
+# Completar con el bucket nuevo real y el perfil del rol aprobado.
+# El backend se inicializa antes de evaluar las guardas del provider.
+bucket              = ""
+profile             = ""
+region              = "us-east-2"
+allowed_account_ids = ["096571798698"]
+key                 = "accounts/096571798698/us-east-2/primary/terraform.tfstate"

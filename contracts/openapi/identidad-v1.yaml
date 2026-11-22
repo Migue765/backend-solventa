@@ -13,7 +13,20 @@ tags:
   - name: Descubrimiento
   - name: Consentimientos
   - name: Asesores
+  - name: Sesiones
 paths:
+  /v1/recuperacion-contrasena:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
+  /v1/recuperacion-contrasena/desafio:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1desafio"
+  /v1/recuperacion-contrasena/confirmar:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1confirmar"
+  /v1/verificaciones-identidad:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
+  /v1/verificaciones-identidad/{verificacionId}:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}"
+  /v1/verificaciones-identidad/{verificacionId}/intentos:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}~1intentos"
   /v1/biometria/enrolamientos/desafio:
     $ref: "./biometria-v1.yaml#/paths/~1enrolamientos~1desafio"
   /v1/biometria/enrolamientos:
@@ -70,6 +83,42 @@ paths:
                     type: boolean
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          description: Token interno invalido
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/sesiones/{sesionId}:
+    get:
+      tags: [Sesiones]
+      operationId: consultarEstadoSesion
+      summary: Indica si una sesion (claim sid) sigue activa para consultas protegidas
+      description: >-
+        Lectura interna para los BFF. Una sesion esta activa mientras su familia de refresh token
+        no haya sido revocada (logout o reuso) ni haya vencido.
+      security:
+        - TokenInterno: []
+      parameters:
+        - name: sesionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Cache-Control no-store; activa=false para sesiones cerradas, vencidas o inexistentes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [sesionId, activa]
+                properties:
+                  sesionId:
+                    type: string
+                    format: uuid
+                  activa:
+                    type: boolean
         "401":
           description: Token interno invalido
         "503":
@@ -177,7 +226,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/NuevoUsuario"
+              oneOf:
+                - $ref: "#/components/schemas/NuevoUsuario"
+                - $ref: "./bff-web-v1.yaml#/components/schemas/NuevoUsuarioCifrado"
       responses:
         "201":
           description: Usuario creado
@@ -188,9 +239,27 @@ paths:
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
         "409":
-          $ref: "#/components/responses/CorreoYaRegistrado"
+          description: Correo o documento ya registrado
         "429":
           $ref: "#/components/responses/DemasiadosIntentos"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/usuarios/desafio:
+    get:
+      tags: [Usuarios]
+      summary: Desafio de registro, separado del login, requiere flag cifrado activo
+      operationId: emitirDesafioRegistro
+      security: []
+      responses:
+        "200":
+          description: Desafio de un solo uso persistido en Redis, TTL60
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/DesafioLogin"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /oauth/login-challenge:
@@ -530,7 +599,7 @@ components:
       properties:
         access_token:
           type: string
-          description: JWT RS256 con claims iss, sub, aud, iat, exp, jti, scope, rol, nombre, correo y client_id.
+          description: JWT RS256 con claims iss, sub, aud, iat, exp, jti, sid, scope, rol, nombre, correo y client_id.
         token_type:
           type: string
           enum: [Bearer]

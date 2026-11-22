@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from threading import Barrier
 from uuid import uuid4
 
@@ -7,6 +7,7 @@ import pytest
 from alembic import command
 from cotizacion.app import create_app
 from cotizacion.application.pagos import ProcesarPagoSimulado
+from cotizacion.application.ports import PolizaEmitida
 from cotizacion.config import Config
 from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
 from cotizacion.infrastructure.pago_simulado import SimuladorPago
@@ -143,7 +144,7 @@ def test_lease_expirada_se_recupera_y_reserva_obsoleta_no_revierte_el_exito(clie
     second = repository.reservar_emision(now + timedelta(seconds=34))
     assert second is not None and second.token != first.token and second.intentos == 2
     assert not repository.aplazar_emision(first, now, "acuse_perdido")
-    repository.marcar_emitida(payment, uuid4())
+    repository.marcar_emitida(payment, PolizaEmitida(uuid4(), date(2026, 4, 9)))
     assert not repository.aplazar_emision(second, now, "acuse_perdido")
     with repository._sesiones() as session:
         job = session.get(ConciliacionEmisionModel, payment.pago_id)
@@ -173,7 +174,7 @@ def test_backoff_y_limite_durables_no_convierten_pago_en_rechazo(client, crash_l
     assert client.get(base + "/pago-simulado", query_string=query).get_json()["estado"] == (
         "confirmado"
     )
-    repository.marcar_emitida(payment, uuid4())
+    repository.marcar_emitida(payment, PolizaEmitida(uuid4(), date(2026, 4, 9)))
     with repository._sesiones() as session:
         assert session.get(ConciliacionEmisionModel, payment.pago_id).estado == "completada"
 
@@ -189,7 +190,7 @@ def test_fallo_outbox_emision_no_completa_trabajo_ni_saga(client):
     event.listen(OutboxEventoModel, "before_insert", fail)
     try:
         with pytest.raises(RuntimeError, match="SQL"):
-            repository.marcar_emitida(payment, uuid4())
+            repository.marcar_emitida(payment, PolizaEmitida(uuid4(), date(2026, 4, 9)))
     finally:
         event.remove(OutboxEventoModel, "before_insert", fail)
     with repository._sesiones() as session:
@@ -235,7 +236,7 @@ def test_downgrade_rechaza_borrar_elegibilidad_pendiente(client, alembic_config)
         assert session.scalar(text("SELECT version_num FROM alembic_version")) == (
             "conciliacion_emision"
         )
-    repository.marcar_emitida(payment, uuid4())
+    repository.marcar_emitida(payment, PolizaEmitida(uuid4(), date(2026, 4, 9)))
     command.downgrade(alembic_config, "intentos_pago_simulado")
     assert client.get(base + "/pago-simulado", query_string=query).get_json() == snapshot
     command.upgrade(alembic_config, "head")

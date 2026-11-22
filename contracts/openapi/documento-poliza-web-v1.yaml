@@ -1,0 +1,281 @@
+openapi: 3.1.0
+info:
+  title: Solventa - documento y aceptacion simulados
+  version: 1.0.0
+  description: >-
+    Constancia academica sin validez legal. No es firma electronica ni digital, no activa
+    cobertura ni cambia pagos. Requiere JWT de cliente con rol y scope cliente. El BFF
+    obtiene el actor exclusivamente del JWT. No acepta clienteId del consumidor.
+servers:
+  - url: /api
+security:
+  - bearerAuth: []
+paths:
+  /v1/clientes/me/polizas/{polizaId}/documento:
+    parameters:
+      - $ref: '#/components/parameters/Poliza'
+    get:
+      operationId: consultarDocumentoPolizaSimulado
+      summary: Consulta contenido autoritativo y evidencia historica
+      description: >-
+        Materializa una instantanea inmutable; mismo HTML conserva documentoId.
+        No incluye timestamps de consulta en el contenido. Un cambio de condiciones,
+        vigencia o estado invalida la aceptacionActual sin borrar evidencia previa.
+      responses:
+        '200':
+          description: Documento vigente y aceptaciones del propietario autenticado
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Documento'}
+        '400': {$ref: '#/components/responses/Invalida'}
+        '401': {$ref: '#/components/responses/Sesion'}
+        '403': {$ref: '#/components/responses/Alcance'}
+        '404': {$ref: '#/components/responses/NoEncontrada'}
+        '503': {$ref: '#/components/responses/NoDisponible'}
+  /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga:
+    parameters:
+      - $ref: '#/components/parameters/Poliza'
+      - name: documentoId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: descargarDocumentoPolizaSimulado
+      summary: Descarga privada del snapshot HTML, vigente o historico
+      description: >-
+        Bytes UTF-8 exactos persistidos, no un render actualizado. SHA-256 de esos bytes
+        coincide con contenidoHash. No admite parametros ni cuerpo. Todas las respuestas
+        son no-store y nosniff. HTML autocontenido, escapado, sin scripts ni URLs externas.
+      responses:
+        '200':
+          description: HTML legible sin validez legal
+          headers:
+            Content-Disposition:
+              description: attachment con nombre seguro de UUID y sufijo -simulada.html
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+            X-Content-Type-Options:
+              schema: {const: nosniff}
+            X-Content-SHA256:
+              schema: {$ref: '#/components/schemas/Hash'}
+            Content-Security-Policy:
+              schema:
+                const: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+          content:
+            text/html:
+              schema: {type: string}
+        '400': {$ref: '#/components/responses/Invalida'}
+        '401': {$ref: '#/components/responses/Sesion'}
+        '403': {$ref: '#/components/responses/Alcance'}
+        '404': {$ref: '#/components/responses/NoEncontrada'}
+        '503': {$ref: '#/components/responses/NoDisponible'}
+  /v1/clientes/me/polizas/{polizaId}/aceptaciones:
+    parameters:
+      - $ref: '#/components/parameters/Poliza'
+    post:
+      operationId: aceptarDocumentoPolizaSimulado
+      summary: Registra aceptacion academica explicita del snapshot vigente
+      description: >-
+        Actor y fecha del servidor; guarda documento, version y hash inmutables.
+        Misma clave y cuerpo devuelve evidencia original aun si luego cambia la poliza;
+        eso NO acepta la version nueva. Clave y otro cuerpo produce 409
+        idempotencia_conflictiva. Una nueva aceptacion de documento/version/hash obsoletos
+        produce 409 documento_desactualizado. Reconsultar y requerir accion explicita
+        con nueva clave; nunca aceptar automaticamente tras un 409. No modifica lifecycle.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Confirmacion'}
+      responses:
+        '201':
+          description: Nueva evidencia simulada
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Aceptacion'}
+        '200':
+          description: Replay exacto, sin duplicar evidencia ni auditoria
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Aceptacion'}
+        '400': {$ref: '#/components/responses/Invalida'}
+        '401': {$ref: '#/components/responses/Sesion'}
+        '403': {$ref: '#/components/responses/Alcance'}
+        '404': {$ref: '#/components/responses/NoEncontrada'}
+        '409':
+          description: documento_desactualizado o idempotencia_conflictiva
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/Problema'}
+        '503': {$ref: '#/components/responses/NoDisponible'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    Poliza:
+      name: polizaId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    Invalida:
+      description: solicitud_invalida; no admite clienteId, actor, fecha ni campos adicionales
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problema'}
+    Sesion:
+      description: Sesion ausente, expirada o invalida (sesion_invalida)
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problema'}
+    Alcance:
+      description: alcance_insuficiente; requiere rol y scope cliente
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problema'}
+    NoEncontrada:
+      description: poliza_no_encontrada; identica respuesta para recurso ajeno o inexistente
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problema'}
+    NoDisponible:
+      description: >-
+        servicio_no_disponible; nunca devuelve documento ni aceptacion ficticios.
+        Para POST ambiguo reintentar con la misma clave y cuerpo.
+      headers:
+        Retry-After:
+          schema: {const: '5'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problema'}
+  schemas:
+    Hash:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+      description: SHA-256 de los bytes HTML UTF-8 descargables, no del JSON contenido.
+    Version:
+      type: [integer, 'null']
+      minimum: 1
+      description: Version de condiciones; null para productos por fechas sin endosos.
+    Metadatos:
+      type: object
+      required: [documentoId, polizaId, versionPoliza, contenidoHash, formato, simulada, aviso]
+      properties:
+        documentoId: {type: string, format: uuid}
+        polizaId: {type: string, format: uuid}
+        versionPoliza: {$ref: '#/components/schemas/Version'}
+        contenidoHash: {$ref: '#/components/schemas/Hash'}
+        formato: {const: html}
+        simulada: {const: true}
+        aviso:
+          const: Documento y aceptacion simulados para fines academicos. Sin validez legal; no constituyen firma electronica ni digital.
+    Documento:
+      allOf:
+        - $ref: '#/components/schemas/Metadatos'
+        - type: object
+          required: [contenido, aceptacionActual, historialAceptaciones]
+          properties:
+            contenido: {$ref: '#/components/schemas/Contenido'}
+            aceptacionActual:
+              oneOf:
+                - $ref: '#/components/schemas/Aceptacion'
+                - type: 'null'
+            historialAceptaciones:
+              type: array
+              items: {$ref: '#/components/schemas/Aceptacion'}
+      unevaluatedProperties: false
+    Aceptacion:
+      allOf:
+        - $ref: '#/components/schemas/Metadatos'
+        - type: object
+          required: [id, actorId, aceptadaEn]
+          properties:
+            id: {type: string, format: uuid}
+            actorId: {type: string, format: uuid}
+            aceptadaEn: {type: string, format: date-time}
+      unevaluatedProperties: false
+    Confirmacion:
+      type: object
+      additionalProperties: false
+      required: [documentoId, versionPoliza, contenidoHash, aceptaSimulacion]
+      properties:
+        documentoId: {type: string, format: uuid}
+        versionPoliza: {$ref: '#/components/schemas/Version'}
+        contenidoHash: {$ref: '#/components/schemas/Hash'}
+        aceptaSimulacion: {const: true}
+    Contenido:
+      type: object
+      additionalProperties: false
+      required: [formatoVersion, simulada, aviso, polizaId, clienteId, suscripcionId, producto,
+                 vigencia, estado, emitidaEn, reglaEmision, version, plan, coberturas, prima, condiciones]
+      properties:
+        formatoVersion: {const: 1}
+        simulada: {const: true}
+        aviso: {type: string}
+        polizaId: {type: string, format: uuid}
+        clienteId: {type: string, format: uuid}
+        suscripcionId: {type: string, format: uuid}
+        producto:
+          type: object
+          additionalProperties: false
+          required: [tipo, nombre]
+          properties:
+            tipo: {type: string}
+            nombre: {type: string}
+        vigencia:
+          type: object
+          additionalProperties: false
+          required: [inicio, fin]
+          properties:
+            inicio: {type: string, format: date}
+            fin: {type: string, format: date}
+        estado: {enum: [activa, cancelada]}
+        emitidaEn: {type: string, format: date-time}
+        reglaEmision: {type: string}
+        version: {$ref: '#/components/schemas/Version'}
+        plan: {type: [string, 'null']}
+        coberturas:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [codigo, nombre, descripcion, opcional, incluida]
+            properties:
+              codigo: {type: string}
+              nombre: {type: string}
+              descripcion: {type: string}
+              opcional: {type: boolean}
+              incluida: {type: boolean}
+        prima:
+          oneOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [monto, moneda, periodicidad]
+              properties:
+                monto: {type: string, pattern: '^[0-9]+$'}
+                moneda: {const: COP}
+                periodicidad: {const: mensual}
+        condiciones:
+          type: array
+          items: {type: string}
+    Problema:
+      type: object
+      required: [type, title, status, detail, code, correlationId]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code: {type: string}
+        correlationId: {type: string, format: uuid}

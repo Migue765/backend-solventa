@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: siniestros-eventos-parametricos
+  namespace: siniestros
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siniestros-eventos-parametricos
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: siniestros-pagos-parametricos
+  namespace: siniestros
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: siniestros-pagos-parametricos

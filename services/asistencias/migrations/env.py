@@ -10,6 +10,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
 database_url = config.get_main_option("sqlalchemy.url") or os.environ["ASISTENCIAS_DATABASE_URL"]
+runtime_role = os.getenv("DB_RUNTIME_ROLE")
+if runtime_role is not None and not database_url.startswith("postgresql"):
+    raise RuntimeError("DB_RUNTIME_ROLE requiere PostgreSQL.")
 
 
 def run_migrations_offline() -> None:
@@ -29,6 +32,9 @@ def run_migrations_online() -> None:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
+            if runtime_role is not None:
+                role = connection.dialect.identifier_preparer.quote(runtime_role)
+                connection.exec_driver_sql(f"REVOKE ALL ON TABLE alembic_version FROM {role}")
 
 
 if context.is_offline_mode():

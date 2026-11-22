@@ -4,7 +4,8 @@
 # deploy/k8s para cotizacion y deploy/k8s/<servicio> para el resto.
 # MIGRATE=false (default true) omite el Job de migraciones, para servicios sin base de datos propia (ej. los BFF).
 # Polizas, siniestros, notificaciones y asistencias aplican su Service y Deployment completos.
-# Siniestros exige que su ServiceAccount ya tenga el rol IRSA del bucket de evidencias.
+# Siniestros exige que su ServiceAccount ya tenga el rol IRSA del bucket de evidencias y,
+# tras el rollout del API, despliega sus trabajadores parametricos con PDB.
 set -euo pipefail
 
 MIGRATE="${MIGRATE:-true}"
@@ -17,6 +18,11 @@ else
 fi
 
 : "${CLUSTER_NAME:?}" "${NAMESPACE:?}" "${ECR_REPOSITORY_URL:?}" "${IMAGE_TAG:?}" "${AWS_REGION:?}"
+
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  : "${SINIESTROS_EVIDENCIAS_BUCKET:?Indicar el bucket de evidencias de esta cuenta}"
+  export SINIESTROS_EVIDENCIAS_BUCKET
+fi
 
 if [ "$NAMESPACE" = "hu11-perfilamiento" ]; then
   echo "HU11 esta retirado: no se permite recrear ni actualizar sus workloads." >&2
@@ -143,6 +149,19 @@ if [ "$SERVICE_NAME" = "identidad" ]; then
 fi
 if [ "$SERVICE_NAME" = "notificaciones" ]; then
   envsubst < "${K8S_DIR}/despachos-cronjob.yaml" | kubectl apply -f -
+fi
+if [ "$SERVICE_NAME" = "siniestros" ]; then
+  # Trabajadores HU30/HU31: misma imagen, aplicados solo tras migrar y confirmar el API.
+  kubectl apply -f "${K8S_DIR}/workers-pdb.yaml"
+  envsubst < "${K8S_DIR}/workers.yaml" | kubectl apply -f -
+  for worker in siniestros-eventos-parametricos siniestros-pagos-parametricos; do
+    if ! kubectl -n "$NAMESPACE" rollout status deployment/"$worker" --timeout=300s; then
+      echo "El rollout de ${worker} fallo; revirtiendo el trabajador." >&2
+      kubectl -n "$NAMESPACE" rollout undo deployment/"$worker" || true
+      exit 1
+    fi
+  done
+  envsubst < "${K8S_DIR}/notificaciones-cronjob.yaml" | kubectl apply -f -
 fi
 
 echo "Despliegue de ${IMAGE} completado."

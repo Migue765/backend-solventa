@@ -46,6 +46,7 @@ def journeys(count: int = 1, elapsed: int = 10) -> list[tuple[str, str, int]]:
         *(f"journey.emission.{product}" for product in PRODUCTS),
         "journey.dashboard",
         "journey.claim.status",
+        "journey.claim.status.movil",
     ]
     return [(label, "true", elapsed) for label in labels for _ in range(count)]
 
@@ -61,7 +62,7 @@ def test_generated_plans_use_real_http_and_safe_assertions(tmp_path: Path) -> No
         children = list(group)
         assert len(children) % 2 == 0
         assert all(child.tag == "hashTree" for child in children[1::2])
-    assert len(root.findall(".//TransactionController")) == 17
+    assert len(root.findall(".//TransactionController")) == 18
     assert "getResponseDataAsString" in main.read_text()
     assert "failure.getMessage" not in main.read_text()
     recovery = tmp_path / "restart.jmx"
@@ -88,6 +89,8 @@ def test_generated_claim_journey_uploads_the_hashed_synthetic_evidence(tmp_path:
     for label in (
         "claim.report.retry",
         "claim.status.ownership",
+        "claim.status.movil.web.token",
+        "claim.status.movil.unknown",
         "evidence.confirm.incomplete",
         "evidence.cancel.confirmed",
         "evidence.ownership.contenido",
@@ -97,8 +100,19 @@ def test_generated_claim_journey_uploads_the_hashed_synthetic_evidence(tmp_path:
     performance.parent.mkdir()
     main_plan(performance, smoke=False)
     labels = {node.get("testname") for node in ET.parse(performance).iter("HTTPSamplerProxy")}
-    assert {"claim.report", "claim.status", "evidence.download"} <= labels
+    assert {"claim.report", "claim.status", "claim.status.movil", "evidence.download"} <= labels
     assert "claim.status.ownership" not in labels
+    assert "claim.status.movil.web.token" not in labels
+    mobile = next(
+        sampler
+        for sampler in ET.parse(performance).iter("HTTPSamplerProxy")
+        if sampler.get("testname") == "claim.status.movil"
+    )
+    assert mobile.findtext("stringProp[@name='HTTPSampler.port']") == "${__P(mobilePort)}"
+    assert (
+        mobile.findtext("stringProp[@name='HTTPSampler.path']")
+        == "/movil/v1/siniestros/${claimId}/estado"
+    )
 
 
 def test_generated_consents_have_current_scope_and_runtime_expiry(tmp_path: Path) -> None:
@@ -241,6 +255,7 @@ def test_mortgage_capacity_uses_bounded_concurrency(tmp_path: Path) -> None:
         ("journey.emission.life", 1500, 3000),
         ("journey.dashboard", 150, 300),
         ("journey.claim.status", 150, 300),
+        ("journey.claim.status.movil", 150, 300),
     ],
 )
 def test_each_budget_is_enforced(tmp_path: Path, label: str, p95: int, p99: int) -> None:

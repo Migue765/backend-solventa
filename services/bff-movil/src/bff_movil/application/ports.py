@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from bff_movil.domain.auth import AccessClaims, TokenSet, User
 
@@ -19,3 +20,9 @@ class IdentityGateway(Protocol):
 
 class TokenVerifier(Protocol):
     def verify(self, token: str) -> AccessClaims: ...
+
+
+class SessionStateGateway(Protocol):
+    def session_active(
+        self, session_id: UUID, internal_token: str, correlation_id: str
+    ) -> bool: ...

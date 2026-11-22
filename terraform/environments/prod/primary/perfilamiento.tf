@@ -7,30 +7,32 @@ module "ecr_perfilamiento" {
 }
 
 module "cicd_perfilamiento" {
-  source = "../../../modules/cicd"
+  source                   = "../../../modules/cicd"
+  permissions_boundary_arn = var.permissions_boundary_arns.ci
 
   automatic_triggers_enabled = var.cicd_automatic_triggers_enabled
 
-  name                      = var.name_prefix
-  service_name              = "perfilamiento"
-  service_dir               = "services/perfilamiento"
-  resource_prefix           = "${var.name_prefix}-perfilamiento"
-  github_connection_arn     = module.cicd.connection_arn
-  run_migrations            = true
-  github_repository         = var.github_repository
-  branch_name               = var.release_branch
-  release_tag_patterns      = ["perfilamiento-v*"]
-  require_manual_approval   = true
-  restrict_service_access   = true
-  artifact_force_destroy    = false
-  vpc_id                    = module.network.vpc_id
-  private_subnet_ids        = module.network.private_subnet_ids
-  cluster_name              = module.eks.cluster_name
-  cluster_security_group_id = module.eks.node_security_group_id
-  service_namespace         = "perfilamiento"
-  ecr_repository_arn        = module.ecr_perfilamiento.repository_arn
-  ecr_repository_url        = module.ecr_perfilamiento.repository_url
-  tags                      = local.tags
+  name                       = var.name_prefix
+  service_name               = "perfilamiento"
+  service_dir                = "services/perfilamiento"
+  resource_prefix            = "${var.name_prefix}-perfilamiento"
+  github_connection_arn      = module.cicd.connection_arn
+  run_migrations             = true
+  github_repository          = var.github_repository
+  branch_name                = var.release_branch
+  release_tag_patterns       = ["perfilamiento-v*"]
+  require_manual_approval    = true
+  restrict_service_access    = true
+  artifact_force_destroy     = false
+  vpc_id                     = var.network_context.vpc_id
+  private_subnet_ids         = var.network_context.private_subnet_ids
+  existing_security_group_id = var.network_context.security_group_ids.cicd.perfilamiento
+  cluster_name               = module.eks.cluster_name
+  cluster_security_group_id  = module.eks.node_security_group_id
+  service_namespace          = "perfilamiento"
+  ecr_repository_arn         = module.ecr_perfilamiento.repository_arn
+  ecr_repository_url         = module.ecr_perfilamiento.repository_url
+  tags                       = local.tags
 }
 
 output "perfilamiento_ecr_repository_url" {

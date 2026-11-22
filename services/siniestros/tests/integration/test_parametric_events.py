@@ -1,7 +1,8 @@
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,15 +11,31 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from flask import Flask
 from siniestros.app import create_app
-from siniestros.domain import Config
+from siniestros.domain import Config, Problem
+from siniestros.domain.pagos_parametricos import (
+    CasoPagoParametrico,
+    RespuestaPagoAmbigua,
+    ResultadoProveedorPago,
+)
+from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.infrastructure.notificaciones import PublicadorNotificaciones
+from siniestros.infrastructure.pagos_parametricos import (
+    ProcesadorPagosParametricos,
+    SimuladorPagoParametrico,
+)
 from siniestros.models import (
     AutomaticPaymentCase,
     Claim,
+    NotificationOutbox,
     ParametricDecision,
     ParametricEvent,
+    ParametricPayment,
+    ParametricPaymentAttempt,
+    ParametricPaymentEffect,
     ParametricQueueState,
+    ParametricRule,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from werkzeug.test import TestResponse
 
@@ -27,6 +44,7 @@ INTERNAL_HEADERS = CLIENT_HEADERS
 SOURCE = "ideam"
 SOURCE_HEADERS = {"Authorization": "Bearer fuente-segura", "X-Fuente-ID": SOURCE}
 OCCURRED = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+ALLOWED_NOTIFICATION_FIELDS = {"eventoId", "tipo", "clienteId", "ocurridoEn", "recurso", "estado"}
 
 
 @pytest.fixture
@@ -83,6 +101,9 @@ def rule(
         "ubicacionCodigo": "CO-ANT-001",
         "clienteId": str(uuid4()),
         "polizaId": str(uuid4()),
+        "beneficiarioId": str(uuid4()),
+        "montoIndemnizacion": "250000.00",
+        "moneda": "COP",
         "vigenteDesde": "2026-01-01T00:00:00Z",
         "vigenteHasta": "2027-01-01T00:00:00Z",
     }
@@ -123,6 +144,25 @@ def process(app: Flask, limit: int = 5_000) -> TestResponse:
     )
 
 
+def prepare_payment_case(app: Flask, configured_rule: dict[str, object] | None = None) -> dict:
+    selected_rule = configured_rule or rule()
+    register_rule(app, selected_rule)
+    receive(app, event())
+    assert process(app).get_json() == {"casosValidos": 1, "procesados": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        case = session.scalar(select(AutomaticPaymentCase))
+        assert case is not None
+        return dict(case.payload)
+
+
+def process_payments(app: Flask, limit: int = 10) -> TestResponse:
+    return app.test_client().post(
+        "/internal/v1/pagos-parametricos/procesamiento",
+        headers=INTERNAL_HEADERS,
+        json={"limite": limit},
+    )
+
+
 def test_procesa_evento_con_regla_vigente_y_entrega_caso_a_hu31(app: Flask) -> None:
     configured_rule = rule()
     register_rule(app, configured_rule)
@@ -146,6 +186,8 @@ def test_procesa_evento_con_regla_vigente_y_entrega_caso_a_hu31(app: Flask) -> N
     assert cases[0]["fuente"] == SOURCE
     assert cases[0]["reglaId"] == configured_rule["reglaId"]
     assert cases[0]["reglaVersion"] == 1
+    assert cases[0]["beneficiarioId"] == configured_rule["beneficiarioId"]
+    assert cases[0]["indemnizacion"] == {"monto": "250000.00", "moneda": "COP"}
 
     claim = app.test_client().get(
         f"/v1/siniestros/{cases[0]['siniestroId']}/estado",
@@ -251,6 +293,58 @@ def test_backpressure_no_pierde_aceptados_y_libera_capacidad(tmp_path: Path) -> 
     assert receive(app, second).status_code == 202
 
 
+def test_backpressure_concurrente_de_varios_productores_no_excede_capacidad(
+    tmp_path: Path,
+) -> None:
+    capacity = 10
+    app = configured_app(tmp_path, capacity=capacity)
+    batches = [[event() for _ in range(3)] for _ in range(8)]
+
+    def send(batch: list[dict[str, object]]) -> tuple[int, dict[str, object]]:
+        response = receive(app, *batch)
+        return response.status_code, cast(dict[str, object], response.get_json())
+
+    with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+        results = list(executor.map(send, batches))
+
+    accepted = [batch for batch, (status, _) in zip(batches, results, strict=True) if status == 202]
+    rejected = [batch for batch, (status, _) in zip(batches, results, strict=True) if status == 429]
+    assert len(accepted) + len(rejected) == len(batches)
+    assert 1 <= len(accepted) <= capacity // 3
+    for status, body in results:
+        if status == 202:
+            assert body["aceptados"] == 3 and body["duplicados"] == 0
+        else:
+            assert body["code"] == "backpressure"
+
+    accepted_ids = {item["eventoId"] for batch in accepted for item in batch}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored_ids = set(session.scalars(select(ParametricEvent.evento_id)))
+        state = session.get(ParametricQueueState, 1)
+        assert state is not None
+        assert stored_ids == accepted_ids
+        assert state.pendientes == len(accepted_ids) <= capacity
+
+    for _ in range(len(batches)):
+        if not rejected:
+            break
+        assert process(app).status_code == 200
+        rejected = [batch for batch in rejected if receive(app, *batch).status_code == 429]
+    assert not rejected
+    assert process(app).status_code == 200
+
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricEvent)) == 24
+        pending = session.scalar(
+            select(func.count())
+            .select_from(ParametricEvent)
+            .where(ParametricEvent.estado == "pendiente")
+        )
+        state = session.get(ParametricQueueState, 1)
+        assert pending == 0
+        assert state is not None and state.pendientes == 0
+
+
 def test_fuente_debe_estar_identificada_y_autenticada(app: Flask) -> None:
     missing = app.test_client().post(
         "/internal/v1/eventos-parametricos/recepcion",
@@ -349,14 +443,344 @@ def test_evento_sin_regla_conserva_decision_explicita(app: Flask) -> None:
         assert decision.regla_version is None
 
 
-def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
+def test_hu31_paga_caso_validado_y_actualiza_siniestro(app: Flask) -> None:
+    case = prepare_payment_case(app)
+
+    response = process_payments(app)
+    detail = app.test_client().get(
+        f"/internal/v1/pagos-parametricos/casos/{case['casoId']}",
+        headers=INTERNAL_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "casosIncorporados": 1,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    assert detail.status_code == 200
+    payment = detail.get_json()
+    assert payment["casoId"] == case["casoId"]
+    assert payment["siniestroId"] == case["siniestroId"]
+    assert payment["evento"]["eventoId"] == case["eventoId"]
+    assert payment["regla"] == {
+        "reglaId": case["reglaId"],
+        "version": case["reglaVersion"],
+    }
+    assert payment["estado"] == "confirmado"
+    assert payment["intentos"][0]["estado"] == "confirmado"
+
+    claim = app.test_client().get(
+        f"/v1/siniestros/{case['siniestroId']}/estado",
+        headers={**CLIENT_HEADERS, "X-Cliente-ID": case["clienteId"]},
+    )
+    assert claim.status_code == 200
+    assert claim.get_json()["estado"] == "pagado"
+
+
+def test_hu31_redelivery_no_duplica_pago_efecto_intento_ni_indemnizacion(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+
+    for _ in range(3):
+        assert process_payments(app).get_json() == {
+            "casosIncorporados": 0,
+            "confirmados": 0,
+            "rechazados": 0,
+            "pendientes": 0,
+        }
+
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 1
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentAttempt)) == 1
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "pagado"
+
+
+def test_hu31_no_ordena_pago_de_caso_no_validado(app: Flask) -> None:
+    configured_rule = rule(threshold=100)
+    register_rule(app, configured_rule)
+    receive(app, event(value=80))
+    assert process(app).get_json() == {"casosValidos": 0, "procesados": 1}
+
+    assert process_payments(app).get_json() == {
+        "casosIncorporados": 0,
+        "confirmados": 0,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+
+
+def test_hu31_rechaza_regla_sin_beneficiario_o_monto_valido(app: Flask) -> None:
+    missing_beneficiary = rule()
+    missing_beneficiary.pop("beneficiarioId")
+    invalid_amount = {**rule(), "montoIndemnizacion": "0.00"}
+
+    client = app.test_client()
+    first = client.post(
+        "/internal/v1/reglas-parametricas",
+        headers=INTERNAL_HEADERS,
+        json=missing_beneficiary,
+    )
+    second = client.post(
+        "/internal/v1/reglas-parametricas",
+        headers=INTERNAL_HEADERS,
+        json=invalid_amount,
+    )
+
+    assert first.status_code == second.status_code == 400
+    assert first.get_json()["code"] == second.get_json()["code"] == "solicitud_invalida"
+
+
+def test_hu31_diagnostica_caso_historico_sin_datos_y_no_lo_reintenta(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        stored.payload = {
+            key: value
+            for key, value in stored.payload.items()
+            if key not in {"beneficiarioId", "indemnizacion"}
+        }
+
+    first = process_payments(app)
+    replay = process_payments(app)
+
+    assert first.get_json()["casosIncorporados"] == 0
+    assert replay.get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        assert stored.rechazado_en is not None
+        assert stored.ultimo_error == "datos_financieros_invalidos"
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+
+
+def test_hu31_concilia_ack_perdido_sin_repetir_efecto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    simulated = SimuladorPagoParametrico(repository)
+    clock = [datetime.now(UTC)]
+
+    class LostAcknowledgement:
+        def __init__(self) -> None:
+            self.executions = 0
+
+        def consultar(self, pago_id: UUID, huella: str) -> ResultadoProveedorPago | None:
+            return simulated.consultar(pago_id, huella)
+
+        def ejecutar(
+            self,
+            pago_id: UUID,
+            payment_case: CasoPagoParametrico,
+            huella: str,
+        ) -> ResultadoProveedorPago:
+            self.executions += 1
+            simulated.ejecutar(pago_id, payment_case, huella)
+            raise RespuestaPagoAmbigua("ack_perdido")
+
+    provider = LostAcknowledgement()
+    processor = ProcesadorPagosParametricos(repository, provider, lambda: clock[0])
+
+    assert processor.procesar(10) == {
+        "casosIncorporados": 1,
+        "confirmados": 0,
+        "rechazados": 0,
+        "pendientes": 1,
+    }
+    clock[0] += timedelta(seconds=3)
+    assert processor.procesar(10) == {
+        "casosIncorporados": 0,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+    assert provider.executions == 1
+
+    detail = processor.detalle(UUID(case["casoId"]))
+    assert detail["estado"] == "confirmado"
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert [attempt["estado"] for attempt in attempts] == [
+        "ambiguo",
+        "confirmado",
+    ]
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+
+
+def test_hu31_conserva_rechazo_definitivo_sin_marcar_siniestro_pagado(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    provider = SimuladorPagoParametrico(repository, ResultadoProveedorPago.RECHAZADO)
+    processor = ProcesadorPagosParametricos(repository, provider)
+
+    assert processor.procesar(10)["rechazados"] == 1
+    detail = processor.detalle(UUID(case["casoId"]))
+    assert detail["estado"] == "rechazado"
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert attempts[0]["estado"] == "rechazado"
+    with Session(app.extensions["siniestros_engine"]) as session:
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "aprobado"
+
+
+def test_hu31_failover_cierra_intento_huerfano_y_no_repite_efecto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    repository = app.extensions["siniestros_repository"]
+    clock = [datetime.now(UTC)]
+    crashed = ProcesadorPagosParametricos(repository, reloj=lambda: clock[0])
+    replica = ProcesadorPagosParametricos(repository, reloj=lambda: clock[0])
+
+    assert crashed._incorporar(10) == 1
+    reservation = crashed._reservar()
+    assert reservation is not None
+    payment_id, _, _, stale_token, stale_number = reservation
+
+    assert replica.procesar(10)["confirmados"] == 0
+    clock[0] += timedelta(seconds=31)
+    assert replica.procesar(10) == {
+        "casosIncorporados": 0,
+        "confirmados": 1,
+        "rechazados": 0,
+        "pendientes": 0,
+    }
+
+    with pytest.raises(Problem) as conflict:
+        crashed._finalizar(payment_id, stale_token, stale_number, ResultadoProveedorPago.CONFIRMADO)
+    assert conflict.value.status == 409
+    assert conflict.value.code == "reserva_pago_conflictiva"
+
+    detail = replica.detalle(UUID(case["casoId"]))
+    attempts = cast(list[dict[str, object]], detail["intentos"])
+    assert [(item["numero"], item["estado"], item["codigo"]) for item in attempts] == [
+        (1, "ambiguo", "lease_vencido"),
+        (2, "confirmado", None),
+    ]
+    assert all(item["finalizadoEn"] is not None for item in attempts)
+    with Session(app.extensions["siniestros_engine"]) as session:
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 1
+        orphans = session.scalar(
+            select(func.count())
+            .select_from(ParametricPaymentAttempt)
+            .where(ParametricPaymentAttempt.estado == "en_proceso")
+        )
+        assert orphans == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "code"),
+    [
+        ("beneficiarioId", lambda: str(uuid4()), "beneficiario_invalido"),
+        ("indemnizacion", lambda: {"monto": "999999.00", "moneda": "COP"}, "monto_invalido"),
+        ("indemnizacion", lambda: {"monto": "250000.00", "moneda": "USD"}, "monto_invalido"),
+        ("polizaId", lambda: str(uuid4()), "poliza_invalida"),
+        ("eventoId", lambda: str(uuid4()), "evento_no_asociado"),
+        ("reglaVersion", lambda: 2, "origen_no_validado"),
+    ],
+    ids=["beneficiario", "monto", "moneda", "poliza", "evento", "version"],
+)
+def test_hu31_valida_caso_contra_version_de_regla_persistida(
+    app: Flask,
+    field: str,
+    value: Callable[[], object],
+    code: str,
+) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        stored.payload = {**stored.payload, field: value()}
+
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None
+        assert stored.rechazado_en is not None
+        assert stored.ultimo_error == code
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+        assert session.scalar(select(func.count()).select_from(ParametricPaymentEffect)) == 0
+        claim = session.get(Claim, case["siniestroId"])
+        assert claim is not None and claim.estado == "aprobado"
+
+
+def test_hu31_rechaza_caso_si_la_version_persistida_no_respalda_el_monto(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        stored_rule = session.scalar(
+            select(ParametricRule).where(ParametricRule.regla_id == case["reglaId"])
+        )
+        assert stored_rule is not None
+        stored_rule.monto_indemnizacion = None
+
+    assert process_payments(app).get_json()["casosIncorporados"] == 0
+    with Session(app.extensions["siniestros_engine"]) as session:
+        stored = session.get(AutomaticPaymentCase, case["casoId"])
+        assert stored is not None and stored.ultimo_error == "monto_invalido"
+        assert session.scalar(select(func.count()).select_from(ParametricPayment)) == 0
+
+
+def test_hu31_consulta_por_siniestro_reconstruye_evento_regla_e_intentos(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+    client = app.test_client()
+
+    by_case = client.get(
+        f"/internal/v1/pagos-parametricos/casos/{case['casoId']}",
+        headers=INTERNAL_HEADERS,
+    )
+    by_claim = client.get(
+        f"/internal/v1/pagos-parametricos/siniestros/{case['siniestroId']}",
+        headers=INTERNAL_HEADERS,
+    )
+    missing = client.get(
+        f"/internal/v1/pagos-parametricos/siniestros/{uuid4()}",
+        headers=INTERNAL_HEADERS,
+    )
+    unauthenticated = client.get(f"/internal/v1/pagos-parametricos/siniestros/{uuid4()}")
+
+    assert by_claim.status_code == by_case.status_code == 200
+    assert by_claim.get_json() == by_case.get_json()
+    assert missing.status_code == 404
+    assert missing.get_json()["code"] == "pago_parametrico_no_encontrado"
+    assert unauthenticated.status_code == 401
+    payment = by_claim.get_json()
+    assert payment["evento"] == {
+        "fuente": SOURCE,
+        "eventoId": case["eventoId"],
+        "ocurridoEn": OCCURRED.isoformat().replace("+00:00", "Z"),
+        "recibidoEn": payment["evento"]["recibidoEn"],
+    }
+    assert payment["beneficiarioId"] == case["beneficiarioId"]
+    assert payment["indemnizacion"] == case["indemnizacion"]
+
+    schemas = load_internal_contract()["components"]["schemas"]["PagoParametrico"]
+    assert set(payment) <= set(schemas["properties"])
+    assert set(schemas["required"]) <= set(payment)
+    for field in ("evento", "regla", "indemnizacion"):
+        nested = schemas["properties"][field]
+        assert nested["additionalProperties"] is False
+        assert set(payment[field]) == set(nested["required"]) == set(nested["properties"])
+
+
+def load_internal_contract() -> dict:
     contract_path = (
         Path(__file__).resolve().parents[4]
         / "contracts"
         / "openapi"
         / "eventos-parametricos-internal-v1.yaml"
     )
-    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    return cast(dict, yaml.safe_load(contract_path.read_text(encoding="utf-8")))
+
+
+def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
+    contract = load_internal_contract()
 
     reception = contract["paths"]["/eventos-parametricos/recepcion"]["post"]
     assert reception["responses"]["429"]
@@ -368,3 +792,172 @@ def test_contrato_interno_publica_recepcion_backpressure_y_outbox() -> None:
     )
     assert "/casos-pago-automatico/pendientes" in contract["paths"]
     assert "/casos-pago-automatico/{casoId}/confirmacion" in contract["paths"]
+    assert "/pagos-parametricos/procesamiento" in contract["paths"]
+    assert "/pagos-parametricos/conciliacion" in contract["paths"]
+    assert "/pagos-parametricos/casos/{casoId}" in contract["paths"]
+    assert "/pagos-parametricos/siniestros/{siniestroId}" in contract["paths"]
+    assert "/notificaciones/publicacion" in contract["paths"]
+    required_rule_fields = contract["components"]["schemas"]["Regla"]["required"]
+    assert {"beneficiarioId", "montoIndemnizacion", "moneda"} <= set(required_rule_fields)
+
+
+def test_reporte_de_pagos_parametricos_al_corte_sin_beneficiario(app: Flask) -> None:
+    case = prepare_payment_case(app)
+    assert process_payments(app).status_code == 200
+    creado = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+    with Session(app.extensions["siniestros_engine"]) as session, session.begin():
+        session.execute(
+            update(ParametricPayment).values(
+                creado_en=creado, finalizado_en=creado + timedelta(hours=2)
+            )
+        )
+        session.execute(update(Claim).values(created=(creado - timedelta(hours=1)).isoformat()))
+        session.execute(update(CambioEstadoModel).values(ocurrido_en=creado - timedelta(hours=1)))
+        session.execute(
+            update(CambioEstadoModel)
+            .where(CambioEstadoModel.estado == "pagado")
+            .values(ocurrido_en=creado + timedelta(hours=2))
+        )
+        payment = session.scalars(select(ParametricPayment)).one()
+        payment_id, beneficiary = payment.id, payment.beneficiario_id
+
+    def report(corte: datetime) -> dict:
+        response = app.test_client().post(
+            "/internal/v1/reportes/consulta",
+            headers=INTERNAL_HEADERS,
+            json={"corte": corte.isoformat()},
+        )
+        assert response.status_code == 200
+        return cast(dict, response.get_json())
+
+    pending = report(creado + timedelta(hours=1))
+    confirmed = report(creado + timedelta(hours=3))
+
+    assert pending["pagos"] == [
+        {
+            "id": payment_id,
+            "siniestroId": case["siniestroId"],
+            "estado": "pendiente",
+            "monto": "250000.00",
+            "moneda": "COP",
+            "creadoEn": "2026-11-08T12:00:00Z",
+        }
+    ]
+    assert pending["siniestros"][0]["tipo"] == "parametrico"
+    assert pending["siniestros"][0]["estado"] == "aprobado"
+    assert pending["registros"] == 2
+    assert confirmed["pagos"][0]["estado"] == "confirmado"
+    assert confirmed["siniestros"][0]["estado"] == "pagado"
+    assert beneficiary not in str(confirmed)
+    assert case["clienteId"] not in str(confirmed)
+    assert report(creado - timedelta(minutes=1))["pagos"] == []
+
+
+class EnviadorRegistrado:
+    def __init__(self, fallos: int = 0) -> None:
+        self.fallos = fallos
+        self.eventos: list[dict[str, Any]] = []
+
+    def enviar(self, evento: dict[str, Any]) -> bool:
+        if self.fallos:
+            self.fallos -= 1
+            return False
+        self.eventos.append(evento)
+        return True
+
+
+def publish_notifications(app: Flask, limit: int = 10) -> TestResponse:
+    return app.test_client().post(
+        "/internal/v1/notificaciones/publicacion",
+        headers=INTERNAL_HEADERS,
+        json={"limite": limit},
+    )
+
+
+def test_hu22_publica_cambios_visibles_y_pago_parametrico_sin_duplicar(app: Flask) -> None:
+    sender = EnviadorRegistrado()
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    case = prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+    with Session(app.extensions["siniestros_engine"]) as session:
+        payment = session.scalar(select(ParametricPayment))
+        assert payment is not None
+        payment_id = payment.id
+
+    first = publish_notifications(app)
+    replay = publish_notifications(app)
+
+    assert first.status_code == 200
+    assert first.get_json() == {"publicadas": 3, "fallidas": 0}
+    assert replay.get_json() == {"publicadas": 0, "fallidas": 0}
+    published = {(item["tipo"], item.get("estado")): item for item in sender.eventos}
+    assert set(published) == {
+        ("siniestro_estado_cambiado", "aprobado"),
+        ("siniestro_estado_cambiado", "pagado"),
+        ("pago_parametrico_ejecutado", None),
+    }
+    assert {item["clienteId"] for item in sender.eventos} == {case["clienteId"]}
+    assert published[("siniestro_estado_cambiado", "pagado")]["recurso"] == {
+        "tipo": "siniestro",
+        "id": case["siniestroId"],
+    }
+    assert published[("pago_parametrico_ejecutado", None)]["recurso"] == {
+        "tipo": "pago",
+        "id": payment_id,
+    }
+    assert all(set(item) <= ALLOWED_NOTIFICATION_FIELDS for item in sender.eventos)
+
+
+def test_hu22_reintenta_publicacion_fallida_con_el_mismo_evento(app: Flask) -> None:
+    sender = EnviadorRegistrado(fallos=1)
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    prepare_payment_case(app)
+
+    assert publish_notifications(app).get_json() == {"publicadas": 0, "fallidas": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        pending = session.scalar(select(NotificationOutbox))
+        assert pending is not None
+        assert pending.intentos == 1
+        assert pending.ultimo_error == "publicacion_fallida"
+        event_id = pending.evento_id
+
+    assert publish_notifications(app).get_json() == {"publicadas": 1, "fallidas": 0}
+    assert [item["eventoId"] for item in sender.eventos] == [event_id]
+    with Session(app.extensions["siniestros_engine"]) as session:
+        published = session.get(NotificationOutbox, event_id)
+        assert published is not None and published.publicado_en is not None
+        assert published.intentos == 2
+
+
+def test_hu22_corta_el_ciclo_al_primer_fallo_y_reintenta_al_final(app: Flask) -> None:
+    sender = EnviadorRegistrado(fallos=1)
+    app.extensions["notificaciones_publisher"] = PublicadorNotificaciones(
+        app.extensions["siniestros_repository"].sessions, sender
+    )
+    prepare_payment_case(app)
+    assert process_payments(app).get_json()["confirmados"] == 1
+
+    assert publish_notifications(app).get_json() == {"publicadas": 0, "fallidas": 1}
+    with Session(app.extensions["siniestros_engine"]) as session:
+        attempts = session.scalars(select(NotificationOutbox.intentos)).all()
+        failed = session.scalar(select(NotificationOutbox).where(NotificationOutbox.intentos == 1))
+        assert failed is not None
+        failed_id = failed.evento_id
+    assert sorted(attempts) == [0, 0, 1]
+
+    assert publish_notifications(app).get_json() == {"publicadas": 3, "fallidas": 0}
+    assert sender.eventos[-1]["eventoId"] == failed_id
+
+
+def test_hu22_publicacion_exige_credencial_y_configuracion(app: Flask) -> None:
+    route = "/internal/v1/notificaciones/publicacion"
+    client = app.test_client()
+
+    assert client.post(route, json={"limite": 1}).status_code == 401
+    unconfigured = client.post(route, headers=INTERNAL_HEADERS, json={"limite": 1})
+    assert unconfigured.status_code == 503
+    assert unconfigured.get_json()["code"] == "notificaciones_no_configuradas"

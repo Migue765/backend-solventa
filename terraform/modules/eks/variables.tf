@@ -40,6 +40,26 @@ variable "node_instance_types" {
   default     = ["t3.small"]
 }
 
+variable "additional_node_groups" {
+  description = "Grupos adicionales con la misma red, rol, disco y tamanos; release explicita para transiciones sin actualizar AMI."
+  type = map(object({
+    instance_types  = list(string)
+    release_version = string
+  }))
+  default  = {}
+  nullable = false
+
+  validation {
+    condition = alltrue([
+      for name, group in var.additional_node_groups :
+      name != "default" && can(regex("^[a-z][a-z0-9-]{0,19}$", name)) &&
+      length(group.instance_types) > 0 &&
+      can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]{8}$", group.release_version))
+    ])
+    error_message = "Cada grupo adicional requiere nombre distinto de default, tipos y release explicita."
+  }
+}
+
 variable "node_min_size" {
   description = "Minimo de nodos."
   type        = number
@@ -72,6 +92,18 @@ variable "addons" {
     "coredns"    = null
     "kube-proxy" = null
   }
+}
+
+variable "permissions_boundary_arn" {
+  description = "Boundary existente administrada fuera de este modulo; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
+variable "oidc_provider_tags" {
+  description = "Tags OIDC explicitos; null conserva var.tags. {} requiere provider sin default_tags para quedar sin tags."
+  type        = map(string)
+  default     = null
 }
 
 variable "tags" {

@@ -4,11 +4,11 @@ import subprocess
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
-from threading import Barrier, Lock, Thread, current_thread
+from threading import Barrier, Lock, current_thread
 from time import monotonic, sleep
 from uuid import UUID, uuid4
 
@@ -19,6 +19,7 @@ from alembic.config import Config
 from bff_web.domain.auth import User
 from cotizacion.app import create_app as quote_app
 from cotizacion.application.pagos import ProcesarPagoSimulado
+from cotizacion.application.ports import PolizaEmitida
 from cotizacion.config import Config as QuoteConfig
 from cotizacion.domain.errors import ResultadoPagoAmbiguoError, ServicioPolizasNoDisponibleError
 from cotizacion.domain.pago import PagoSimuladoPendiente
@@ -34,13 +35,11 @@ from cotizacion.infrastructure.persistence.models import (
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
 from cryptography.hazmat.primitives.asymmetric import rsa
-from flask import Flask, request
+from flask import request
 from openapi_schema_validator import OAS31Validator
-from polizas.app import create_app
-from polizas.infrastructure.models import PolizaModel
+from polizas.infrastructure.models import PolizaModel, VersionPolizaModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from werkzeug.serving import make_server
 
 from tests import test_dashboard_flow as dashboard_flow
 from tests.test_dashboard_flow import (
@@ -53,29 +52,13 @@ from tests.test_dashboard_flow import (
     sign_token,
     validate_contract,
 )
+from tests.test_dashboard_flow import (
+    policy_server as policy_server,
+)
 
 keypair = dashboard_flow.keypair
 runtime = dashboard_flow.runtime
 token = dashboard_flow.token
-
-
-@contextmanager
-def policy_server(tmp_path: Path, database_url: str | None = None) -> Iterator[tuple[Flask, str]]:
-    url = database_url or f"sqlite:///{tmp_path / 'polizas.db'}"
-    config = Config(str(ROOT / "services" / "polizas" / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", url)
-    command.upgrade(config, "head")
-    policies = create_app(url, INTERNAL_TOKEN)
-    server = make_server("127.0.0.1", 0, policies, threaded=True)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield policies, f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        policies.extensions["polizas_engine"].dispose()
 
 
 @pytest.fixture
@@ -138,6 +121,51 @@ def assert_one_recovered_policy(runtime: Runtime, subscription: dict, payment: d
         assert policy.pago_id == UUID(payment["id"])
 
 
+@pytest.mark.parametrize(
+    "product", ["automotive", "life", "device-protection", "payment-protection", "mortgage-life"]
+)
+def test_document_and_cancellation_preserve_paid_offer(
+    policy_runtime: Runtime, token: str, product: str
+) -> None:
+    client, quotes, _ = policy_runtime
+    selection, _, payment = create_paid_request(client, token, product)
+    paid_amount = payment["importe"]
+    assert isinstance(paid_amount, dict)
+    paid_value = paid_amount["monto"]
+    assert isinstance(paid_value, str)
+    base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+    offers = client.get(base + "/ofertas", headers=bearer(token)).get_json()["ofertas"]
+    accepted = next(o for o in offers if o["id"] == selection["ofertaId"])
+    policies = quotes.application.extensions["polizas_test_app"]
+    policy_client = policies.test_client()
+    with Session(policies.extensions["polizas_engine"]) as session:
+        policy: PolizaModel = session.scalars(select(PolizaModel)).one()
+        policy_id, customer_id = str(policy.poliza_id), str(policy.cliente_id)
+        version = session.get(VersionPolizaModel, (policy.poliza_id, 1))
+        assert version is not None and version.origen == "emision"
+        assert Decimal(version.prima) == Decimal(paid_value)
+    headers = {"Authorization": f"Bearer {INTERNAL_TOKEN}", "X-Cliente-ID": customer_id}
+    path = f"/v1/clientes/me/polizas/{policy_id}"
+    document = policy_client.get(path + "/documento", headers=headers).get_json()
+    content = document["contenido"]
+    assert Decimal(content["prima"]["monto"]) == Decimal(accepted["prima"]["monto"])
+    assert Decimal(content["prima"]["monto"]) == Decimal(paid_value)
+    assert content["plan"] == "esencial"
+    assert {c["nombre"] for c in content["coberturas"] if c["incluida"]} == {
+        c.split(":", 1)[0] for c in accepted["coberturas"]
+    }
+    downloaded = policy_client.get(
+        path + f"/documentos/{document['documentoId']}/descarga", headers=headers
+    )
+    assert downloaded.status_code == 200
+    assert content["prima"]["monto"] in downloaded.get_data(as_text=True)
+    cancellation = policy_client.get(f"/v1/polizas/{policy_id}/cancelacion", headers=headers)
+    assert cancellation.status_code == 200
+    assert Decimal(cancellation.get_json()["liquidacion"]["primaMensual"]["monto"]) == Decimal(
+        paid_value
+    )
+
+
 def test_automatic_recovery_after_lost_ack_without_another_payment_post(
     automatic_policy_runtime: Runtime,
     token: str,
@@ -146,7 +174,7 @@ def test_automatic_recovery_after_lost_ack_without_another_payment_post(
 ) -> None:
     client, quotes, _ = automatic_policy_runtime
     gateway = quotes.application.extensions["polizas"]
-    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    original: Callable[[dict[str, object], str], PolizaEmitida] = gateway.emitir
     lost = False
     worker_calls: list[str] = []
     payment_posts: list[str] = []
@@ -156,15 +184,15 @@ def test_automatic_recovery_after_lost_ack_without_another_payment_post(
         if request.method == "POST" and request.path.endswith("/pago-simulado"):
             payment_posts.append(request.path)
 
-    def lose_one_ack(evidence: dict[str, object], correlation: str) -> UUID:
+    def lose_one_ack(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         nonlocal lost
-        policy_id = original(evidence, correlation)
+        policy = original(evidence, correlation)
         if current_thread().name == "conciliacion-emision-academica":
             worker_calls.append(str(evidence["pagoId"]))
         elif not lost:
             lost = True
             raise ServicioPolizasNoDisponibleError()
-        return policy_id
+        return policy
 
     monkeypatch.setattr(gateway, "emitir", lose_one_ack)
     started = monotonic()
@@ -203,11 +231,11 @@ def test_worker_and_manual_recovery_converge_without_duplicates(
 ) -> None:
     client, quotes, _ = automatic_policy_runtime
     gateway = quotes.application.extensions["polizas"]
-    original: Callable[[dict[str, object], str], UUID] = gateway.emitir
+    original: Callable[[dict[str, object], str], PolizaEmitida] = gateway.emitir
     gate, lock = Barrier(2), Lock()
     first = True
 
-    def race(evidence: dict[str, object], correlation: str) -> UUID:
+    def race(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         nonlocal first
         with lock:
             fail = first
@@ -257,7 +285,7 @@ def test_restart_resumes_persisted_eligibility_without_new_payment(
     gateway = app.extensions["polizas"]
     original = gateway.emitir
 
-    def lose_ack(evidence: dict[str, object], correlation: str) -> UUID:
+    def lose_ack(evidence: dict[str, object], correlation: str) -> PolizaEmitida:
         original(evidence, correlation)
         raise ServicioPolizasNoDisponibleError()
 
@@ -605,7 +633,7 @@ def test_lost_emission_acknowledgement_retries_without_duplicate_policy(
     policies = quotes.application.extensions["polizas_test_app"]
     original = gateway.emitir
 
-    def lose_response(evidence: dict[str, object], correlation_id: str) -> UUID:
+    def lose_response(evidence: dict[str, object], correlation_id: str) -> PolizaEmitida:
         with factory() as session:
             paid: PagoSimuladoModel = session.scalars(select(PagoSimuladoModel)).one()
             assert str(paid.pago_id) == evidence["pagoId"]

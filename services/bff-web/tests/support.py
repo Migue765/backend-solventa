@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -207,6 +207,51 @@ class FakeIdentity:
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     error: Exception | None = None
     clients: tuple[User, ...] = (CLIENT_PROFILE,)
+
+    def session_active(self, session_id: UUID, correlation_id: str) -> bool:
+        self._record("session_active", session_id, correlation_id)
+        return True
+
+    def request_password_recovery(
+        self, email: str, correlation_id: str, client_address: str | None = None
+    ) -> str:
+        self._record("request_password_recovery", email, correlation_id)
+        raise IdentityUnavailableError()
+
+    def recovery_challenge(
+        self, correlation_id: str, client_address: str | None = None
+    ) -> dict[str, object]:
+        self._record("recovery_challenge", correlation_id)
+        raise IdentityUnavailableError()
+
+    def confirm_password_recovery(
+        self,
+        token: str,
+        encrypted_credential: str,
+        correlation_id: str,
+        client_address: str | None = None,
+    ) -> None:
+        self._record("confirm_password_recovery", token, encrypted_credential, correlation_id)
+        raise IdentityUnavailableError()
+
+    def registration_challenge(self, correlation_id: str) -> dict[str, object]:
+        self._record("registration_challenge", correlation_id)
+        return {
+            "desafioId": "a" * 43,
+            "clavePublica": {
+                "kty": "RSA",
+                "n": "gA" + "A" * 340,
+                "e": "AQAB",
+                "alg": "RSA-OAEP-256",
+                "use": "enc",
+                "kid": "test",
+            },
+            "expiraEn": (NOW + timedelta(seconds=60)).isoformat(),
+        }
+
+    def encrypted_register(self, payload: dict[str, object], correlation_id: str) -> User:
+        self._record("encrypted_register", payload, correlation_id)
+        return CLIENT_PROFILE
 
     def login_challenge(self, correlation_id: str) -> dict[str, object]:
         self._record("login_challenge", correlation_id)

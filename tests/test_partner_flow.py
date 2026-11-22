@@ -42,11 +42,24 @@ def test_portal_preflight_contract_is_owned_by_gateway_not_bff() -> None:
             "allow_headers",
             {"authorization", "content-type", "api-version", "x-correlation-id", "upload-offset"},
         ),
-        ("expose_headers", {"api-version", "x-correlation-id", "retry-after", "location"}),
     ):
         match = re.search(rf"\b{setting}\s*=\s*(\[[^\]]*\])", cors)
         assert match is not None
         assert required.issubset(set(json.loads(match.group(1))))
+    assert re.search(r"\bexpose_headers\s*=\s*var\.cors_expose_headers\b", cors)
+    variables = (
+        Path(__file__).resolve().parents[1]
+        / "terraform"
+        / "modules"
+        / "api-gateway"
+        / "variables.tf"
+    ).read_text(encoding="utf-8")
+    exposed = variables.split('variable "cors_expose_headers" {', 1)[1].split("\n}", 1)[0]
+    default = re.search(r"\bdefault\s*=\s*(\[[^\]]*\])", exposed)
+    assert default is not None
+    assert {"api-version", "x-correlation-id", "retry-after", "location"}.issubset(
+        set(json.loads(default.group(1)))
+    )
     assert "allow_origins     = var.cors_allowed_origins" in cors
     protected = terraform.split('resource "aws_apigatewayv2_route" "v1" {', 1)[1]
     assert 'authorization_type = "JWT"' in protected.split("\n}", 1)[0]

@@ -21,19 +21,60 @@ El bucket cifra con la CMK del entorno, exige TLS, bloquea el acceso publico y t
 versionado sin Object Lock: una version sobrescrita o borrada se recupera durante 7
 dias y despues se elimina definitivamente. El rol IRSA solo permite `s3:PutObject`,
 `s3:GetObject` y `s3:DeleteObject` sobre `evidencias/*`, mas el uso de la CMK; no
-puede borrar versiones. `deployment.yaml` repite el nombre del bucket en
-`SINIESTROS_EVIDENCIAS_BUCKET` y las pruebas de infraestructura lo comparan con
-Terraform.
+puede borrar versiones. `deployment.yaml` recibe `${SINIESTROS_EVIDENCIAS_BUCKET}`:
+Terraform pasa el bucket real a CodeBuild y `deploy.sh` exige esa variable antes
+de invocar AWS o Kubernetes. El nombre no queda anclado a otra cuenta.
 
-No se despliega el trabajador parametrico ni se configura `FUENTES_PARAMETRICAS_JSON`:
-sin fuentes, la recepcion de eventos parametricos responde 401 a cualquier solicitud.
+## Trabajadores parametricos (HU30 y HU31)
+
+Tras confirmar el rollout del API, `deploy/codebuild/deploy.sh` aplica
+`workers-pdb.yaml` y `workers.yaml` con la misma imagen y espera su rollout; si un
+trabajador falla, revierte ese Deployment y el pipeline termina en error:
+
+- `siniestros-eventos-parametricos`: `python -m siniestros.parametric_worker --limit 5000`.
+- `siniestros-pagos-parametricos`: `python -m siniestros.payment_worker --limit 100`.
+
+Cada uno corre con 2 replicas repartidas por nodo y un PodDisruptionBudget con
+`minAvailable: 1`. Es seguro porque la cola usa `FOR UPDATE SKIP LOCKED` y cada pago
+se reserva con un lease de 30 s: si una replica muere a mitad de un pago, otra marca
+el intento huerfano como `ambiguo` (`lease_vencido`), consulta al proveedor y no
+repite el efecto. Los trabajadores no usan el bucket ni la cuenta IRSA, y solo leen
+`INTERNAL_API_TOKEN` y `SINIESTROS_DATABASE_URL` de `siniestros-runtime`.
+
+No se configura `FUENTES_PARAMETRICAS_JSON`: sin fuentes, la recepcion de eventos
+parametricos responde 401 a cualquier solicitud y los trabajadores quedan en espera.
+La prueba de capacidad de 1.000.000 de eventos en 10 minutos y la medicion de
+disponibilidad siguen pendientes de ejecutarse en AWS (ver el README del servicio).
+
+Verificacion:
+
+```bash
+kubectl -n siniestros get deploy,pdb -l app.kubernetes.io/part-of=siniestros
+kubectl -n siniestros get pdb siniestros-eventos-parametricos siniestros-pagos-parametricos
+```
+
+## Publicacion de notificaciones
+
+`deployment.yaml` define `NOTIFICACIONES_SERVICE_URL` y `notificaciones-cronjob.yaml`
+llama cada minuto a `POST /internal/v1/notificaciones/publicacion` con el
+`INTERNAL_API_TOKEN` del Secret (`concurrencyPolicy: Forbid`, 500 eventos por ciclo).
+`deploy/codebuild/deploy.sh` lo aplica solo despues de un rollout correcto. La outbox
+solo contiene cambios posteriores a la migracion `0008_outbox_notificaciones`: no se envian avisos
+historicos. Si Notificaciones aun no esta desplegado, los eventos quedan pendientes y
+se publican cuando responda. Para pausar sin perder eventos:
+
+```bash
+kubectl -n siniestros patch cronjob siniestros-notificaciones -p '{"spec":{"suspend":true}}'
+```
 
 ## Prerrequisitos de la primera entrega
 
 1. Aplicar Terraform desde la rama integrada, incluido el tercer nodo (ver
    `terraform/environments/prod/primary/README.md`). Comprobar el bucket:
-   `terraform output -raw siniestros_evidence_bucket` debe coincidir con
-   `SINIESTROS_EVIDENCIAS_BUCKET` de `deployment.yaml`.
+   `terraform output -raw siniestros_evidence_bucket` debe coincidir con el valor
+   de `SINIESTROS_EVIDENCIAS_BUCKET` del proyecto CodeBuild de despliegue.
+   Para renderizado manual autorizado, exportar ese output junto con `AWS_REGION`
+   e `IMAGE`, sin sustituir el placeholder por un bucket de otra cuenta.
 2. Crear una base PostgreSQL propia y un usuario con permisos solo sobre ella
    mediante el procedimiento de bases aprobado, sin imprimir credenciales ni
    versionarlas. No compartir tablas ni usar SQLite.
@@ -53,13 +94,14 @@ envsubst < serviceaccount.yaml | kubectl apply -f -
 
 5. Iniciar el pipeline a mano, fijando el commit integrado. Los disparadores por tag
    estan pausados (ver [Pausa temporal de CodePipeline](../../../terraform/environments/prod/primary/README.md#pausa-temporal-de-codepipeline))
-   y no hay aprobacion manual: la ejecucion despliega. Seguir build, migracion y
+   y la configuracion nueva exige aprobacion manual antes de Deploy. Revisar la
+   ejecucion y aprobarla solo con prerrequisitos listos. Seguir build, migracion y
    rollout. El pipeline aplica `service.yaml` y `deployment.yaml` y soporta el primer
    Deployment inexistente.
 
 ```bash
 aws codepipeline start-pipeline-execution \
-  --name solventa-prod-siniestros --region us-east-2 \
+  --name solventa-prod-siniestros --profile "$AWS_PROFILE" --region us-east-2 \
   --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha-completo>
 ```
 

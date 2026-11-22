@@ -22,7 +22,7 @@ class Policy(BaseModel):
     tipo: str = Field(min_length=1)
     fechaInicio: date
     fechaFin: date
-    estado: Literal["programada", "vigente", "vencida"]
+    estado: Literal["programada", "vigente", "vencida", "cancelada"]
 
 
 class PolicyList(BaseModel):

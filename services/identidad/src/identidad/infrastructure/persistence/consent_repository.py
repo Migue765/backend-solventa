@@ -62,6 +62,18 @@ class SqlConsentRepository:
                 efectivaEn=now,
                 **scope.model_dump(by_alias=True),
             )
+        try:
+            with self._sessions.begin() as session:
+                self.append(session, consent, correlation_id)
+        except IntegrityError as error:
+            latest = self.get(user_id)
+            if latest is not None and latest.version > version:
+                raise ConsentVersionConflictError() from error
+            raise
+        return consent
+
+    @staticmethod
+    def append(session: Session, consent: Consent, correlation_id: str) -> None:
         content = consent.model_dump(mode="json", by_alias=True)
         event_id = uuid4()
         event_type = {
@@ -69,26 +81,18 @@ class SqlConsentRepository:
             "rechazado": "ConsentimientoRechazado",
             "revocado": "ConsentimientoRevocado",
         }[consent.estado]
-        try:
-            with self._sessions.begin() as session:
-                session.add(
-                    ConsentModel(cliente_id=user_id, version=consent.version, contenido=content)
-                )
-                session.add(
-                    ConsentEventModel(
-                        evento_id=event_id,
-                        tipo=event_type,
-                        contenido={
-                            **content,
-                            "eventoId": str(event_id),
-                            "tipo": event_type,
-                            "correlationId": correlation_id,
-                        },
-                    )
-                )
-        except IntegrityError as error:
-            latest = self.get(user_id)
-            if latest is not None and latest.version > version:
-                raise ConsentVersionConflictError() from error
-            raise
-        return consent
+        session.add(
+            ConsentModel(cliente_id=consent.cliente_id, version=consent.version, contenido=content)
+        )
+        session.add(
+            ConsentEventModel(
+                evento_id=event_id,
+                tipo=event_type,
+                contenido={
+                    **content,
+                    "eventoId": str(event_id),
+                    "tipo": event_type,
+                    "correlationId": correlation_id,
+                },
+            )
+        )

@@ -2,11 +2,29 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Literal, cast
+from urllib.parse import urlsplit
 
+from pydantic import EmailStr, TypeAdapter
+
+from identidad.domain.verification import MOCK_OUTCOMES
 from identidad.infrastructure.passwords import DEFAULT_ITERATIONS
 
 CLIENT_IDS = ("web", "movil")
 SCHEMA_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+RecoveryDeliveryMode = Literal["usuario", "academico_administrado"]
+
+
+def validate_recovery_delivery(mode: str, admin_mailbox: str) -> RecoveryDeliveryMode:
+    if mode not in {"usuario", "academico_administrado"}:
+        raise ValueError("RECOVERY_DELIVERY_MODE no es valido.")
+    if mode == "academico_administrado":
+        if not admin_mailbox.strip():
+            raise ValueError("El modo academico requiere RECOVERY_ADMIN_MAILBOX.")
+        TypeAdapter(EmailStr).validate_python(admin_mailbox)
+    elif admin_mailbox:
+        raise ValueError("RECOVERY_ADMIN_MAILBOX solo aplica al modo academico administrado.")
+    return cast(RecoveryDeliveryMode, mode)
 
 
 @dataclass(frozen=True)
@@ -29,8 +47,41 @@ class Config:
     encrypted_login_enabled: bool = False
     biometric_login_enabled: bool = False
     login_encryption_private_key: str = ""
+    simulated_identity_enabled: bool = False
+    simulated_identity_outcomes: tuple[str, ...] = ("aprobado",)
+    recovery_ses_region: str = ""
+    recovery_email_sender: str = ""
+    recovery_web_url: str = ""
+    recovery_delivery_mode: RecoveryDeliveryMode = "usuario"
+    recovery_admin_mailbox: str = ""
 
     def __post_init__(self) -> None:
+        validate_recovery_delivery(self.recovery_delivery_mode, self.recovery_admin_mailbox)
+        recovery_values = (
+            self.recovery_ses_region,
+            self.recovery_email_sender,
+            self.recovery_web_url,
+        )
+        if any(recovery_values) or self.recovery_delivery_mode == "academico_administrado":
+            if not all(value.strip() for value in recovery_values):
+                raise ValueError("Recuperacion requiere region SES, remitente y URL Web.")
+            parsed = urlsplit(self.recovery_web_url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("RECOVERY_WEB_URL requiere base HTTPS sin query ni fragmento.")
+            if not self.encrypted_login_enabled:
+                raise ValueError("Recuperacion requiere ENCRYPTED_LOGIN_ENABLED.")
+            TypeAdapter(EmailStr).validate_python(self.recovery_email_sender)
+        if not 1 <= len(self.simulated_identity_outcomes) <= 3 or any(
+            value not in MOCK_OUTCOMES for value in self.simulated_identity_outcomes
+        ):
+            raise ValueError("IDENTIDAD_SIMULADA_RESULTADOS requiere de 1 a 3 resultados validos.")
         if not self.database_url.strip():
             raise ValueError("DATABASE_URL no puede estar vacía.")
         if not self.jwt_private_key.strip():
@@ -55,7 +106,20 @@ class Config:
 
     @classmethod
     def from_environment(cls) -> "Config":
+        admin_mailbox = os.getenv("RECOVERY_ADMIN_MAILBOX", "").strip()
         return cls(
+            recovery_delivery_mode=validate_recovery_delivery(
+                os.getenv("RECOVERY_DELIVERY_MODE", "usuario").strip(), admin_mailbox
+            ),
+            recovery_admin_mailbox=admin_mailbox,
+            recovery_ses_region=os.getenv("RECOVERY_SES_REGION", "").strip(),
+            recovery_email_sender=os.getenv("RECOVERY_EMAIL_SENDER", "").strip(),
+            recovery_web_url=os.getenv("RECOVERY_WEB_URL", "").strip(),
+            simulated_identity_enabled=_boolean("IDENTIDAD_SIMULADA_ENABLED"),
+            simulated_identity_outcomes=tuple(
+                item.strip()
+                for item in os.getenv("IDENTIDAD_SIMULADA_RESULTADOS", "aprobado").split(",")
+            ),
             biometric_login_enabled=_boolean("BIOMETRIC_LOGIN_ENABLED"),
             encrypted_login_enabled=_boolean("ENCRYPTED_LOGIN_ENABLED"),
             login_encryption_private_key=normalize_pem(

@@ -21,6 +21,16 @@ variable "run_migrations" {
   default     = true
 }
 
+variable "siniestros_evidence_bucket" {
+  description = "Bucket real de evidencias para renderizar Siniestros en esta cuenta."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.service_name != "siniestros" || try(length(trimspace(var.siniestros_evidence_bucket)) > 0, false)
+    error_message = "El pipeline de Siniestros requiere su bucket de evidencias."
+  }
+}
+
 variable "resource_prefix" {
   description = "Prefijo de bucket, conexion, roles y SG (default: name). Usar uno distinto en la segunda instancia del modulo para evitar colisiones."
   type        = string
@@ -31,6 +41,16 @@ variable "github_connection_arn" {
   description = "Conexion con GitHub ya autorizada para reutilizar; si es null se crea una nueva."
   type        = string
   default     = null
+}
+
+variable "create_github_connection" {
+  description = "Seleccion explicita si el ARN externo aun es desconocido en plan; null conserva el contrato anterior."
+  type        = bool
+  default     = null
+  validation {
+    condition     = var.create_github_connection != false || var.github_connection_arn != null
+    error_message = "Al desactivar la creacion debe proporcionarse una conexion GitHub."
+  }
 }
 
 variable "github_repository" {
@@ -62,6 +82,12 @@ variable "require_manual_approval" {
   default     = false
 }
 
+variable "permissions_boundary_arn" {
+  description = "Boundary existente administrada fuera de este modulo; null conserva consumidores anteriores."
+  type        = string
+  default     = null
+}
+
 variable "restrict_service_access" {
   description = "Acota trust CodeBuild, conexion GitHub, ENI y salida TCP 443/80. false conserva los permisos y la red de las instancias existentes."
   type        = bool
@@ -77,6 +103,12 @@ variable "artifact_force_destroy" {
 variable "vpc_id" {
   description = "VPC del cluster (CodeBuild de despliegue corre dentro para alcanzar el API server privado)."
   type        = string
+}
+
+variable "existing_security_group_id" {
+  description = "SG precreado en la fase de red; null conserva la creacion legacy."
+  type        = string
+  default     = null
 }
 
 variable "private_subnet_ids" {

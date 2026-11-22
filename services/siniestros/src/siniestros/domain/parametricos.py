@@ -47,6 +47,14 @@ class ReglaParametrica(EntradaParametrica):
     ubicacionCodigo: TextoCorto | None = None
     clienteId: UUID
     polizaId: UUID
+    beneficiarioId: UUID
+    montoIndemnizacion: Decimal = Field(
+        gt=0,
+        allow_inf_nan=False,
+        max_digits=18,
+        decimal_places=2,
+    )
+    moneda: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
     vigenteDesde: Timestamp
     vigenteHasta: Timestamp | None = None
 

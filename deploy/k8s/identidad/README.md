@@ -1,5 +1,9 @@
 # Manifiestos Kubernetes - identidad
 
+Para una cuenta vacia usar [ARRANQUE-VACIO.md](../ARRANQUE-VACIO.md):
+bases/Secrets nuevos y addons antes de consumidores. No copiar datos o secretos
+del origen ni ejecutar sus procedimientos de mantenimiento durante el arranque.
+
 Servicio del contexto *Identidad y Cliente*: dueno de los usuarios, verifica credenciales y emite los JWT (RS256).
 Los BFF le delegan la autenticacion por el DNS interno `http://identidad.identidad.svc.cluster.local:8080`.
 Hacia internet solo se publica `/.well-known/openid-configuration` y `/.well-known/jwks.json` (a traves del API
@@ -74,33 +78,82 @@ Si el discovery no responde o su `issuer` no coincide con `$JWT_ISSUER`, el auth
 
 ## Esquema de base de datos
 
-`DB_SCHEMA=identidad`: las tablas viven en un esquema propio de `solventa_prod` (un esquema aislado por dominio).
-La migracion debe crearlo (`CREATE SCHEMA IF NOT EXISTS identidad`). Si no lo hace, crearlo una vez a mano con las
-credenciales master antes del primer Job de migracion.
+`DB_SCHEMA=identidad`: las tablas viven en un esquema propio en la base destino.
+El Job crea el esquema si falta (`CREATE SCHEMA IF NOT EXISTS identidad`).
+El operador autorizado debe preparar propiedad y permisos del usuario de aplicacion
+antes del Job. Ante permisos insuficientes, detener y corregir esa preparacion;
+no sustituir el DSN runtime por credenciales master.
 
 ## Secreto `identidad-config`
 
-Lee tres valores de Secrets Manager (el rol IRSA del servicio ya puede leerlos):
+Requiere tres valores nuevos del destino, entregados por el operador autorizado:
 
-- Base: `terraform output -raw db_secret_arn` (credenciales master generadas por RDS).
+- Base: DSN `postgresql+psycopg://` de un usuario de aplicacion, con TLS/CA revisados;
+  no usar las credenciales master generadas por RDS como usuario runtime.
 - Redis: `terraform output -raw redis_secret_arn` (JSON con `auth_token`, `host`, `port` y `url`; `url` ya es
   `rediss://:<token>@<endpoint>:6379/0`). Se usa para el limitador de intentos de login.
 - Clave JWT: `terraform output -raw jwt_key_secret_arn` (clave privada RSA en formato PEM).
 
 ```bash
-cd terraform/environments/prod/primary
-get() { aws secretsmanager get-secret-value --secret-id "$1" --query SecretString --output text \
-  --profile tesis --region us-east-2; }
-DB_SECRET=$(get "$(terraform output -raw db_secret_arn)")
-DB_USER=$(echo "$DB_SECRET" | jq -r .username)
-DB_PASS=$(echo "$DB_SECRET" | jq -r .password | jq -sRr @uri)
-REDIS_URL=$(get "$(terraform output -raw redis_secret_arn)" | jq -r .url)
-
-kubectl -n identidad create secret generic identidad-config \
-  --from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@$(terraform output -raw db_endpoint):5432/solventa_prod" \
-  --from-literal=REDIS_URL="${REDIS_URL}" \
-  --from-file=JWT_PRIVATE_KEY=<(get "$(terraform output -raw jwt_key_secret_arn)")
+set -euo pipefail
+: "${CONTEXT:?}" "${DATABASE_URL_FILE:?}" "${REDIS_URL_FILE:?}" "${JWT_PRIVATE_KEY_FILE:?}"
+kubectl --context "$CONTEXT" -n identidad create secret generic identidad-config \
+  --from-file=DATABASE_URL="$DATABASE_URL_FILE" \
+  --from-file=REDIS_URL="$REDIS_URL_FILE" \
+  --from-file=JWT_PRIVATE_KEY="$JWT_PRIVATE_KEY_FILE" --dry-run=client -o yaml |
+  kubectl --context "$CONTEXT" -n identidad apply -f -
 ```
+
+Los archivos nuevos viven fuera de Git con acceso restringido; no imprimir su
+contenido, el YAML ni habilitar `set -x`. JWE usa un Secret independiente, no
+esta clave JWT; prepararlo y verificarlo segun `docs/operacion-login-cifrado.md`.
+
+### Recuperacion academica administrada (preparacion, sin aplicar)
+
+El Deployment referencia opcionalmente cinco nuevas claves de `identidad-config`:
+`RECOVERY_SES_REGION`, `RECOVERY_EMAIL_SENDER`, `RECOVERY_WEB_URL`,
+`RECOVERY_DELIVERY_MODE` y `RECOVERY_ADMIN_MAILBOX`. No crea ni actualiza el Secret,
+ni habilita el login cifrado por si solo. La ausencia de claves mantiene el modo
+normal y transporte no configurado; no hay fallback academico implicito.
+
+Para la modalidad elegida, configurar `RECOVERY_DELIVERY_MODE=academico_administrado`
+y el administrador aprobado, junto a region, remitente verificado y URL base HTTPS.
+Todos los enlaces de cuentas existentes van solo a ese administrador verificado.
+Permite SES sandbox pero no otros destinatarios: el buzon administra recuperaciones,
+no demuestra que el usuario posea su correo. Contrato/autoridad y controles:
+`services/identidad/README.md` y `contracts/openapi/recuperacion-contrasena-v1.yaml`.
+
+`recovery-ses-policy.json.tftpl` es una plantilla nativa Terraform, **sin recursos ni
+aplicacion/import**. Renderizarla con `templatefile` pasando:
+`identity_role_arn`, `ses_region`, `sender_identity_arn`, `admin_identity_arn`,
+`sender` y `admin_mailbox`. Los dos ARN SES deben corresponder a las identidades
+verificadas de esos buzones, en la cuenta/region autorizadas; si coinciden se deduplican.
+La plantilla produce tres Allow: GetAccount, GetEmailIdentity y SendEmail.
+Todos requieren PrincipalArn exacto de Identidad y region; SendEmail solo admite
+FromAddress elegido y TODOS los Recipients iguales al administrador, no una lista abierta.
+
+El propietario de la boundary application externa debe preservar su politica
+completa e incorporar esos tres statements en su fuente de verdad actual. Usar la
+misma politica en el inline del rol Identidad. No crear una boundary nueva, importar
+la compartida, ampliar otros roles ni copiar un baseline privado al repositorio.
+Estos archivos no gestionan la propiedad actual de IAM ni acreditan permisos efectivos.
+
+Orden minimo para una habilitacion **autorizada posteriormente**:
+
+1. Revisar identidades SES verificadas, envio habilitado y permisos efectivos del
+   IRSA de Identidad (boundary + inline), incluidos rechazo a otro rol/destinatario.
+2. Construir imagen nueva de Identidad que incluya boto3 del manifiesto; no instalar
+   dependencias ad hoc en pods existentes.
+3. Aplicar migracion `0010` con migrador existente y permisos runtime apropiados,
+   sin cambiar historial ni usar credenciales master.
+4. Preparar esas cinco claves sin eliminar DATABASE_URL/REDIS_URL/JWT_PRIVATE_KEY
+   del Secret existente; habilitar JWE en Identidad/BFF con la clave independiente
+   y Redis ya preparados, versiones BFF/Web compatibles y token interno.
+5. Configurar IP de cliente confiable en ingress/BFF, abrir root Web con base path
+   y comprobar recorrido correo admin/enlace/JWE/password/sesion/persistencia real.
+
+Mantener modo `usuario` fuera de sandbox para recuperacion normal. Las pruebas
+offline con SES Stubber no demuestran envio real; Ready o ping no bastan.
 
 La contrasena de RDS rota y el Secret queda desactualizado: hay que volver a sincronizarlo (o usar External Secrets).
 El auth token de Redis no rota solo.

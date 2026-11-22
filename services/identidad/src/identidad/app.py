@@ -10,10 +10,22 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from identidad.api import advisors, biometrics, consents, health, oauth, users, wellknown
+from identidad.api import (
+    advisors,
+    biometrics,
+    consents,
+    health,
+    oauth,
+    password_recovery,
+    session_state,
+    users,
+    verification,
+    wellknown,
+)
 from identidad.api.schemas import RegisterRequest
 from identidad.application.biometric_service import BiometricService
-from identidad.application.ports import LoginAttemptLimiter
+from identidad.application.password_recovery_service import PasswordRecoveryService
+from identidad.application.ports import LoginAttemptLimiter, RecoveryMailSender
 from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
 from identidad.config import Config
@@ -28,17 +40,23 @@ from identidad.infrastructure.passwords import hash_password
 from identidad.infrastructure.persistence.biometric_repository import SqlBiometricRepository
 from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.infrastructure.persistence.database import create_sessions
+from identidad.infrastructure.persistence.password_recovery_repository import (
+    SqlPasswordRecoveryRepository,
+)
 from identidad.infrastructure.persistence.refresh_token_repository import (
     SqlRefreshTokenRepository,
 )
 from identidad.infrastructure.persistence.user_repository import SqlUserRepository
+from identidad.infrastructure.persistence.verification_repository import SqlVerificationRepository
 from identidad.infrastructure.redis_attempt_limiter import RedisLoginAttemptLimiter
+from identidad.infrastructure.ses_recovery_mail import SesRecoveryMailSender
 from identidad.problems import problem_response
 
 
 def create_app(
     config: Config | None = None,
     clock: Callable[[], datetime] | None = None,
+    recovery_mail_sender: RecoveryMailSender | None = None,
 ) -> Flask:
     active_config = config or Config.from_environment()
     active_clock = clock or (lambda: datetime.now(UTC))
@@ -83,8 +101,12 @@ def create_app(
 
     app.extensions["identidad_config"] = active_config
     app.extensions["clock"] = active_clock
+    app.extensions["recovery_limiter"] = attempt_limiter
     app.extensions["consent_repository"] = SqlConsentRepository(sessions)
     app.extensions["user_repository"] = user_repository
+    app.extensions["verification_repository"] = SqlVerificationRepository(
+        sessions, active_config.simulated_identity_outcomes
+    )
     app.extensions["jwt_issuer"] = jwt_issuer
     app.extensions["token_service"] = TokenService(
         users=user_repository,
@@ -101,6 +123,25 @@ def create_app(
         attempt_limiter=attempt_limiter,
         clock=active_clock,
         password_hasher=partial(hash_password, iterations=active_config.password_iterations),
+    )
+    app.extensions["password_recovery_service"] = PasswordRecoveryService(
+        user_repository,
+        SqlPasswordRecoveryRepository(sessions),
+        recovery_mail_sender
+        or (
+            SesRecoveryMailSender(
+                active_config.recovery_ses_region,
+                active_config.recovery_email_sender,
+                active_config.recovery_web_url,
+                delivery_mode=active_config.recovery_delivery_mode,
+                admin_mailbox=active_config.recovery_admin_mailbox,
+            )
+            if active_config.recovery_ses_region
+            else None
+        ),
+        attempt_limiter,
+        active_clock,
+        partial(hash_password, iterations=active_config.password_iterations),
     )
     if active_config.biometric_login_enabled:
         app.extensions["biometric_service"] = BiometricService(
@@ -126,6 +167,9 @@ def create_app(
     app.register_blueprint(consents.bp)
     app.register_blueprint(advisors.bp)
     app.register_blueprint(biometrics.bp)
+    app.register_blueprint(session_state.bp)
+    app.register_blueprint(verification.bp)
+    app.register_blueprint(password_recovery.bp)
 
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)
@@ -179,8 +223,16 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
-        if request.path.startswith(("/oauth/", "/v1/biometria/")):
+        if request.path.startswith(
+            (
+                "/oauth/",
+                "/v1/biometria/",
+                "/v1/verificaciones-identidad",
+                "/v1/recuperacion-contrasena",
+            )
+        ):
             response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         return response
 
     @app.errorhandler(BadRequest)

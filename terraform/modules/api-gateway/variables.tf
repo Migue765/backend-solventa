@@ -8,6 +8,15 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "existing_security_group_ids" {
+  description = "Par ALB/VPCLink precreado en red; null conserva creacion legacy."
+  type = object({
+    alb      = string
+    vpc_link = string
+  })
+  default = null
+}
+
 variable "private_subnet_ids" {
   description = "Subnets privadas (>= 2 AZ) para el ALB interno y el VPC Link."
   type        = list(string)
@@ -135,4 +144,17 @@ variable "cors_allowed_origins" {
     "https://jazmincorandes.github.io",
     "http://localhost:4200",
   ]
+}
+
+variable "cors_expose_headers" {
+  description = "Cabeceras de respuesta accesibles al navegador."
+  type        = list(string)
+  default     = ["x-correlation-id", "retry-after", "date", "api-version", "location"]
+}
+
+variable "enable_jwt_routes" {
+  description = "False durante arranque vacio: no crea authorizer ni rutas protegidas; nunca las abre sin JWT."
+  type        = bool
+  default     = true
+  nullable    = false
 }

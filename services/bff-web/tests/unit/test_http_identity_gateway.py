@@ -1,5 +1,6 @@
 import socket
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
@@ -8,6 +9,123 @@ from bff_web.infrastructure.jwt_verifier import http_jwks_fetcher
 from support import ACCESS_TTL, REFRESH_TTL, USER, IdentityServer, KeyPair, token_response
 
 CID = "7a7f3a9e-1c1e-4f4a-9a53-0b6b2c5f9d11"
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_session_state_uses_internal_auth_and_preserves_revocation(
+    identity_server: IdentityServer, active: bool
+) -> None:
+    session_id = uuid4()
+    identity_server.respond(
+        "GET",
+        f"/v1/sesiones/{session_id}",
+        200,
+        {"sesionId": str(session_id), "activa": active},
+    )
+    gateway = HttpIdentityGateway(identity_server.url, internal_api_token="test-internal")
+    assert gateway.session_active(session_id, CID) is active
+    assert identity_server.requests[0]["headers"]["Authorization"] == "Bearer test-internal"
+
+
+@pytest.mark.parametrize(
+    "payload", [{"sesionId": "wrong", "activa": True}, {"activa": True}, {"activa": "true"}]
+)
+def test_session_state_rejects_mismatched_or_malformed_response(
+    identity_server: IdentityServer, payload: dict[str, object]
+) -> None:
+    session_id = uuid4()
+    identity_server.respond("GET", f"/v1/sesiones/{session_id}", 200, payload)
+    with pytest.raises(IdentityUnavailableError):
+        HttpIdentityGateway(identity_server.url, internal_api_token="test").session_active(
+            session_id, CID
+        )
+
+
+@pytest.mark.parametrize("operation", ["request", "confirm"])
+def test_recovery_rejects_unexpected_upstream_success_status(
+    identity_server: IdentityServer, operation: str
+) -> None:
+    path = "/v1/recuperacion-contrasena" + ("/confirmar" if operation == "confirm" else "")
+    identity_server.respond(
+        "POST",
+        path,
+        200,
+        {"mensaje": "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion."},
+    )
+    gateway = HttpIdentityGateway(identity_server.url)
+    with pytest.raises(IdentityUnavailableError):
+        if operation == "request":
+            gateway.request_password_recovery("test@example.com", CID)
+        else:
+            gateway.confirm_password_recovery("a" * 64, "test-jwe", CID)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"mensaje": "unknown"},
+        {"mensaje": None},
+        {
+            "mensaje": "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.",
+            "token": "must-not-be-exposed",
+        },
+    ],
+)
+def test_recovery_rejects_unknown_or_extra_fields_from_identity(
+    identity_server: IdentityServer, payload: dict[str, object]
+) -> None:
+    identity_server.respond("POST", "/v1/recuperacion-contrasena", 202, payload)
+    with pytest.raises(IdentityUnavailableError):
+        HttpIdentityGateway(identity_server.url).request_password_recovery("test@example.com", CID)
+
+
+def registration_request() -> dict[str, object]:
+    return {
+        "nombre": "Ana",
+        "correo": "ana@solventa.co",
+        "credencialCifrada": "test-jwe",
+        "tipoDocumento": "passport",
+        "numeroDocumento": "test123",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "2010-01-01",
+        "consentimiento": {"autorizado": False, "versionTerminos": "1.0"},
+    }
+
+
+@pytest.mark.parametrize("missing", [None, "numeroDocumento", "telefono"])
+def test_encrypted_registration_preserves_fields_and_rejects_incomplete_confirmation(
+    identity_server: IdentityServer, missing: str | None
+) -> None:
+    data = {
+        "id": str(USER.user_id),
+        "nombre": "Ana",
+        "correo": "ana@solventa.co",
+        "rol": "cliente",
+        "tipoDocumento": "passport",
+        "numeroDocumento": "TEST123",
+        "telefono": "+573001234567",
+        "fechaNacimiento": "2010-01-01",
+    }
+    if missing is not None:
+        data.pop(missing)
+    identity_server.respond("POST", "/v1/usuarios", 201, {"usuario": data})
+    gateway = HttpIdentityGateway(identity_server.url)
+    if missing is not None:
+        with pytest.raises(IdentityUnavailableError):
+            gateway.encrypted_register(registration_request(), CID)
+    else:
+        user = gateway.encrypted_register(registration_request(), CID)
+        assert user.identification == "TEST123" and user.role == "cliente"
+    assert identity_server.requests[0]["body"] == registration_request()
+
+
+def test_registration_document_conflict_is_not_hidden_as_an_outage(
+    identity_server: IdentityServer,
+) -> None:
+    identity_server.respond("POST", "/v1/usuarios", 409, {"code": "documento_ya_registrado"})
+    with pytest.raises(IdentityRejectedError) as raised:
+        HttpIdentityGateway(identity_server.url).encrypted_register(registration_request(), CID)
+    assert raised.value.status == 409 and raised.value.code == "documento_ya_registrado"
 
 
 def closed_port_url() -> str:

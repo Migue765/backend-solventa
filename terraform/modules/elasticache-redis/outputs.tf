@@ -15,5 +15,5 @@ output "secret_arn" {
 
 output "security_group_id" {
   description = "SG de Redis."
-  value       = aws_security_group.redis.id
+  value       = local.security_group_id
 }

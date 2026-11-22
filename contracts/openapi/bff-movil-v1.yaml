@@ -9,12 +9,128 @@ tags:
   - name: Usuarios
   - name: Sesiones
   - name: Notificaciones
+  - name: Polizas
   - name: Asistencias
+  - name: Polizas
+  - name: Renovaciones
 paths:
+  /v1/verificaciones-identidad:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
+  /v1/verificaciones-identidad/{verificacionId}:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}"
+  /v1/verificaciones-identidad/{verificacionId}/intentos:
+    $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad~1{verificacionId}~1intentos"
   /v1/prestadores/consulta:
     $ref: "./asistencias-v1.yaml#/paths/~1prestadores~1consulta"
   /v1/asistencias:
     $ref: "./asistencias-v1.yaml#/paths/~1asistencias"
+  /v1/polizas/{polizaId}/renovacion:
+    get:
+      tags: [Renovaciones]
+      summary: Consulta la elegibilidad y las condiciones de renovacion de una poliza
+      operationId: consultarRenovacionPoliza
+      description: |
+        HU39 (SOL-320). Expone en el canal movil la renovacion central de Polizas (SOL-317);
+        el BFF no evalua reglas propias. Requiere un access token de cliente con alcance
+        `cliente`; el cliente se deriva del JWT y la operacion no admite query ni cuerpo.
+        Si la poliza es renovable devuelve la nueva vigencia contigua, coberturas, prima,
+        condiciones y `condicionesHash`, que se deben mostrar antes de la aceptacion.
+        `ultimoIntento` permite recuperar un resultado pendiente o rechazado.
+        Una poliza inexistente o de otro cliente responde el mismo 404.
+      parameters:
+        - $ref: "./bff-web-v1.yaml#/components/parameters/PolizaId"
+      responses:
+        "200":
+          description: Elegibilidad y oferta de renovacion
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/ElegibilidadRenovacion"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: El token no corresponde a un cliente con alcance `cliente`
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "404":
+          $ref: "./bff-web-v1.yaml#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}/renovaciones:
+    post:
+      tags: [Renovaciones]
+      summary: Confirma la renovacion aceptada y procesa su pago simulado
+      operationId: renovarPoliza
+      description: |
+        HU39 (SOL-320). Delega en la renovacion central de Polizas (SOL-317). Exige
+        `aceptaCondiciones: true` y el `condicionesHash` de la oferta consultada; si las
+        condiciones cambiaron responde 409 `condiciones_cambiaron`. La nueva vigencia solo
+        se registra con el pago confirmado; un pago rechazado conserva la poliza original.
+        201 = intento nuevo con resultado definitivo (`renovada` o `rechazada`);
+        200 = reintento con la misma Idempotency-Key, sin nuevo cobro;
+        202 = pago ambiguo, la renovacion queda `pendiente` con su `id` identificable.
+        Repetir con la misma clave recupera el mismo intento y nunca genera un segundo cobro.
+        Otra clave para el mismo periodo responde 409 `renovacion_en_curso` con `renovacionId`.
+        Un 503 no confirma ni descarta la renovacion: se debe reintentar con la misma clave.
+      parameters:
+        - $ref: "./bff-web-v1.yaml#/components/parameters/PolizaId"
+        - $ref: "./bff-web-v1.yaml#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./bff-web-v1.yaml#/components/schemas/SolicitudRenovacion"
+      responses:
+        "200":
+          description: Reintento con la misma clave; devuelve el resultado registrado
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "201":
+          description: Renovacion registrada como renovada o rechazada
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "202":
+          description: Pago ambiguo; la renovacion queda pendiente de conciliacion
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "./bff-web-v1.yaml#/components/schemas/RenovacionPoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: El token no corresponde a un cliente con alcance `cliente`
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problema"
+        "404":
+          $ref: "./bff-web-v1.yaml#/components/responses/NoEncontrado"
+        "409":
+          $ref: "./bff-web-v1.yaml#/components/responses/Conflicto"
+        "422":
+          $ref: "./bff-web-v1.yaml#/components/responses/ReglaNegocio"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/notificaciones:
     $ref: "./notificaciones-v1.yaml#/paths/~1notificaciones"
   /v1/notificaciones/preferencias:
@@ -51,6 +167,63 @@ paths:
     $ref: "./biometria-v1.yaml#/paths/~1credenciales~1{credencialId}"
   /v1/sesiones/biometria:
     $ref: "./biometria-v1.yaml#/paths/~1sesiones"
+  /v1/polizas:
+    get:
+      tags: [Polizas]
+      summary: Lista las pólizas del cliente autenticado
+      description: >-
+        Devuelve solo las pólizas de la identidad del JWT, ordenadas por emisión
+        descendente. Requiere rol y scope `cliente` y una sesión activa (claim `sid`);
+        una sesión cerrada o vencida responde 401 `sesion_invalida`. Sin pólizas
+        responde 200 con lista vacía. No admite parámetros ni cuerpo.
+      operationId: listarPolizas
+      responses:
+        "200":
+          description: Pólizas del cliente (puede ser vacía)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListaPolizas"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}:
+    get:
+      tags: [Polizas]
+      summary: Consulta el detalle actual de una póliza del cliente
+      description: >-
+        Recalcula estado y condiciones vigentes en cada consulta. Una póliza ajena
+        responde igual que una inexistente (404) para no confirmar su existencia.
+      operationId: consultarPoliza
+      parameters:
+        - name: polizaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Detalle vigente de la póliza
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetallePoliza"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          $ref: "#/components/responses/AccesoDenegado"
+        "404":
+          $ref: "#/components/responses/PolizaNoEncontrada"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -176,6 +349,12 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/polizas/{polizaId}/modificacion:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificacion"
+  /v1/polizas/{polizaId}/modificaciones/simulacion:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificaciones~1simulacion"
+  /v1/polizas/{polizaId}/modificaciones:
+    $ref: "./modificacion-poliza-movil-v1.yaml#/paths/~1polizas~1{polizaId}~1modificaciones"
 components:
   securitySchemes:
     bearerAuth:
@@ -215,6 +394,18 @@ components:
             $ref: "#/components/schemas/Problema"
     Conflicto:
       description: Ya existe una cuenta con ese correo
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    AccesoDenegado:
+      description: El token no corresponde a un cliente del canal móvil
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    PolizaNoEncontrada:
+      description: La póliza no existe o no pertenece al cliente
       content:
         application/problem+json:
           schema:
@@ -344,6 +535,124 @@ components:
         refreshToken:
           type: string
           maxLength: 2048
+    ResumenPoliza:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PolizaBase"
+    PolizaBase:
+      type: object
+      required: [id, numero, producto, estado, vigencia, coberturaPrincipal, simulada]
+      properties:
+        id:
+          type: string
+          format: uuid
+        numero:
+          type: string
+          example: POL-20260115-1A2B3C4D
+        producto:
+          type: object
+          additionalProperties: false
+          required: [tipo, nombre]
+          properties:
+            tipo:
+              type: string
+            nombre:
+              type: string
+        estado:
+          type: string
+          enum: [programada, vigente, vencida]
+        vigencia:
+          type: object
+          additionalProperties: false
+          required: [inicio, fin]
+          properties:
+            inicio:
+              type: string
+              format: date
+            fin:
+              type: string
+              format: date
+        coberturaPrincipal:
+          type: object
+          additionalProperties: false
+          required: [codigo, nombre]
+          properties:
+            codigo:
+              type: string
+            nombre:
+              type: string
+        simulada:
+          type: boolean
+          description: Póliza académica, sin efecto contractual real.
+    ListaPolizas:
+      type: object
+      additionalProperties: false
+      required: [polizas]
+      properties:
+        polizas:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResumenPoliza"
+    CoberturaPoliza:
+      type: object
+      additionalProperties: false
+      required: [codigo, nombre, descripcion, opcional, incluida]
+      properties:
+        codigo:
+          type: string
+        nombre:
+          type: string
+        descripcion:
+          type: string
+        opcional:
+          type: boolean
+        incluida:
+          type: boolean
+    DetallePoliza:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/PolizaBase"
+        - type: object
+          required:
+            [suscripcionId, emitidaEn, version, plan, coberturas, prima, condiciones, consultadaEn]
+          properties:
+            suscripcionId:
+              type: string
+              format: uuid
+            emitidaEn:
+              type: string
+              format: date-time
+            version:
+              type: [integer, "null"]
+              description: Versión vigente de condiciones; null en productos por fechas.
+            plan:
+              type: [string, "null"]
+            coberturas:
+              type: array
+              items:
+                $ref: "#/components/schemas/CoberturaPoliza"
+            prima:
+              oneOf:
+                - type: "null"
+                - type: object
+                  additionalProperties: false
+                  required: [monto, moneda, periodicidad]
+                  properties:
+                    monto:
+                      type: string
+                      description: Decimal serializado como texto.
+                    moneda:
+                      type: string
+                    periodicidad:
+                      type: string
+                      enum: [mensual]
+            condiciones:
+              type: array
+              items:
+                type: string
+            consultadaEn:
+              type: string
+              format: date-time
     Problema:
       type: object
       required: [type, title, status, detail, code, correlationId]
