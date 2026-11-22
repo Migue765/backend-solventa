@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Servicio de identidad de Solventa: usuarios y emisión de tokens JWT"
 requires-python = ">=3.12"
 dependencies = [
+    "boto3>=1.35,<2",
     "cryptography>=46,<51",
     "email-validator>=2.2,<3",
     "flask>=3.1,<4",

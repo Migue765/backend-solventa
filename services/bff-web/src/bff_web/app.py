@@ -15,6 +15,7 @@ from bff_web.api import (
     open_finance_exceptions,
     operational_reports,
     partner_quotes,
+    password_recovery,
     policy_cancellations,
     policy_documents,
     policy_modifications,
@@ -170,6 +171,7 @@ def create_app(
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
+    app.register_blueprint(password_recovery.bp)
     app.register_blueprint(consents.bp)
     app.register_blueprint(quotes.bp)
     app.register_blueprint(mortgage_profiling.bp)
@@ -202,8 +204,9 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
-        if request.path.startswith("/v1/sesiones"):
+        if request.path.startswith(("/v1/sesiones", "/v1/recuperacion-contrasena")):
             response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         return response
 
     @app.errorhandler(BadRequest)

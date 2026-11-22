@@ -108,6 +108,53 @@ Los archivos nuevos viven fuera de Git con acceso restringido; no imprimir su
 contenido, el YAML ni habilitar `set -x`. JWE usa un Secret independiente, no
 esta clave JWT; prepararlo y verificarlo segun `docs/operacion-login-cifrado.md`.
 
+### Recuperacion academica administrada (preparacion, sin aplicar)
+
+El Deployment referencia opcionalmente cinco nuevas claves de `identidad-config`:
+`RECOVERY_SES_REGION`, `RECOVERY_EMAIL_SENDER`, `RECOVERY_WEB_URL`,
+`RECOVERY_DELIVERY_MODE` y `RECOVERY_ADMIN_MAILBOX`. No crea ni actualiza el Secret,
+ni habilita el login cifrado por si solo. La ausencia de claves mantiene el modo
+normal y transporte no configurado; no hay fallback academico implicito.
+
+Para la modalidad elegida, configurar `RECOVERY_DELIVERY_MODE=academico_administrado`
+y el administrador aprobado, junto a region, remitente verificado y URL base HTTPS.
+Todos los enlaces de cuentas existentes van solo a ese administrador verificado.
+Permite SES sandbox pero no otros destinatarios: el buzon administra recuperaciones,
+no demuestra que el usuario posea su correo. Contrato/autoridad y controles:
+`services/identidad/README.md` y `contracts/openapi/recuperacion-contrasena-v1.yaml`.
+
+`recovery-ses-policy.json.tftpl` es una plantilla nativa Terraform, **sin recursos ni
+aplicacion/import**. Renderizarla con `templatefile` pasando:
+`identity_role_arn`, `ses_region`, `sender_identity_arn`, `admin_identity_arn`,
+`sender` y `admin_mailbox`. Los dos ARN SES deben corresponder a las identidades
+verificadas de esos buzones, en la cuenta/region autorizadas; si coinciden se deduplican.
+La plantilla produce tres Allow: GetAccount, GetEmailIdentity y SendEmail.
+Todos requieren PrincipalArn exacto de Identidad y region; SendEmail solo admite
+FromAddress elegido y TODOS los Recipients iguales al administrador, no una lista abierta.
+
+El propietario de la boundary application externa debe preservar su politica
+completa e incorporar esos tres statements en su fuente de verdad actual. Usar la
+misma politica en el inline del rol Identidad. No crear una boundary nueva, importar
+la compartida, ampliar otros roles ni copiar un baseline privado al repositorio.
+Estos archivos no gestionan la propiedad actual de IAM ni acreditan permisos efectivos.
+
+Orden minimo para una habilitacion **autorizada posteriormente**:
+
+1. Revisar identidades SES verificadas, envio habilitado y permisos efectivos del
+   IRSA de Identidad (boundary + inline), incluidos rechazo a otro rol/destinatario.
+2. Construir imagen nueva de Identidad que incluya boto3 del manifiesto; no instalar
+   dependencias ad hoc en pods existentes.
+3. Aplicar migracion `0010` con migrador existente y permisos runtime apropiados,
+   sin cambiar historial ni usar credenciales master.
+4. Preparar esas cinco claves sin eliminar DATABASE_URL/REDIS_URL/JWT_PRIVATE_KEY
+   del Secret existente; habilitar JWE en Identidad/BFF con la clave independiente
+   y Redis ya preparados, versiones BFF/Web compatibles y token interno.
+5. Configurar IP de cliente confiable en ingress/BFF, abrir root Web con base path
+   y comprobar recorrido correo admin/enlace/JWE/password/sesion/persistencia real.
+
+Mantener modo `usuario` fuera de sandbox para recuperacion normal. Las pruebas
+offline con SES Stubber no demuestran envio real; Ready o ping no bastan.
+
 La contrasena de RDS rota y el Secret queda desactualizado: hay que volver a sincronizarlo (o usar External Secrets).
 El auth token de Redis no rota solo.
 

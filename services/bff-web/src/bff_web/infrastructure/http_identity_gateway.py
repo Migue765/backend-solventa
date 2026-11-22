@@ -17,6 +17,7 @@ KNOWN_REJECTIONS = frozenset(
         "correo_ya_registrado",
         "documento_ya_registrado",
         "demasiados_intentos",
+        "recuperacion_invalida",
     }
 )
 DEFAULT_RETRY_AFTER = 60
@@ -34,6 +35,72 @@ class HttpIdentityGateway:
         self._timeout_seconds = timeout_seconds
         self._client_id = client_id
         self._internal_api_token = internal_api_token
+
+    def session_active(self, session_id: UUID, correlation_id: str) -> bool:
+        result = self._get(f"/v1/sesiones/{session_id}", correlation_id)
+        active = result.get("activa")
+        if result.get("sesionId") != str(session_id) or not isinstance(active, bool):
+            raise IdentityUnavailableError()
+        return active
+
+    def _recovery_headers(self, client_address: str | None) -> dict[str, str]:
+        if client_address is None:
+            return {}
+        if not self._internal_api_token:
+            raise IdentityUnavailableError()
+        return {
+            "Authorization": f"Bearer {self._internal_api_token}",
+            "X-Recovery-Client-IP": client_address,
+        }
+
+    def request_password_recovery(
+        self, email: str, correlation_id: str, client_address: str | None = None
+    ) -> str:
+        result = self._post(
+            "/v1/recuperacion-contrasena",
+            {"correo": email},
+            correlation_id,
+            expected_status=202,
+            extra_headers=self._recovery_headers(client_address),
+        )
+        message = result.get("mensaje")
+        if (
+            set(result) != {"mensaje"}
+            or not isinstance(message, str)
+            or message
+            not in (
+                "Si existe una cuenta con ese correo, recibiras un enlace de recuperacion.",
+                "Si existe una cuenta con ese correo, "
+                "el administrador recibira un enlace de recuperacion.",
+            )
+        ):
+            raise IdentityUnavailableError()
+        return message
+
+    def recovery_challenge(
+        self, correlation_id: str, client_address: str | None = None
+    ) -> dict[str, object]:
+        return self._get(
+            "/v1/recuperacion-contrasena/desafio",
+            correlation_id,
+            internal=False,
+            extra_headers=self._recovery_headers(client_address),
+        )
+
+    def confirm_password_recovery(
+        self,
+        token: str,
+        encrypted_credential: str,
+        correlation_id: str,
+        client_address: str | None = None,
+    ) -> None:
+        self._post(
+            "/v1/recuperacion-contrasena/confirmar",
+            {"token": token, "credencialCifrada": encrypted_credential},
+            correlation_id,
+            expected_status=204,
+            extra_headers=self._recovery_headers(client_address),
+        )
 
     def register(self, name: str, email: str, password: str, correlation_id: str) -> User:
         payload = self._post(
@@ -158,12 +225,14 @@ class HttpIdentityGateway:
         *,
         internal: bool = True,
         allow_not_found: bool = False,
+        extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if internal and not self._internal_api_token:
             raise IdentityUnavailableError()
         headers = {"Accept": "application/json", "X-Correlation-ID": correlation_id}
         if internal:
             headers["Authorization"] = f"Bearer {self._internal_api_token}"
+        headers.update(extra_headers or {})
         request = Request(
             f"{self._base_url}{path}",
             headers=headers,
@@ -187,7 +256,15 @@ class HttpIdentityGateway:
             raise IdentityUnavailableError()
         return payload
 
-    def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        body: dict[str, object],
+        correlation_id: str,
+        *,
+        expected_status: int | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         request = Request(
             f"{self._base_url}{path}",
             data=json.dumps(body).encode("utf-8"),
@@ -196,10 +273,13 @@ class HttpIdentityGateway:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "X-Correlation-ID": correlation_id,
+                **(extra_headers or {}),
             },
         )
         try:
             with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+                if expected_status is not None and response.status != expected_status:
+                    raise IdentityUnavailableError()
                 raw = response.read()
         except HTTPError as error:
             raise _rejection_from(error) from error

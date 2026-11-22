@@ -118,6 +118,9 @@ class JwtVerifier:
             )
             if claims.get("client_id") != self._client_id:
                 raise InvalidAccessTokenError()
+            session_id = claims.get("sid")
+            if "sid" in claims and not isinstance(session_id, str):
+                raise InvalidAccessTokenError()
             role = str(claims["rol"])
             scope = str(claims.get("scope", ""))
             partners_claim = claims.get("socios", [])
@@ -138,6 +141,7 @@ class JwtVerifier:
                 client_id=self._client_id,
                 scope=scope,
                 expires_at=datetime.fromtimestamp(claims["exp"], UTC),
+                session_id=UUID(session_id) if session_id is not None else None,
             )
         except (jwt.PyJWTError, KeyError, TypeError, ValueError) as error:
             raise InvalidAccessTokenError() from error

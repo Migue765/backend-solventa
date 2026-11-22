@@ -208,6 +208,32 @@ class FakeIdentity:
     error: Exception | None = None
     clients: tuple[User, ...] = (CLIENT_PROFILE,)
 
+    def session_active(self, session_id: UUID, correlation_id: str) -> bool:
+        self._record("session_active", session_id, correlation_id)
+        return True
+
+    def request_password_recovery(
+        self, email: str, correlation_id: str, client_address: str | None = None
+    ) -> str:
+        self._record("request_password_recovery", email, correlation_id)
+        raise IdentityUnavailableError()
+
+    def recovery_challenge(
+        self, correlation_id: str, client_address: str | None = None
+    ) -> dict[str, object]:
+        self._record("recovery_challenge", correlation_id)
+        raise IdentityUnavailableError()
+
+    def confirm_password_recovery(
+        self,
+        token: str,
+        encrypted_credential: str,
+        correlation_id: str,
+        client_address: str | None = None,
+    ) -> None:
+        self._record("confirm_password_recovery", token, encrypted_credential, correlation_id)
+        raise IdentityUnavailableError()
+
     def registration_challenge(self, correlation_id: str) -> dict[str, object]:
         self._record("registration_challenge", correlation_id)
         return {

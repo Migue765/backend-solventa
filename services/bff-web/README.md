@@ -35,6 +35,40 @@ Web ──Bearer JWT──> API Gateway ──> bff-web ──> identidad   (usu
 
 ## Endpoints
 
+### Recuperacion de contrasena
+
+Rutas publicas compartidas con Identidad:
+`POST /v1/recuperacion-contrasena` recibe `{correo}` y solo devuelve 202 generico;
+`GET /v1/recuperacion-contrasena/desafio` devuelve JWK/desafio;
+`POST /v1/recuperacion-contrasena/confirmar` recibe `{token,credencialCifrada}` y exige
+204 de Identidad antes de confirmar exito. No descifra ni almacena credenciales.
+Contrato: `contracts/openapi/recuperacion-contrasena-v1.yaml`.
+
+Desafio/confirmacion requieren `ENCRYPTED_LOGIN_ENABLED=true` en ambos servicios.
+Errores `application/problem+json`: `code=recuperacion_invalida` para enlace vencido,
+desconocido o usado; `solicitud_invalida` para sobre/politica/esquema; 429 conserva
+Retry-After; proveedor/dependencias producen 503. No hay fallback a texto claro.
+
+Para JWT firmados con `sid`, toda autenticacion Web consulta el estado persistido de
+la familia mediante `GET` interno `/v1/sesiones/{sid}` y `INTERNAL_API_TOKEN`; una
+familia revocada se rechaza con 401 y un servicio ausente/malformado con 503.
+Esto aplica a las sesiones emitidas por TokenService; JWT legacy sin sid mantienen
+su validacion y expiracion anteriores, no tienen revocacion inmediata.
+Identidad revoca refresh de todos los canales y credenciales biometricas tras reset.
+
+Identidad mantiene recuperacion normal `usuario` por defecto. El modo explicito
+`academico_administrado` envia los enlaces solo al administrador verificado, que
+autoriza el cambio de la cuenta vinculada al token; no acredita su correo original.
+El BFF propaga solo `{mensaje}` con uno de los dos literales genericos del contrato,
+incluido `Si existe una cuenta con ese correo, el administrador recibira un enlace de recuperacion.`.
+La Web valida los dos textos permitidos pero conserva copy neutro; ni modo ni
+destinatario se pueden configurar mediante el API publico.
+
+SES y la migracion/configuracion operativa se documentan en `services/identidad/README.md`.
+La Web debe abrir el root real `<base>/?recuperacion=1#token=<token>` (base path Pages
+incluido), consumir el fragmento antes del router y mostrar solo la nueva contrasena.
+No publicar ni registrar el secreto. Estos cambios no despliegan ni habilitan SES.
+
 ### Cumplimiento academico (SOL-208 / SOL-324)
 
 `POST /v1/reportes/regulatorios` exige JWT de asesor, filtros `desde`, `hasta`,

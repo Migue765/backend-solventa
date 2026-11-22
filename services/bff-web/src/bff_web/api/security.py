@@ -3,7 +3,7 @@ from typing import cast
 
 from flask import Response, current_app, g, request
 
-from bff_web.application.ports import TokenVerifier
+from bff_web.application.ports import IdentityGateway, TokenVerifier
 from bff_web.domain.auth import AccessClaims
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.problems import problem_response
@@ -39,7 +39,12 @@ def authenticate() -> AccessClaims:
     if token is None:
         raise InvalidAccessTokenError()
     verifier = cast(TokenVerifier, current_app.extensions["token_verifier"])
-    return verifier.verify(token)
+    claims = verifier.verify(token)
+    if claims.session_id is not None:
+        gateway = cast(IdentityGateway, current_app.extensions["identity_gateway"])
+        if not gateway.session_active(claims.session_id, str(g.correlation_id)):
+            raise InvalidAccessTokenError()
+    return claims
 
 
 def bearer_token() -> str | None:

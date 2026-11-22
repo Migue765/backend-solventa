@@ -20,6 +20,12 @@ tags:
   - name: Polizas
   - name: Reportes
 paths:
+  /v1/recuperacion-contrasena:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
+  /v1/recuperacion-contrasena/desafio:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1desafio"
+  /v1/recuperacion-contrasena/confirmar:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1confirmar"
   /v1/reportes/regulatorios:
     $ref: "./cumplimiento-academico-v1.yaml#/paths/~1v1~1reportes~1regulatorios"
   /v1/reportes/regulatorios/{reporteId}:

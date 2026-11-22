@@ -110,6 +110,16 @@ class RefreshTokenModel(Base):
     )
 
 
+class PasswordRecoveryModel(Base):
+    __tablename__ = "recuperaciones_contrasena"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    usuario_id: Mapped[UUID] = mapped_column(ForeignKey("usuarios.usuario_id"), index=True)
+    creada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumida_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class BiometricCredentialModel(Base):
     __tablename__ = "credenciales_biometricas"
 

@@ -33,3 +33,4 @@ class AccessClaims:
     client_id: str
     scope: str
     expires_at: datetime
+    session_id: UUID | None = None

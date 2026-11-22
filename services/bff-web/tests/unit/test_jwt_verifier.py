@@ -1,6 +1,7 @@
 import time
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from bff_web.domain.errors import IdentityUnavailableError, InvalidAccessTokenError
@@ -31,6 +32,19 @@ def test_valid_token_returns_claims(jwks: FakeJwks, keypair: KeyPair) -> None:
     assert claims.client_id == "web"
     assert claims.scope == "cotizaciones"
     assert claims.expires_at > datetime.now(UTC)
+    assert claims.session_id is None
+
+
+def test_signed_session_id_is_preserved(jwks: FakeJwks, keypair: KeyPair) -> None:
+    session_id = uuid4()
+    claims = build(jwks).verify(sign_token(keypair, sid=str(session_id)))
+    assert isinstance(claims.session_id, UUID) and claims.session_id == session_id
+
+
+@pytest.mark.parametrize("sid", ["not-a-uuid", 12, {}, []])
+def test_invalid_session_claim_is_rejected(jwks: FakeJwks, keypair: KeyPair, sid: Any) -> None:
+    with pytest.raises(InvalidAccessTokenError):
+        build(jwks).verify(sign_token(keypair, sid=sid))
 
 
 def test_expiry_allows_ten_seconds_of_leeway(jwks: FakeJwks, keypair: KeyPair) -> None:
