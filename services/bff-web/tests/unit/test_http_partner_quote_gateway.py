@@ -34,7 +34,7 @@ def test_lists_only_client_ids_using_encoded_partner_and_product() -> None:
 
 
 @pytest.mark.parametrize("body", [{"clientes": ["invalid"]}, {}, {"clientes": [], "extra": 1}])
-def test_invalid_client_list_is_unavailable_not_empty(body: dict[str, object]) -> None:
+def test_invalid_client_list_is_unavailable_not_empty(body: dict) -> None:
     with patch(TARGET, return_value=BytesIO(json.dumps(body).encode())):
         with pytest.raises(MortgageProfilingError) as error:
             HttpPartnerQuoteGateway("http://cotizacion", "token").list_clients(
