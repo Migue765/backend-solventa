@@ -102,7 +102,7 @@ cd backend-solventa
 | `perfilamiento` | Personalización y perfil de riesgo | Perfilamiento y Personalización | Implementado, con [README](services/perfilamiento/README.md) |
 | `cotizacion` | Tarificación y Cotización | Cotización | Implementado, con [README](services/cotizacion/README.md) |
 | `polizas` | Suscripción, emisión y ciclo de vida | Producto y Suscripción / Pólizas | Implementado, con [README](services/polizas/README.md) |
-| `siniestros` | Siniestros | Siniestros | Registro, estado, historial, evidencia en S3 y procesamiento durable de eventos parametricos; [README](services/siniestros/README.md) y [despliegue](deploy/k8s/siniestros/README.md) |
+| `siniestros` | Siniestros | Siniestros | Registro, estado, historial, evidencia en S3 y procesamiento durable de eventos paramétricos; [README](services/siniestros/README.md) y [despliegue](deploy/k8s/siniestros/README.md) |
 | `notificaciones` | Notificaciones | Comunicaciones | Eventos, preferencias, avisos programados, reintentos y trazabilidad; [README](services/notificaciones/README.md) y [despliegue](deploy/k8s/notificaciones/README.md) |
 | `asistencias` | Asistencias | Asistencias | Prestadores cercanos, solicitudes idempotentes y auditoría de ubicación; [README](services/asistencias/README.md) y [despliegue](deploy/k8s/asistencias/README.md) |
 | `pagos` | Cobros, pagos y recaudo | Pagos y Recaudo | Estructura inicial |
