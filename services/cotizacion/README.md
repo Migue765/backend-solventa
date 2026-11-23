@@ -55,6 +55,22 @@ llamada externa si el proveedor ejecuta pero pierde su respuesta antes de persis
 Un reintento completado no consume cuota, uno fallido nuevamente admitido si.
 No se guardan cuerpos originales en reservas ni se retornan PII en recuperacion.
 
+`GET /v1/socios/clientes?socioId=...&productoId=...` es una lectura interna con
+`Authorization: Bearer <INTERNAL_API_TOKEN>` y `API-Version: 1` (por defecto 1).
+Ambos parametros son obligatorios, unicos y acotados a 50/64 caracteres; no acepta
+otros filtros. Devuelve `{clientes:["uuid", ...]}`, ordenado por UUID y deduplicado
+por cliente dentro de organizacion/producto, sin paginacion. La consulta une
+`operaciones_socios` con `cotizaciones` por cotizacion, solicitud y cliente:
+reservas pendientes, rechazos y cotizaciones sin asociacion al socio no aparecen.
+No devuelve datos personales ni consulta Identidad. Vacio devuelve 200 con `[]`;
+credencial incorrecta devuelve 401 y parametros/version invalidos 400.
+
+El BFF publica la misma ruta con un contrato enriquecido minimo y verifica JWT,
+pertenencia, producto y consentimiento actual antes de mostrar datos del cliente.
+El producto interno es un filtro de persistencia; el flujo publico socio actual
+solo admite `mortgage-life`. Usa las tablas existentes y el Service ClusterIP
+`cotizacion` en puerto 8080; no necesita migraciones ni rutas ALB adicionales.
+
 ### Oferta explicable de vida hipotecaria (HU49)
 
 Para `mortgage-life`, la operacion persiste además una oferta inmutable en

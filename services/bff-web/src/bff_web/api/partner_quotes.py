@@ -205,26 +205,14 @@ def find_client_by_document() -> Response:
         return client
     consent_status: str
     try:
-        consent = _get_consent(client)
-        consent_status = (
-            "vigente"
-            if consent.is_current_for(client.user_id)
-            else "insuficiente"
-            if consent.estado == "autorizado"
-            else consent.estado
+        consent_status = _consent_status(client.user_id)
+    except ProfilingError:
+        return problem_response(
+            503,
+            "servicio_no_disponible",
+            "Servicio no disponible",
+            "No fue posible verificar el consentimiento.",
         )
-    except ProfilingError as error:
-        if error.code == "consentimiento_ausente":
-            consent_status = "ausente"
-        elif error.code == "consentimiento_no_vigente":
-            consent_status = "vencido"
-        else:
-            return problem_response(
-                503,
-                "servicio_no_disponible",
-                "Servicio no disponible",
-                "No fue posible verificar el consentimiento.",
-            )
     except ValidationError:
         return problem_response(
             503,
@@ -241,6 +229,89 @@ def find_client_by_document() -> Response:
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"
     return response
+
+
+@bp.get("/clientes")
+def list_clients() -> Response:
+    claims = partner_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.headers.get("API-Version", "1") != "1":
+        return _version_error()
+    partner_id = request.args.get("socioId", "")
+    if partner_id not in claims.user.partner_ids:
+        return _partner_error()
+    g.audit_partner_id = partner_id
+    product_id = request.args.get("productoId", "")
+    if (
+        product_id != "mortgage-life"
+        or set(request.args) != {"socioId", "productoId"}
+        or any(len(request.args.getlist(key)) != 1 for key in request.args)
+    ):
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Revisa el socio y producto."
+        )
+    try:
+        persisted = _gateway().list_clients(partner_id, product_id, str(g.correlation_id))
+        clients = [
+            _listed_client(client_id) for client_id in sorted(set(persisted.clientes), key=str)
+        ]
+    except (MortgageProfilingError, ProfilingError, ValueError):
+        return _client_list_unavailable()
+    response = jsonify(clientes=clients)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
+def _listed_client(client_id: UUID) -> dict[str, object]:
+    status = _consent_status(client_id)
+    result: dict[str, object] = {
+        "clienteId": str(client_id),
+        "nombre": None,
+        "tipoDocumento": None,
+        "numeroDocumentoEnmascarado": None,
+        "consentimientoEstado": status,
+    }
+    if status == "vigente":
+        identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
+        client = identity.get_client(client_id, str(g.correlation_id))
+        if client is None or client.user_id != client_id or client.role != "cliente":
+            raise MortgageProfilingError("servicio_no_disponible", 503)
+        identification = validate_identification(client.document_type, client.identification)
+        result.update(
+            nombre=client.name,
+            tipoDocumento=client.document_type,
+            numeroDocumentoEnmascarado=_mask_document(identification),
+        )
+    return result
+
+
+def _consent_status(client_id: UUID) -> str:
+    try:
+        consent = _consent_for_id(client_id)
+        return (
+            "vigente"
+            if consent.is_current_for(client_id)
+            else "insuficiente"
+            if consent.estado == "autorizado"
+            else consent.estado
+        )
+    except ProfilingError as error:
+        if error.code == "consentimiento_ausente":
+            return "ausente"
+        if error.code == "consentimiento_no_vigente":
+            return "vencido"
+        raise
+
+
+def _client_list_unavailable() -> Response:
+    return problem_response(
+        503,
+        "servicio_no_disponible",
+        "Servicio no disponible",
+        "No fue posible consultar los clientes cotizados.",
+    )
 
 
 @bp.get("/solicitudes-cotizacion/<uuid:operation_id>")
@@ -375,10 +446,12 @@ def _find_client(document_type: str, identification: str) -> User | Response:
 
 
 def _get_consent(client: User) -> ConsentDecision:
+    return _consent_for_id(client.user_id)
+
+
+def _consent_for_id(client_id: UUID) -> ConsentDecision:
     profiling = cast(ProfilingGateway, current_app.extensions["profiling_gateway"])
-    return ConsentDecision.model_validate(
-        profiling.get_consent(client.user_id, str(g.correlation_id))
-    )
+    return ConsentDecision.model_validate(profiling.get_consent(client_id, str(g.correlation_id)))
 
 
 def _consent_error() -> Response:
