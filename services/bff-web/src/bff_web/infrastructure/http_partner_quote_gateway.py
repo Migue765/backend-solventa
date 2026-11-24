@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
 from bff_web.domain.partner_offer import PartnerOffer
-from bff_web.domain.partner_operation import PartnerOperation
+from bff_web.domain.partner_operation import PartnerClients, PartnerOperation
 from bff_web.infrastructure.http_mortgage_profiling_gateway import _controlled_error
 
 _Model = TypeVar("_Model", bound=BaseModel)
@@ -47,6 +47,15 @@ class HttpPartnerQuoteGateway:
             PartnerOperation,
         )
 
+    def list_clients(self, socio_id: str, product_id: str, correlation_id: str) -> PartnerClients:
+        return self._request(
+            f"?{urlencode({'socioId': socio_id, 'productoId': product_id})}",
+            None,
+            correlation_id,
+            PartnerClients,
+            resource="/v1/socios/clientes",
+        )
+
     def calculate_offer(
         self, socio_id: str, operation_id: UUID, correlation_id: str
     ) -> PartnerOffer:
@@ -69,15 +78,17 @@ class HttpPartnerQuoteGateway:
     def _request(
         self,
         suffix: str,
-        operation_id: UUID,
+        operation_id: UUID | None,
         correlation_id: str,
         model: type[_Model],
         payload: dict[str, object] | None = None,
+        *,
+        resource: str = "/v1/socios/solicitudes-cotizacion",
     ) -> _Model:
         if not self._token:
             raise MortgageProfilingError("servicio_no_disponible", 503)
         request = Request(
-            f"{self._base_url}/v1/socios/solicitudes-cotizacion{suffix}",
+            f"{self._base_url}{resource}{suffix}",
             data=json.dumps(payload).encode() if payload is not None else None,
             method="POST" if payload is not None else "GET",
             headers={
@@ -85,10 +96,11 @@ class HttpPartnerQuoteGateway:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "X-Correlation-ID": correlation_id,
-                "Idempotency-Key": str(operation_id),
                 "API-Version": "1",
             },
         )
+        if operation_id is not None:
+            request.add_header("Idempotency-Key", str(operation_id))
         try:
             with urlopen(request, timeout=self._timeout) as response:  # noqa: S310
                 return model.model_validate(json.load(response))

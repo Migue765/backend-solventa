@@ -199,6 +199,33 @@ reutilizar la clave con otros datos. La admision generica garantiza UUID global
 unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
 propietario. Reintentos y lecturas siguen aislados por organizacion.
 
+`GET /v1/socios/clientes?socioId=...&productoId=mortgage-life` lista clientes de
+cotizaciones completadas y persistidas de esa organizacion y producto, nunca el
+catalogo de Identidad ni reservas pendientes/rechazadas. Requiere JWT de rol y
+scope `socio`, pertenencia al `socioId` del contexto `/v1/socios/actual` y
+`API-Version: 1` (opcional, por defecto 1). El producto coincide con el unico
+producto del flujo publico de cotizacion del socio. La respuesta es
+`{clientes:[{clienteId,nombre,tipoDocumento,numeroDocumentoEnmascarado,consentimientoEstado}]}`:
+UUID estable, sin duplicados y ordenado por `clienteId`, sin paginacion como el
+listado del asesor; `{clientes:[]}` significa ausencia de cotizaciones.
+
+El BFF consulta consentimiento vigente en Identidad antes de resolver nombre y
+documento del cliente. Sin autorizacion actual los tres datos personales son
+`null`; conserva solo asociacion y estado (`vigente`, `insuficiente`, `ausente`,
+`rechazado`, `revocado` o `vencido`). No devuelve contacto, documento completo,
+riesgo ni evidencia del consentimiento. Fallos de Cotizacion, Identidad o contrato
+producen `503 servicio_no_disponible`, nunca lista vacia ni resultados parciales.
+Usa `Cache-Control: no-store`; la consulta individual por documento no cambia.
+
+La ruta reutiliza `QUOTE_SERVICE_URL`, `IDENTIDAD_URL` e `INTERNAL_API_TOKEN`.
+No requiere tablas, migraciones ni reglas de infraestructura nuevas: API Gateway
+ya protege `ANY /v1/{proxy+}` y el ALB dirige `/v1/socios/*` al BFF; este consulta
+Cotizacion por su Service ClusterIP interno, no por el ALB publico. Actualizar
+Cotizacion y BFF juntos antes de habilitar el consumidor; con Cotizacion antigua
+el BFF responde 503. `tests/test_partner_flow.py -k client_list` valida por HTTP
+los servicios reales con SQLite temporal, cotizaciones persistidas, deduplicacion,
+ausencia de historial, aislamiento y revocacion. No acredita despliegue en AWS.
+
 `POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=...` (SOL-330)
 pide a Cotizacion la oferta explicable de una operacion completada: tres planes con
 precio, coberturas, condiciones y factores, mas riesgo, fuentes, variables y versiones.

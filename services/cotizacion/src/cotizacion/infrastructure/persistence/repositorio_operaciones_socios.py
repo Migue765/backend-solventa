@@ -1,17 +1,41 @@
 from datetime import UTC
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from cotizacion.application.iniciar_solicitud_socio import OperacionSocio
 from cotizacion.domain.oferta_hipotecaria import OfertaHipotecariaPersistida
 from cotizacion.infrastructure.persistence.admision_socios import validar_reserva
-from cotizacion.infrastructure.persistence.models import OfertaHipotecariaModel, OperacionSocioModel
+from cotizacion.infrastructure.persistence.models import (
+    CotizacionModel,
+    OfertaHipotecariaModel,
+    OperacionSocioModel,
+)
 
 
 class RepositorioOperacionesSociosSql:
     def __init__(self, sesiones: sessionmaker[Session]) -> None:
         self._sesiones = sesiones
+
+    def listar_clientes(self, socio: str, producto: str) -> tuple[UUID, ...]:
+        consulta = (
+            select(OperacionSocioModel.cliente_id)
+            .join(
+                CotizacionModel,
+                (CotizacionModel.cotizacion_id == OperacionSocioModel.cotizacion_id)
+                & (CotizacionModel.cliente_id == OperacionSocioModel.cliente_id)
+                & (CotizacionModel.solicitud_id == OperacionSocioModel.solicitud_id),
+            )
+            .where(
+                OperacionSocioModel.socio_id == socio,
+                OperacionSocioModel.producto_id == producto,
+            )
+            .distinct()
+            .order_by(OperacionSocioModel.cliente_id)
+        )
+        with self._sesiones() as sesion:
+            return tuple(sesion.scalars(consulta))
 
     def buscar(self, socio: str, operation_id: UUID) -> OperacionSocio | None:
         with self._sesiones() as sesion:

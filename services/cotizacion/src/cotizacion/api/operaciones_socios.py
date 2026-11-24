@@ -33,6 +33,30 @@ class SolicitudSocioRequest(RegistrarSolicitudRequest):
     referencia_credito: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
 
 
+@bp.get("/clientes")
+def listar_clientes() -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_valido()
+    producto = request.args.get("productoId", "")
+    if (
+        socio is None
+        or not 0 < len(producto) <= 64
+        or set(request.args) != {"socioId", "productoId"}
+        or any(len(request.args.getlist(key)) != 1 for key in request.args)
+    ):
+        return jsonify(error="solicitud_invalida"), 400
+    repositorio = cast(
+        RepositorioOperacionesSociosSql, current_app.extensions["operaciones_socios"]
+    )
+    response = jsonify(
+        clientes=[str(client) for client in repositorio.listar_clientes(socio, producto)]
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
 @bp.post("/solicitudes-cotizacion")
 def iniciar() -> tuple[Response, int] | Response:
     if not _authorized():
