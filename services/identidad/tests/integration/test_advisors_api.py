@@ -348,7 +348,7 @@ def test_legacy_commercial_advisor_is_not_promoted_or_granted_internal_access(
 def test_internal_advisor_without_risk_grant_cannot_resolve_for_partner(make_app: Any) -> None:
     app: Flask = make_app()
     created = app.test_cli_runner().invoke(
-        [
+        args=[
             "create-advisor",
             "--name",
             "Revision",
@@ -364,7 +364,7 @@ def test_internal_advisor_without_risk_grant_cannot_resolve_for_partner(make_app
     actor = app.extensions["user_repository"].find_credential("review@example.net").user
     assert not app.extensions["user_repository"].risk_authorized(actor.user_id, "BANCO")
     duplicate = app.test_cli_runner().invoke(
-        [
+        args=[
             "create-advisor",
             "--name",
             "Otra capacidad",

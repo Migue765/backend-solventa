@@ -23,6 +23,7 @@ CLAIMS = {
     "rol",
     "nombre",
     "correo",
+    "permisos",
     "client_id",
 }
 
@@ -108,6 +109,7 @@ def test_access_token_is_verifiable_with_the_published_key(client: FlaskClient) 
     assert claims["exp"] - claims["iat"] == 3600
     assert claims["scope"] == "cliente"
     assert claims["rol"] == "cliente"
+    assert claims["permisos"] == []
     assert claims["nombre"] == "Ana Cliente"
     assert claims["correo"] == "ana@solventa.co"
     assert claims["client_id"] == "web"
