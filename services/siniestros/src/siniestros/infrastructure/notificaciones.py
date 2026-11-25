@@ -11,7 +11,8 @@ from urllib.request import Request, urlopen
 from uuid import UUID, uuid5
 
 from siniestros.infrastructure.models import CambioEstadoModel
-from siniestros.models import Claim, NotificationOutbox, ParametricPayment
+from siniestros.infrastructure.vuelos import FUENTE_VUELOS
+from siniestros.models import Claim, NotificationOutbox, ParametricEvent, ParametricPayment
 from sqlalchemy import event, inspect, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -179,7 +180,25 @@ class PublicadorNotificaciones:
         publicadas = 0
         fallidas = 0
         for pendiente in pendientes:
-            enviada = self._enviador.enviar(evento_notificacion(pendiente))
+            cuerpo = evento_notificacion(pendiente)
+            if pendiente.tipo == "pago_parametrico_ejecutado":
+                with self._sessions() as session:
+                    pago = session.get(ParametricPayment, pendiente.recurso_id)
+                    if pago is None or pago.estado != "confirmado" or pago.finalizado_en is None:
+                        raise ValueError("La notificacion requiere pago confirmado.")
+                    origen = session.get(ParametricEvent, pago.evento_id)
+                    if origen is None:
+                        raise ValueError("El pago requiere evento de origen.")
+                    # No alterar el fingerprint de reintentos climaticos historicos.
+                    if origen.fuente == FUENTE_VUELOS:
+                        cuerpo["indemnizacion"] = {
+                            "monto": f"{pago.monto:.2f}",
+                            "moneda": pago.moneda,
+                            "pagadaEn": _iso(pago.finalizado_en),
+                            "referencia": pago.id,
+                            "simulada": True,
+                        }
+            enviada = self._enviador.enviar(cuerpo)
             with self._sessions.begin() as session:
                 session.execute(
                     update(NotificationOutbox)

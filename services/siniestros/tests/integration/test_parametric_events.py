@@ -44,7 +44,15 @@ INTERNAL_HEADERS = CLIENT_HEADERS
 SOURCE = "ideam"
 SOURCE_HEADERS = {"Authorization": "Bearer fuente-segura", "X-Fuente-ID": SOURCE}
 OCCURRED = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
-ALLOWED_NOTIFICATION_FIELDS = {"eventoId", "tipo", "clienteId", "ocurridoEn", "recurso", "estado"}
+ALLOWED_NOTIFICATION_FIELDS = {
+    "eventoId",
+    "tipo",
+    "clienteId",
+    "ocurridoEn",
+    "recurso",
+    "estado",
+    "indemnizacion",
+}
 
 
 @pytest.fixture
@@ -907,6 +915,7 @@ def test_hu22_publica_cambios_visibles_y_pago_parametrico_sin_duplicar(app: Flas
         "tipo": "pago",
         "id": payment_id,
     }
+    assert "indemnizacion" not in published[("pago_parametrico_ejecutado", None)]
     assert all(set(item) <= ALLOWED_NOTIFICATION_FIELDS for item in sender.eventos)
 
 

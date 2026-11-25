@@ -50,11 +50,16 @@ from bff_web.domain.quotes import (
 
 class HttpQuoteGateway(QuoteGateway):
     def __init__(
-        self, base_url: str, timeout_seconds: float = 5, internal_api_token: str = ""
+        self,
+        base_url: str,
+        timeout_seconds: float = 5,
+        internal_api_token: str = "",
+        claims_url: str = "",
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._internal_api_token = internal_api_token
+        self._claims_url = claims_url.rstrip("/")
 
     def get_dashboard(self, user_id: UUID) -> Dashboard:
         if not self._internal_api_token:
@@ -66,13 +71,27 @@ class HttpQuoteGateway(QuoteGateway):
                 headers={"Authorization": f"Bearer {self._internal_api_token}"},
                 map_domain_errors=False,
             )
+            if self._claims_url and payload.get("polizas"):
+                request = Request(
+                    self._claims_url + "/v1/indemnizaciones",
+                    headers={
+                        "Authorization": f"Bearer {self._internal_api_token}",
+                        "X-Cliente-ID": str(user_id),
+                    },
+                )
+                with urlopen(request, timeout=self._timeout_seconds) as response:
+                    indemnities = json.load(response)["indemnizaciones"]
+                if not isinstance(indemnities, dict):
+                    raise ValueError("Proyeccion de indemnizaciones invalida.")
+                for policy in payload["polizas"]:
+                    policy["indemnizacion"] = indemnities.get(policy["id"])
             return Dashboard.model_validate(
                 {
                     **payload,
                     "notificaciones": {"disponibilidad": "no_implementado"},
                 }
             )
-        except (OSError, HTTPException, ValueError, TypeError) as error:
+        except (OSError, HTTPException, ValueError, TypeError, KeyError) as error:
             raise QuoteServiceUnavailableError() from error
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:

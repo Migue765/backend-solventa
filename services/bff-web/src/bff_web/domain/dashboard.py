@@ -97,6 +97,29 @@ class UnimplementedDomain(DashboardModel):
     availability: Literal["no_implementado"] = Field(alias="disponibilidad")
 
 
+class DashboardIndemnity(DashboardModel):
+    estado: Literal["pendiente", "pagada", "rechazada"]
+    monto: str | None = Field(pattern=r"^\d+\.\d{2}$")
+    moneda: str = Field(pattern=r"^[A-Z]{3}$")
+    pagadaEn: AwareDatetime | None
+    referencia: str | None
+    simulada: Literal[True]
+
+    @model_validator(mode="after")
+    def validate_confirmation(self) -> Self:
+        if self.estado == "pagada":
+            if (
+                self.monto is None
+                or Decimal(self.monto) <= 0
+                or self.pagadaEn is None
+                or not self.referencia
+            ):
+                raise ValueError("La indemnizacion requiere confirmacion completa.")
+        elif any(value is not None for value in (self.monto, self.pagadaEn, self.referencia)):
+            raise ValueError("No hay datos pagados sin confirmacion.")
+        return self
+
+
 class DashboardPolicy(DashboardModel):
     id: UUID
     subscription_id: UUID = Field(alias="suscripcionId")
@@ -114,6 +137,7 @@ class DashboardPolicy(DashboardModel):
     end_date: date = Field(alias="fechaFin")
     status: Literal["programada", "vigente", "vencida", "cancelada"] = Field(alias="estado")
     simulated: Literal[True] = Field(alias="simulada")
+    indemnizacion: DashboardIndemnity | None = None
 
     @field_validator("simulated", mode="before")
     @classmethod

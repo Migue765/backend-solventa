@@ -459,6 +459,54 @@ def test_ses_uses_real_sdk_and_root_entry_link_without_token_in_query() -> None:
     assert calls[0]["Destination"] == {"ToAddresses": ["recipient@example.com"]}
 
 
+def test_common_mail_redirect_preserves_original_user_and_recovery_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mailbox = "redirect@example.com"
+    monkeypatch.setenv("EMAIL_REDIRECT_TO", mailbox)
+    client = boto3.client(
+        "sesv2",
+        region_name="us-east-2",
+        aws_access_key_id="synthetic",
+        aws_secret_access_key="synthetic",
+    )
+    calls: list[dict[str, Any]] = []
+    client.meta.events.register(
+        "before-parameter-build.sesv2.SendEmail",
+        lambda params, **kwargs: calls.append(params),
+    )
+    sender = SesRecoveryMailSender("us-east-2", EMAIL, "https://web.example.com", client)
+    with Stubber(client) as stub:
+        stub.add_response("get_account", {"SendingEnabled": True, "ProductionAccessEnabled": False})
+        stub.add_response("get_email_identity", {"VerifiedForSendingStatus": True})
+        stub.add_response(
+            "get_email_identity", {"VerifiedForSendingStatus": True}, {"EmailIdentity": mailbox}
+        )
+        sender.ensure_available()
+        stub.add_response("send_email", {"MessageId": "recovery-accepted"})
+        sender.send("original@example.com", "x" * 64)
+        stub.add_response("send_email", {"MessageId": "indemnity-accepted"})
+        assert (
+            sender.send_notification(
+                "other@example.com",
+                "synthetic-client",
+                "Pago simulado",
+                "Indemnizacion confirmada: 1725000.00 COP. Referencia: synthetic-payment",
+            )
+            == "indemnity-accepted"
+        )
+    assert len(calls) == 2
+    for call in calls:
+        assert call["Destination"] == {"ToAddresses": [mailbox]}
+    recovery = calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "Destinatario original: original@example.com" in recovery
+    assert "#token=" + "x" * 64 in recovery
+    payment = calls[1]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "Usuario: synthetic-client" in payment
+    assert "Destinatario original: other@example.com" in payment
+    assert "1725000.00 COP" in payment
+
+
 def test_ses_access_denied_is_an_explicit_unavailable_error() -> None:
     client = boto3.client(
         "sesv2",

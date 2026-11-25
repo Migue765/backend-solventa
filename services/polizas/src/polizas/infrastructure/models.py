@@ -24,6 +24,7 @@ class PolizaModel(Base):
     regla_version: Mapped[str] = mapped_column(String(40))
     # activa o cancelada; la cancelacion es definitiva y conserva las fechas originales.
     estado: Mapped[str] = mapped_column(String(20), default="activa", server_default="activa")
+    contrato_vuelo: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
 
 class RenovacionModel(Base):

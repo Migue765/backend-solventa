@@ -14,6 +14,7 @@ from bff_web.api import (
     mortgage_profiling,
     open_finance_exceptions,
     operational_reports,
+    parametric_flights,
     partner_quotes,
     password_recovery,
     policy_cancellations,
@@ -105,6 +106,7 @@ def create_app(
     app.extensions["quote_gateway"] = quote_gateway or HttpQuoteGateway(
         active_config.quote_service_url,
         internal_api_token=active_config.internal_api_token,
+        claims_url=active_config.claims_service_url,
     )
     app.extensions["profiling_gateway"] = profiling_gateway or HttpProfilingGateway(
         active_config.identity_url,
@@ -169,6 +171,7 @@ def create_app(
     app.register_blueprint(policy_documents.bp)
 
     app.register_blueprint(health.bp)
+    app.register_blueprint(parametric_flights.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
     app.register_blueprint(password_recovery.bp)

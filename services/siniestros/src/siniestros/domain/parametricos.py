@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
@@ -29,6 +30,16 @@ class EventoParametrico(EntradaParametrica):
     tipoEvento: TextoCorto
     ubicacionCodigo: TextoCorto
     metrica: MetricaEvento
+    vuelo: "VueloCancelado | None" = None
+
+
+class VueloCancelado(EntradaParametrica):
+    airline: Annotated[str, StringConstraints(min_length=1, max_length=80)]
+    flightNumber: Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{2,10}$")]
+    flightDate: date
+    estado: Literal["cancelado"]
+    causa: Literal["clima"]
+    simulada: Literal[True]
 
 
 class LoteEventosParametricos(EntradaParametrica):

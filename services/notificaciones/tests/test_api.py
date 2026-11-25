@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from notificaciones.service import DeliveryResult
@@ -93,6 +94,33 @@ def test_repeated_event_is_idempotent_and_changed_replay_conflicts(
     assert len(gateway.deliveries) == 1
     assert conflict.status_code == 409
     assert conflict.get_json()["type"].endswith("/evento_en_conflicto")
+
+
+def test_confirmed_indemnity_email_uses_actual_amount_and_replay_does_not_send_twice(
+    client: FlaskClient,
+    gateway: FakeDeliveryGateway,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOTIFICATION_EMAIL_DEFAULT_ENABLED", "true")
+    for amount in ("1725000.00", "1950000.00"):
+        payload = event(
+            "pago_parametrico_ejecutado",
+            indemnizacion={
+                "monto": amount,
+                "moneda": "COP",
+                "pagadaEn": "2026-03-10T11:00:00Z",
+                "referencia": str(uuid4()),
+                "simulada": True,
+            },
+        )
+        assert client.post("/v1/eventos", json=payload, headers=auth_headers).status_code == 201
+        assert client.post("/v1/eventos", json=payload, headers=auth_headers).status_code == 200
+    emails = [delivery for delivery in gateway.deliveries if delivery.channel == "email"]
+    assert len(emails) == 2
+    assert "1725000.00 COP" in emails[0].content
+    assert "1950000.00 COP" in emails[1].content
+    assert all("No es una transferencia bancaria real" in mail.content for mail in emails)
 
 
 def test_preferences_select_channel_and_failed_delivery_remains_pending(
