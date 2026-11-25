@@ -8,7 +8,9 @@ privada de JWE y hasta comprobar el contrato Movil; no aplicar el directorio en 
 Backend for Frontend de la app movil nativa. Mismo esquema que `deploy/k8s/bff-web`: delega la autenticacion en
 `identidad` (`http://identidad.identidad.svc.cluster.local:8080`) y no tiene base de datos, Redis, cookies, CORS ni rol
 IRSA. **`identidad` debe estar desplegado antes que `bff-movil`.** Llama a Siniestros, Notificaciones, Asistencias y Polizas por
-sus URL internas con el `INTERNAL_API_TOKEN` del Secret `profiling-internal`; sin URL, esas rutas responden 503.
+sus URL internas con el `INTERNAL_API_TOKEN` del Secret `profiling-internal`.
+La fábrica de la imagen también requiere `QUOTE_SERVICE_URL` para Cotización. Configurar esta
+variable, `POLIZAS_SERVICE_URL` y el token antes de actualizar la imagen; sin ellos no arranca.
 
 - **Sin Job de migraciones.** El pipeline de `bff-movil` corre con `MIGRATE=false`.
 - **El pipeline solo cambia la imagen.** No aplica el entorno de `deployment.yaml`: las URL internas y el token se
@@ -69,6 +71,7 @@ Requiere los cuatro servicios desplegados y verificados segun sus README
 ```bash
 kubectl -n bff-movil set env deployment/bff-movil --from=secret/profiling-internal --keys=INTERNAL_API_TOKEN
 kubectl -n bff-movil set env deployment/bff-movil \
+  QUOTE_SERVICE_URL=http://cotizacion.cotizacion.svc.cluster.local:8080 \
   SINIESTROS_SERVICE_URL=http://siniestros.siniestros.svc.cluster.local:8080 \
   NOTIFICACIONES_SERVICE_URL=http://notificaciones.notificaciones.svc.cluster.local:8080 \
   ASISTENCIAS_SERVICE_URL=http://asistencias.asistencias.svc.cluster.local:8080 \
@@ -83,5 +86,6 @@ kubectl -n bff-movil rollout status deployment/bff-movil --timeout=300s
 
 - Release: tag `bff-movil-v*` (disjunto de `v*` de cotizacion, `bff-web-v*` e `identidad-v*`). Imagen con tag inmutable.
 - Imagen `linux/amd64`: en Apple Silicon usar `docker buildx build --platform linux/amd64`.
-- Rutas publicas: `POST /movil/v1/sesiones`, `POST /movil/v1/sesiones/renovar` y `POST /movil/v1/usuarios`, con
-  throttling de 5 req/s, burst 10 (limite global por ruta, no por cliente). El resto de `/movil/*` exige JWT.
+- El gateway admite sin sesión las operaciones concretas de acceso, renovación, alta, desafíos de acceso
+  biométrico y recuperación. Les aplica el límite por ruta de autenticación. El proxy `ANY /movil/{proxy+}`
+  sigue exigiendo JWT.

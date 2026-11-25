@@ -544,6 +544,20 @@ resource "aws_apigatewayv2_route" "movil_register" {
   target    = "integrations/${aws_apigatewayv2_integration.alb.id}"
 }
 
+resource "aws_apigatewayv2_route" "movil_alta_recuperacion" {
+  for_each = toset([
+    "GET /movil/v1/usuarios/desafio",
+    "POST /movil/v1/usuarios/registro-completo",
+    "POST /movil/v1/recuperacion-contrasena",
+    "GET /movil/v1/recuperacion-contrasena/desafio",
+    "POST /movil/v1/recuperacion-contrasena/confirmar",
+  ])
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.alb.id}"
+  authorization_type = "NONE"
+}
+
 resource "aws_apigatewayv2_route" "movil_biometric_challenge" {
   api_id             = aws_apigatewayv2_api.this.id
   route_key          = "POST /movil/v1/biometria/desafios"
@@ -633,6 +647,15 @@ resource "aws_apigatewayv2_stage" "default" {
     route_key              = aws_apigatewayv2_route.movil_register.route_key
     throttling_rate_limit  = var.auth_throttling_rate_limit
     throttling_burst_limit = var.auth_throttling_burst_limit
+  }
+
+  dynamic "route_settings" {
+    for_each = aws_apigatewayv2_route.movil_alta_recuperacion
+    content {
+      route_key              = route_settings.value.route_key
+      throttling_rate_limit  = var.auth_throttling_rate_limit
+      throttling_burst_limit = var.auth_throttling_burst_limit
+    }
   }
 
   route_settings {
