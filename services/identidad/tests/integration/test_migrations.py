@@ -72,7 +72,13 @@ def test_migrations_create_both_tables_with_their_own_version_table(
         "alembic_version_identidad",
         "verificaciones_identidad_simuladas",
         "intentos_identidad_simulados",
-    } <= set(inspector.get_table_names())
+        "consentimientos_perfilamiento",
+        "outbox_consentimientos",
+        "credenciales_biometricas",
+        "desafios_biometricos",
+        "auditoria_biometrica",
+        "recuperaciones_contrasena",
+    } == set(inspector.get_table_names())
     assert "alembic_version" not in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("refresh_tokens")}
     assert columns == {

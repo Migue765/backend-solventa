@@ -160,8 +160,14 @@ def test_real_job_commands_preserve_owner_role_schema_and_restrict_history(
             assert result["ownerNoLogin"] is True
             if domain != "perfilamiento":
                 assert result["migrationHistoryRuntimeDenied"] is True
-        assert total == 78
+        assert total == 82
         for domain, count, revision, tables in (
+            (
+                "identidad",
+                14,
+                "0011",
+                ("usuarios_permisos",),
+            ),
             (
                 "polizas",
                 7,

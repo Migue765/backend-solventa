@@ -86,6 +86,28 @@ def _advisor_token(keypair: KeyPair) -> str:
     )
 
 
+def _consented_information(
+    payload: dict[str, object], **changes: object
+) -> ClientInformationResult:
+    return ClientInformationResult.model_validate(
+        {
+            "operationId": payload["consultaInformacionId"],
+            "socioId": "BANCO-001",
+            "actorId": str(ADVISOR.user_id),
+            "clienteId": str(USER.user_id),
+            "productoId": "mortgage-life",
+            "finalidad": "cotizacion",
+            "estado": "completada",
+            "consentimientoId": payload["consentimientoId"],
+            "consentimientoVersion": 2,
+            "datos": {},
+            "evidenciaFuentes": [],
+            "consultadaEn": "2026-10-20T00:00:00Z",
+            **changes,
+        }
+    )
+
+
 def test_no_role_lists_global_clients(app: Flask, identity: FakeIdentity, keypair: KeyPair) -> None:
     response = app.test_client().get(
         "/v1/asesor/clientes",
@@ -104,22 +126,7 @@ def test_advisor_starts_operation_with_authoritative_context(
     operation_id = uuid4()
     payload = _payload(operation_id)
     information = Mock()
-    information.recover.return_value = ClientInformationResult.model_validate(
-        {
-            "operationId": payload["consultaInformacionId"],
-            "socioId": "BANCO-001",
-            "actorId": str(ADVISOR.user_id),
-            "clienteId": str(USER.user_id),
-            "productoId": "mortgage-life",
-            "finalidad": "cotizacion",
-            "estado": "completada",
-            "consentimientoId": payload["consentimientoId"],
-            "consentimientoVersion": 2,
-            "datos": {},
-            "evidenciaFuentes": [],
-            "consultadaEn": "2026-10-20T00:00:00Z",
-        }
-    )
+    information.recover.return_value = _consented_information(payload)
     app.extensions["client_information_gateway"] = information
 
     response = app.test_client().post(
@@ -192,23 +199,7 @@ def test_partner_cannot_originate_from_foreign_or_stale_consented_context(
     operation_id = uuid4()
     payload = _payload(operation_id)
     information = Mock()
-    information.recover.return_value = ClientInformationResult.model_validate(
-        {
-            "operationId": payload["consultaInformacionId"],
-            "socioId": "BANCO-001",
-            "actorId": str(ADVISOR.user_id),
-            "clienteId": str(USER.user_id),
-            "productoId": "mortgage-life",
-            "finalidad": "cotizacion",
-            "estado": "completada",
-            "consentimientoId": payload["consentimientoId"],
-            "consentimientoVersion": 2,
-            "datos": {},
-            "evidenciaFuentes": [],
-            "consultadaEn": "2026-10-20T00:00:00Z",
-            **changes,
-        }
-    )
+    information.recover.return_value = _consented_information(payload, **changes)
     app.extensions["client_information_gateway"] = information
     gateway = MortgageGatewayStub()
     app.extensions["mortgage_profiling_gateway"] = gateway
