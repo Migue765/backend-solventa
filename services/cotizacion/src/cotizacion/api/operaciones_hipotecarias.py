@@ -50,6 +50,7 @@ def _a_json(operacion: OperacionHipotecaria) -> dict[str, object]:
         "operationId": str(operacion.operation_id),
         "socioId": operacion.socio_id,
         "asesorId": str(operacion.asesor_id),
+        "actorId": str(operacion.asesor_id),
         "clienteId": str(operacion.cliente_id),
         "productoId": "mortgage-life",
         "estado": operacion.estado,

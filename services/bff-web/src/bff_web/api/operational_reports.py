@@ -5,7 +5,7 @@ from typing import Any, cast
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 
-from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.api.security import authenticate, internal_authorized, invalid_session_response
 from bff_web.application.report_ports import ReportSources
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.domain.operational_reports import (
@@ -22,7 +22,6 @@ from bff_web.domain.operational_reports import (
 from bff_web.problems import problem_response
 
 bp = Blueprint("operational_reports", __name__, url_prefix="/v1/reportes/operativos")
-REPORT_ROLE = "asesor"
 
 
 @bp.after_request
@@ -133,13 +132,13 @@ def _consolidate(extra: frozenset[str] = frozenset()) -> dict[str, Any] | Respon
     return result
 
 
-def _authorize() -> Response | None:
+def _authorize(*, admin: bool = True) -> Response | None:
     try:
         claims = authenticate()
     except InvalidAccessTokenError:
         return invalid_session_response()
     g.audit_actor_id = str(claims.user.user_id)
-    if claims.user.role != REPORT_ROLE or claims.scope != REPORT_ROLE:
+    if not internal_authorized(claims, "reportes:operativos", admin=admin):
         return problem_response(
             403,
             "alcance_insuficiente",

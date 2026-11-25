@@ -5,7 +5,12 @@ import jwt
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from identidad.infrastructure.persistence.models import SocioModel
+from identidad.infrastructure.persistence.models import (
+    AsesorSocioModel,
+    SocioModel,
+    UsuarioModel,
+    UsuarioPermisoModel,
+)
 
 PASSWORD = "Solventa123!"
 INTERNAL_TOKEN = "internal-test-token"
@@ -93,7 +98,7 @@ def _register_client(client: FlaskClient, with_document: bool = False) -> str:
 
 
 @pytest.mark.parametrize("existing_partner", [False, True])
-def test_advisor_login_includes_authorized_partners(
+def test_internal_advisor_login_has_explicit_permissions_without_commercial_membership(
     make_app: Any,
     existing_partner: bool,
 ) -> None:
@@ -114,10 +119,8 @@ def test_advisor_login_includes_authorized_partners(
             "laura@banco.co",
             "--password",
             PASSWORD,
-            "--partner-id",
-            "BANCO-001",
-            "--partner-name",
-            "Banco Aliado",
+            "--permission",
+            "siniestros:revisar",
         ]
     )
     assert created.exit_code == 0
@@ -136,10 +139,12 @@ def test_advisor_login_includes_authorized_partners(
     payload = response.get_json()
     assert payload["scope"] == "asesor"
     assert payload["usuario"]["rol"] == "asesor"
-    assert payload["usuario"]["socios"] == ["BANCO-001"]
+    assert payload["usuario"]["socios"] == []
+    assert payload["usuario"]["permisos"] == ["siniestros:revisar"]
     claims = jwt.decode(payload["access_token"], options={"verify_signature": False})
     assert claims["scope"] == "asesor"
-    assert claims["socios"] == ["BANCO-001"]
+    assert claims["socios"] == []
+    assert claims["permisos"] == ["siniestros:revisar"]
 
 
 def test_internal_client_catalog_requires_service_credential(make_app: Any) -> None:
@@ -258,6 +263,13 @@ def test_internal_authorization_uses_current_role_and_active_membership(
     make_app: Any, role: str
 ) -> None:
     app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
+    with app.extensions["user_repository"]._sessions.begin() as session:
+        session.add(SocioModel(socio_id="BANCO-HU44", nombre="Socio de prueba", activo=True))
+    role_options = (
+        ["--permission", "open_finance:resolver:BANCO-HU44"]
+        if role == "asesor"
+        else ["--partner-id", "BANCO-HU44", "--partner-name", "Socio de prueba"]
+    )
     created = app.test_cli_runner().invoke(
         args=[
             "create-advisor" if role == "asesor" else "create-partner-user",
@@ -267,10 +279,7 @@ def test_internal_authorization_uses_current_role_and_active_membership(
             f"{role}@hu44.example",
             "--password",
             PASSWORD,
-            "--partner-id",
-            "BANCO-HU44",
-            "--partner-name",
-            "Socio de prueba",
+            *role_options,
         ]
     )
     assert created.exit_code == 0, created.output
@@ -306,3 +315,69 @@ def test_internal_authorization_uses_current_role_and_active_membership(
         partner = session.get(SocioModel, "BANCO-HU44")
         partner.activo = False
     assert client.get(path, headers=headers).get_json()["autorizado"] is False
+
+
+def test_legacy_commercial_advisor_is_not_promoted_or_granted_internal_access(
+    make_app: Any,
+) -> None:
+    app: Flask = make_app(internal_api_token=INTERNAL_TOKEN)
+    repository = app.extensions["user_repository"]
+    actor_id = uuid4()
+    with repository._sessions.begin() as session:
+        session.add(SocioModel(socio_id="LEGACY", nombre="Socio historico", activo=True))
+        session.add(
+            UsuarioModel(
+                usuario_id=actor_id,
+                nombre="Cuenta historica",
+                correo="legacy@example.net",
+                rol="asesor",
+                password_hash="fixture",
+            )
+        )
+        session.flush()
+        session.add(AsesorSocioModel(asesor_id=actor_id, socio_id="LEGACY"))
+        session.add(
+            UsuarioPermisoModel(usuario_id=actor_id, permiso="open_finance:resolver:LEGACY")
+        )
+    actor = repository.find_by_id(actor_id)
+    assert actor.role == "asesor"
+    assert actor.partner_ids == ("LEGACY",)
+    assert not repository.risk_authorized(actor_id, "LEGACY")
+
+
+def test_internal_advisor_without_risk_grant_cannot_resolve_for_partner(make_app: Any) -> None:
+    app: Flask = make_app()
+    created = app.test_cli_runner().invoke(
+        [
+            "create-advisor",
+            "--name",
+            "Revision",
+            "--email",
+            "review@example.net",
+            "--password",
+            PASSWORD,
+            "--permission",
+            "siniestros:revisar",
+        ]
+    )
+    assert created.exit_code == 0, created.output
+    actor = app.extensions["user_repository"].find_credential("review@example.net").user
+    assert not app.extensions["user_repository"].risk_authorized(actor.user_id, "BANCO")
+    duplicate = app.test_cli_runner().invoke(
+        [
+            "create-advisor",
+            "--name",
+            "Otra capacidad",
+            "--email",
+            "review@example.net",
+            "--password",
+            PASSWORD,
+            "--permission",
+            "reportes:operativos",
+        ]
+    )
+    assert duplicate.exit_code != 0
+    assert "no se modificaron credenciales ni permisos" in duplicate.output
+    unchanged = app.extensions["user_repository"].find_credential("review@example.net").user
+    assert unchanged.user_id == actor.user_id
+    assert unchanged.permissions == ("siniestros:revisar",)

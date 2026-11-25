@@ -123,9 +123,17 @@ def test_operation_is_completed_and_idempotent(
 
     first = client.post("/v1/perfilamientos-hipotecarios", json=payload, headers=headers)
     retry = client.post("/v1/perfilamientos-hipotecarios", json=payload, headers=headers)
+    compatible = dict(payload)
+    compatible["actorId"] = compatible.pop("asesorId")
+    canonical_retry = client.post(
+        "/v1/perfilamientos-hipotecarios", json=compatible, headers=headers
+    )
 
     assert first.status_code == retry.status_code == 201
     assert retry.get_json() == first.get_json()
+    assert canonical_retry.status_code == 201
+    assert canonical_retry.get_json() == first.get_json()
+    assert first.get_json()["actorId"] == first.get_json()["asesorId"] == payload["asesorId"]
     assert first.get_json()["estado"] == "completada"
     assert first.get_json()["operationId"] == operation_id
     assert first.get_json()["perfilamientoReferencia"]

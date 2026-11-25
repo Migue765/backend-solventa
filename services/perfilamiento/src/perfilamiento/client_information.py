@@ -414,6 +414,7 @@ class ConsultarInformacionCliente:
         correlation_id: str,
         impedimento: Literal["producto_no_autorizado", "catalogo_no_disponible"] | None = None,
     ) -> None:
+        self.autorizar_asesor(actor_id, socio_id, correlation_id)
         caso = self._repositorio.obtener_excepcion_open_finance(excepcion_id, socio_id)
         operacion = self._repositorio.buscar_operacion_informacion(
             socio_id, UUID(str(caso["operationId"]))
@@ -503,6 +504,7 @@ class ConsultarInformacionCliente:
             raise ErrorPerfilamiento("consulta_no_encontrada", 404)
         consulta, _ = existente
         presupuesto = Presupuesto(self._politica, self._ejecutor)
+        self._autorizar_actor(consulta.actor_id, socio_id, "socio", correlation_id, presupuesto)
         consentimiento = self._autorizar(
             consulta.cliente_id, consulta.finalidad, correlation_id, presupuesto
         )

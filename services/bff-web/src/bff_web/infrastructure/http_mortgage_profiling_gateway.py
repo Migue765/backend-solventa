@@ -49,7 +49,15 @@ class HttpMortgageProfilingGateway:
             raise MortgageProfilingError("servicio_no_disponible", 503) from error
         if not isinstance(payload, dict):
             raise MortgageProfilingError("servicio_no_disponible", 503)
-        return _result(payload)
+        result = _result(payload)
+        if (
+            result.operation_id != command.operation_id
+            or result.partner_id != command.partner_id
+            or result.advisor_id != command.advisor_id
+            or result.client_id != command.client.client_id
+        ):
+            raise MortgageProfilingError("servicio_no_disponible", 503)
+        return result
 
 
 def _command_json(command: MortgageProfilingCommand) -> dict[str, object]:
@@ -57,7 +65,7 @@ def _command_json(command: MortgageProfilingCommand) -> dict[str, object]:
         "operationId": str(command.operation_id),
         "socioId": command.partner_id,
         "productoId": "mortgage-life",
-        "asesorId": str(command.advisor_id),
+        "actorId": str(command.advisor_id),
         "cliente": {
             "clienteId": str(command.client.client_id),
             "tipoDocumento": command.client.document_type,
@@ -104,10 +112,13 @@ def _controlled_error(error: HTTPError) -> MortgageProfilingError:
 
 def _result(payload: dict[str, Any]) -> MortgageProfilingResult:
     try:
+        actor_id = UUID(payload["actorId"] if "actorId" in payload else payload["asesorId"])
+        if "asesorId" in payload and UUID(payload["asesorId"]) != actor_id:
+            raise ValueError("Actor comercial inconsistente.")
         return MortgageProfilingResult(
             operation_id=UUID(payload["operationId"]),
             partner_id=str(payload["socioId"]),
-            advisor_id=UUID(payload["asesorId"]),
+            advisor_id=actor_id,
             client_id=UUID(payload["clienteId"]),
             status=str(payload["estado"]),
             profiling_reference=str(payload["perfilamientoReferencia"]),

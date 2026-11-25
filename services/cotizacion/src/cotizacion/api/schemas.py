@@ -3,7 +3,15 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 from cotizacion.application.crear_cotizacion import CoberturaSolicitada, CrearCotizacionComando
@@ -119,7 +127,7 @@ class IniciarOperacionHipotecariaRequest(_Solicitud):
     operation_id: UUID
     producto_id: Literal["mortgage-life"] = "mortgage-life"
     socio_id: str = Field(min_length=1, max_length=50)
-    asesor_id: UUID
+    asesor_id: UUID = Field(validation_alias=AliasChoices("actorId", "asesorId", "asesor_id"))
     cliente: ClienteOperacionHipotecariaRequest
     credito: CreditoHipotecarioRequest
     consentimiento_id: UUID

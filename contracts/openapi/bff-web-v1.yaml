@@ -23,7 +23,7 @@ paths:
   /v1/backoffice/eventos-vuelo-simulados:
     post:
       operationId: recibirEventoVueloSimulado
-      summary: Registra cancelacion por clima de Open Data simulado (solo asesor).
+      summary: Registra cancelacion por clima de Open Data simulado (asesor interno autorizado).
       security:
         - bearerAuth: []
       requestBody:
@@ -47,12 +47,22 @@ paths:
         "202":
           description: Aceptado en cola durable; no acredita indemnizacion pagada.
         "401": {description: Sesion no valida.}
-        "403": {description: Requiere rol y alcance asesor.}
+        "403": {description: Requiere asesor interno con siniestros:revisar y sesion activa.}
         "409": {description: Identificador repetido con otro contenido.}
         "422": {description: "Fecha futura, fuera de vigencia o evento invalido."}
         "503": {description: Fuente o contratos no disponibles.}
   /v1/administracion/colas-revision/{cola}/asignaciones:
     $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1colas-revision~1{cola}~1asignaciones"
+  /v1/asesor/colas-revision/{cola}/asignaciones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1asesor~1colas-revision~1{cola}~1asignaciones"
+  /v1/asesor/siniestros/{siniestroId}:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1asesor~1siniestros~1{siniestroId}"
+  /v1/asesor/siniestros/{siniestroId}/decisiones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1asesor~1siniestros~1{siniestroId}~1decisiones"
+  /v1/asesor/siniestros/{siniestroId}/decisiones/revision:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1asesor~1siniestros~1{siniestroId}~1decisiones~1revision"
+  /v1/asesor/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1asesor~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/administracion/siniestros/{siniestroId}:
     $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}"
   /v1/administracion/siniestros/{siniestroId}/decisiones:
@@ -713,33 +723,20 @@ paths:
   /v1/asesor/clientes:
     get:
       tags: [Asesores]
-      summary: Lista clientes registrados para selección del asesor
-      description: Requiere JWT con rol y scope asesor.
+      summary: Catalogo global retirado
+      deprecated: true
+      description: No lista clientes. Usar consultas exactas consentidas o /v1/socios/clientes.
       operationId: listarClientesAsesor
       responses:
-        "200":
-          description: Catálogo mínimo de clientes; no expone credenciales ni consentimiento
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [clientes]
-                properties:
-                  clientes:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ClienteRegistrado"
-        "401":
-          $ref: "#/components/responses/NoAutorizado"
-        "503":
-          $ref: "#/components/responses/ServicioNoDisponible"
+        "403":
+          description: catalogo_clientes_no_autorizado; no consulta Identidad
   /v1/asesor/excepciones-open-finance:
     get:
       tags: [Asesores]
       summary: Lista decisiones pendientes o filtra por estado de aplicacion
       description: >-
-        Requiere JWT con rol=asesor y scope=asesor. socioId debe estar incluido
-        en el claim socios. Sin filtro devuelve decisiones pendientes. Con
+        Requiere JWT con rol=asesor, scope=asesor, socios vacio y permiso
+        open_finance:resolver:{socioId}. Sin filtro devuelve decisiones pendientes. Con
         estadoAplicacion incluye casos ya decididos para recuperarlos tras recarga.
         La aprobación no modifica ni sustituye el consentimiento del cliente.
       operationId: listarExcepcionesOpenFinance
@@ -779,8 +776,8 @@ paths:
       tags: [Asesores]
       summary: Consulta el detalle de una excepción Open Finance
       description: >-
-        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
-        claim socios. Solo expone la referencia, bloqueo, consentimiento y
+        Requiere JWT con rol=asesor, scope=asesor, socios vacio y permiso
+        open_finance:resolver:{socioId}. Solo expone la referencia, bloqueo, consentimiento y
         trazabilidad mínimos; una excepción de otro socio se oculta como 404.
       operationId: consultarExcepcionOpenFinance
       security:
@@ -822,8 +819,9 @@ paths:
       tags: [Asesores]
       summary: Aprueba o rechaza una excepción Open Finance
       description: >-
-        Requiere JWT con rol=asesor y scope=asesor, y socioId incluido en el
-        claim socios. El actorId se deriva de sub; no se acepta en el cuerpo.
+        Requiere JWT con rol=asesor, scope=asesor, socios vacio y permiso
+        open_finance:resolver:{socioId}. Identidad revalida permiso y socio activo.
+        El actorId se deriva de sub; no se acepta en el cuerpo.
         motivo es obligatorio. Aprobar revalida el consentimiento vigente y la
         versión exacta antes de persistir, y no amplía fuentes, datos ni finalidad.
         Primero confirma atomicamente la decision y su evento; para un caso HU44
@@ -934,10 +932,13 @@ paths:
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/perfilamientos-hipotecarios:
     post:
-      tags: [Asesores]
+      tags: [Socios]
       summary: Perfila y cotiza vida hipotecaria en el contexto del socio
       description: >-
-        Requiere JWT de asesor. socioId debe estar en el claim socios. operationId e
+        Requiere JWT con rol=scope=socio. socioId debe estar en el claim socios.
+        consultaInformacionId identifica una consulta completada y consentida del mismo
+        actor, socio, cliente, producto mortgage-life y consentimiento/version.
+        El actor comercial proviene de sub; no se acepta en el cuerpo. operationId e
         Idempotency-Key deben contener el mismo UUID. Un reintento idéntico devuelve
         la misma operación completada; el mismo UUID con otros datos responde 409.
       operationId: iniciarPerfilamientoHipotecario
@@ -2226,7 +2227,8 @@ paths:
       summary: Consolida indicadores operativos de polizas, primas, siniestros y pagos
       operationId: consultarReporteOperativo
       description: |
-        HU36 (SOL-322). Requiere JWT con rol y scope asesor; otros perfiles reciben 403
+        HU36 (SOL-322). Requiere administrador o asesor interno sin socios y permiso
+        reportes:operativos; socio y distribuidor reciben 403
         alcance_insuficiente sin consultar las fuentes. Solo admite los filtros documentados
         (cada uno con un unico valor); cualquier otro parametro responde 400.
         Los indicadores se calculan desde fuentes propietarias identificables (polizas,
@@ -2343,7 +2345,7 @@ paths:
       tags: [Reportes]
       summary: Catalogo de filtros permitidos para reportes operativos
       operationId: consultarOpcionesReporteOperativo
-      description: Requiere JWT con rol y scope asesor. No admite parametros.
+      description: Requiere administrador o asesor interno con reportes:operativos. No admite parametros.
       responses:
         "200":
           description: Productos, estados de poliza y periodo maximo permitidos
@@ -3859,7 +3861,12 @@ components:
         - credito
         - consentimientoId
         - consentimientoVersion
+        - consultaInformacionId
       properties:
+        consultaInformacionId:
+          type: string
+          format: uuid
+          description: operationId de consulta de informacion completada bajo el mismo socio y actor.
         operationId:
           type: string
           format: uuid
@@ -4684,9 +4691,14 @@ components:
         socios:
           type: array
           uniqueItems: true
-          description: Organizaciones autorizadas para roles asesor y socio.
+          description: Organizaciones comerciales autorizadas. Un asesor interno no tiene membresias.
           items:
             type: string
+        permisos:
+          type: array
+          items:
+            type: string
+          description: Capacidades internas explicitas; no sustituyen rol, scope ni consentimiento.
         tipoDocumento:
           type: string
           enum: [cc, ce, passport, ppt]

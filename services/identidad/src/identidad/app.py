@@ -199,23 +199,40 @@ def create_app(
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)
     @click.option("--email", required=True)
-    @click.option("--password", required=True, hide_input=True)
-    @click.option("--partner-id", required=True)
-    @click.option("--partner-name", required=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+    @click.option("--permission", multiple=True)
     def create_advisor(
         name: str,
         email: str,
         password: str,
-        partner_id: str,
-        partner_name: str,
+        permission: tuple[str, ...],
     ) -> None:
-        user = User(uuid4(), name.strip(), email.strip().casefold(), "asesor", (partner_id,))
-        user_repository.create_advisor(
-            user,
-            hash_password(password, iterations=active_config.password_iterations),
-            partner_id.strip(),
-            partner_name.strip(),
+        payload = RegisterRequest(nombre=name.strip(), correo=email.strip(), contrasena=password)
+        for item in permission:
+            risk_partner = item.removeprefix("open_finance:resolver:")
+            if item not in {"siniestros:revisar", "reportes:operativos"} and not (
+                item.startswith("open_finance:resolver:")
+                and risk_partner.strip() == risk_partner
+                and 1 <= len(risk_partner) <= 50
+            ):
+                raise click.BadParameter("Permiso interno invalido.", param_hint="permission")
+        user = User(
+            uuid4(),
+            payload.nombre,
+            str(payload.correo).casefold(),
+            "asesor",
+            permissions=tuple(sorted(set(permission))),
         )
+        try:
+            user_repository.create_advisor(
+                user, hash_password(password, iterations=active_config.password_iterations)
+            )
+        except EmailAlreadyRegisteredError as error:
+            raise click.ClickException(
+                "La cuenta ya existe; no se modificaron credenciales ni permisos."
+            ) from error
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
         click.echo(str(user.user_id))
 
     @app.cli.command("create-partner-user")

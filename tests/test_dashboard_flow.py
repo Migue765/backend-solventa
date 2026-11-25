@@ -49,6 +49,9 @@ Runtime = tuple[FlaskClient, FlaskClient, sessionmaker[Session]]
 
 
 class IdentityGatewayStub:
+    def session_active(self, session_id: UUID, correlation_id: str) -> bool:
+        return True
+
     def get_client(self, client_id: UUID, correlation_id: str) -> User | None:
         return User(
             client_id,

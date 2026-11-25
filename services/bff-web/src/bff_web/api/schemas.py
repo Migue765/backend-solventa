@@ -112,6 +112,8 @@ def user_to_json(user: User) -> dict[str, object]:
     }
     if user.role in {"asesor", "socio"}:
         result["socios"] = list(user.partner_ids)
+    if user.permissions:
+        result["permisos"] = list(user.permissions)
     return result
 
 

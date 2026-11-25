@@ -80,6 +80,26 @@ def test_advisor_token_contains_scope_and_authorized_partners(private_key_pem: s
     assert claims["scope"] == "asesor"
     assert claims["rol"] == "asesor"
     assert claims["socios"] == ["BANCO-001", "BANCO-002"]
+    assert claims["permisos"] == []
+
+
+def test_internal_advisor_token_does_not_require_commercial_membership(
+    private_key_pem: str,
+) -> None:
+    issuer = RsaJwtIssuer(private_key_pem, "https://x", "aud")
+    now = datetime.now(UTC)
+    advisor = User(
+        uuid4(),
+        "Revision interna",
+        "revision@example.net",
+        "asesor",
+        permissions=("siniestros:revisar",),
+    )
+    token = issuer.issue(advisor, "web", now, now + timedelta(hours=1), uuid4())
+    claims = jwt.decode(token, options={"verify_signature": False})
+    assert claims["rol"] == claims["scope"] == "asesor"
+    assert claims["socios"] == []
+    assert claims["permisos"] == ["siniestros:revisar"]
 
 
 def test_every_token_has_a_unique_jti(private_key_pem: str) -> None:

@@ -3,8 +3,11 @@ info:
   title: Solventa revision administrativa de siniestros
   version: 1.0.0
   description: >
-    Acceso interno de Solventa, separado de asesores y socios. Requiere JWT web con
-    rol y scope administrador, sid vigente y sin membresias de socios. El usuario JSON
+    Acceso interno de Solventa, separado de socios comerciales. Requiere JWT web con
+    rol=scope=administrador o rol=scope=asesor con permiso siniestros:revisar,
+    sid vigente y sin membresias comerciales. Las mismas rutas estan disponibles bajo
+    /v1/asesor para revision operativa; /v1/administracion conserva compatibilidad.
+    El usuario JSON
     del login, renovacion y sesion actual conserva id, nombre, correo y rol; no incluye
     socios ni scope. El registro publico nunca asigna este rol. Aprovisionamiento
     privado mediante create-admin. No habilita pagos ni aprobacion de nuevas polizas.
@@ -14,6 +17,69 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /v1/asesor/colas-revision/{cola}/asignaciones:
+    get:
+      operationId: listarColaRevisionAsesor
+      description: Alias operativo; exige asesor interno con siniestros:revisar o administrador.
+      parameters:
+        - name: cola
+          in: path
+          required: true
+          schema: {type: string, enum: [revision, inspeccion, fraude]}
+      responses:
+        "200":
+          $ref: "#/paths/~1v1~1administracion~1colas-revision~1{cola}~1asignaciones/get/responses/200"
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/asesor/siniestros/{siniestroId}:
+    get:
+      operationId: consultarSiniestroAsesor
+      description: Alias operativo; misma evidencia, autorizacion y auditoria que administracion.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      responses:
+        "200":
+          $ref: "#/paths/~1v1~1administracion~1siniestros~1{siniestroId}/get/responses/200"
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/asesor/siniestros/{siniestroId}/decisiones:
+    get:
+      operationId: consultarDecisionesAsesor
+      description: Alias operativo del historial durable, sin nueva logica de dominio.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      responses:
+        "200":
+          $ref: "#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones/get/responses/200"
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/asesor/siniestros/{siniestroId}/decisiones/revision:
+    post:
+      operationId: resolverRevisionAsesor
+      description: Alias operativo; conserva actor de sesion, idempotencia y transiciones existentes.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        $ref: "#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones~1revision/post/requestBody"
+      responses:
+        "201": {$ref: "#/components/responses/Decision"}
+        "200": {$ref: "#/components/responses/Decision"}
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/asesor/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    get:
+      operationId: descargarEvidenciaAsesor
+      description: Alias operativo de descarga autenticada y auditada; nunca URLs publicas.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+        - name: evidenciaId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          $ref: "#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido/get/responses/200"
+        default: {$ref: "#/components/responses/Problema"}
   /v1/administracion/colas-revision/{cola}/asignaciones:
     get:
       operationId: listarColaRevisionAdministrativa

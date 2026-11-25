@@ -129,6 +129,8 @@ def user_to_json(user: User) -> dict[str, object]:
     }
     if user.role in {"asesor", "socio"}:
         result["socios"] = list(user.partner_ids)
+    if user.permissions:
+        result["permisos"] = list(user.permissions)
     if user.document_type is not None and user.identification is not None:
         result["tipoDocumento"] = user.document_type
         result["numeroDocumento"] = user.identification
