@@ -37,6 +37,29 @@ La respuesta incluye `access_token`, `token_type: Bearer`, `expires_in: 3600`, `
 `refresh_expires_in`, `scope: cliente` y `usuario`. Los errores son siempre
 `application/problem+json` con `type`, `title`, `status`, `detail`, `code` y `correlationId`.
 
+## Administradores internos de Solventa
+
+El rol `administrador` es independiente de `asesor` y `socio`: no crea organizaciones
+ni membresias y no se obtiene mediante registro publico. Un operador autorizado
+lo aprovisiona dentro del servicio Identidad con su configuracion productiva existente:
+
+```text
+flask --app identidad.app:create_app create-admin --name "Operador interno" --email <correo>
+```
+
+La contrasena se solicita sin eco y con confirmacion; no pasarla como argumento,
+guardarla en archivos ni incluirla en commits o informes. Aplica la politica vigente
+de 8-128 caracteres y el hash PBKDF2 existente. Si el correo ya existe se detiene:
+no cambia credenciales ni convierte cuentas previas en administradores.
+
+Login cifrado, renovacion y cierre usan los contratos existentes. Los JWT llevan
+`rol=administrador`, `scope=administrador` y `sid`; `usuario` no incluye `socios`.
+El BFF Web comprueba firma, canal web, scope y sesion activa antes de permitir la
+revision humana de siniestros. No concede acceso de socio ni habilita pagos.
+Contrato: `contracts/openapi/administracion-siniestros-web-v1.yaml`.
+No crear cuentas productivas hasta desplegar y autorizar el recorrido integrado
+con la web compatible; este cambio no despliega ni aprovisiona cuentas.
+
 ## Recuperacion de contrasena (requiere habilitacion operativa)
 
 Identidad y BFF Web comparten las rutas publicas `POST /v1/recuperacion-contrasena`,

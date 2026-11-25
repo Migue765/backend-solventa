@@ -11,6 +11,57 @@ PASSWORD = "Solventa123!"
 INTERNAL_TOKEN = "internal-test-token"
 
 
+def test_admin_privado_conserva_rol_sin_socios_y_no_modifica_cuentas_existentes(
+    make_app: Any,
+) -> None:
+    app: Flask = make_app()
+    runner = app.test_cli_runner()
+    args = ["create-admin", "--name", "Operador interno", "--email", "operador@example.net"]
+    created = runner.invoke(args=args, input=f"{PASSWORD}\n{PASSWORD}\n")
+    assert created.exit_code == 0, created.output
+    duplicate = runner.invoke(args=args, input="OtraClave123!\nOtraClave123!\n")
+    assert duplicate.exit_code != 0
+    assert "no se modificaron credenciales ni permisos" in duplicate.output
+    client = app.test_client()
+    login = client.post(
+        "/oauth/token",
+        json={
+            "grant_type": "password",
+            "client_id": "web",
+            "username": "operador@example.net",
+            "password": PASSWORD,
+        },
+    )
+    assert login.status_code == 200
+    tokens = login.get_json()
+    assert tokens["usuario"]["rol"] == tokens["scope"] == "administrador"
+    assert "socios" not in tokens["usuario"]
+    refreshed = client.post(
+        "/oauth/token",
+        json={
+            "grant_type": "refresh_token",
+            "client_id": "web",
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+    assert refreshed.status_code == 200
+    claims = jwt.decode(refreshed.get_json()["access_token"], options={"verify_signature": False})
+    assert claims["rol"] == claims["scope"] == "administrador"
+    assert claims["sid"]
+    assert "socios" not in claims
+    public = client.post(
+        "/v1/usuarios",
+        json={
+            "nombre": "No autorizado",
+            "correo": "otro-operador@example.net",
+            "contrasena": PASSWORD,
+            "rol": "administrador",
+        },
+    )
+    assert public.status_code == 400
+    assert app.extensions["user_repository"].find_credential("otro-operador@example.net") is None
+
+
 def _register_client(client: FlaskClient, with_document: bool = False) -> str:
     document = (
         {

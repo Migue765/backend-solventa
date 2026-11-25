@@ -30,7 +30,7 @@ from identidad.application.registration_service import RegistrationService
 from identidad.application.token_service import TokenService
 from identidad.config import Config
 from identidad.domain.auth import User
-from identidad.domain.errors import TokenIssuanceError
+from identidad.domain.errors import EmailAlreadyRegisteredError, TokenIssuanceError
 from identidad.infrastructure.biometric_crypto import P256BiometricCrypto
 from identidad.infrastructure.biometric_limiter import RedisBiometricLimiter
 from identidad.infrastructure.encrypted_login import EncryptedLogin
@@ -170,6 +170,28 @@ def create_app(
     app.register_blueprint(session_state.bp)
     app.register_blueprint(verification.bp)
     app.register_blueprint(password_recovery.bp)
+
+    @app.cli.command("create-admin")
+    @click.option("--name", required=True)
+    @click.option("--email", required=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+    def create_admin(name: str, email: str, password: str) -> None:
+        try:
+            payload = RegisterRequest(
+                nombre=name.strip(), correo=email.strip(), contrasena=password
+            )
+        except ValueError as error:
+            raise click.ClickException("Nombre, correo o contrasena invalidos.") from error
+        user = User(uuid4(), payload.nombre, str(payload.correo).casefold(), "administrador")
+        try:
+            user_repository.add(
+                user, hash_password(password, iterations=active_config.password_iterations)
+            )
+        except EmailAlreadyRegisteredError as error:
+            raise click.ClickException(
+                "La cuenta ya existe; no se modificaron credenciales ni permisos."
+            ) from error
+        click.echo(str(user.user_id))
 
     @app.cli.command("create-advisor")
     @click.option("--name", required=True)
