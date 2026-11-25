@@ -64,6 +64,17 @@ class ConsentimientosPrueba:
         return self.actual
 
 
+class AutorizacionesPrueba:
+    def __init__(self) -> None:
+        self.allowed = True
+
+    def validar(
+        self, actor_id: UUID, socio_id: str, rol: Literal["asesor", "socio"], correlation_id: str
+    ) -> None:
+        if not self.allowed:
+            raise ErrorPerfilamiento("actor_no_autorizado", 403)
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> RepositorioPerfiles:
     repo = RepositorioPerfiles(f"sqlite:///{tmp_path / 'perfilamiento.db'}")
@@ -211,11 +222,13 @@ def test_consulta_persistida_se_recupera_solo_con_consentimiento_vigente(
 ) -> None:
     cliente_id = uuid4()
     consentimientos = ConsentimientosPrueba(cliente_id)
+    autorizaciones = AutorizacionesPrueba()
     servicio = ConsultarInformacionCliente(
         repo,
         consentimientos,
         (FuenteMock("open_finance"), FuenteMock("open_data")),
         lambda: AHORA,
+        autorizaciones=autorizaciones,
     )
     comando = ConsultarInformacionComando(
         uuid4(),
@@ -229,6 +242,10 @@ def test_consulta_persistida_se_recupera_solo_con_consentimiento_vigente(
     consulta = servicio.ejecutar(comando, "corr-original")
 
     assert servicio.recuperar("BANCO-001", comando.operation_id, "corr-recuperar") == consulta
+    autorizaciones.allowed = False
+    with pytest.raises(ErrorPerfilamiento, match="actor_no_autorizado"):
+        servicio.recuperar("BANCO-001", comando.operation_id, "corr-actor-revocado")
+    autorizaciones.allowed = True
     assert consentimientos.actual is not None
     consentimientos.actual = consentimientos.actual.model_copy(
         update={"estado": "revocado", "version": 2}
@@ -587,7 +604,11 @@ def hu44(repo: RepositorioPerfiles) -> Iterator[ContextoHu44]:
     permisos = ConsentimientosPrueba(cliente)
     fuente = FuenteControlada()
     servicio = ConsultarInformacionCliente(
-        repo, permisos, (FuenteMock("open_finance"), fuente), lambda: AHORA
+        repo,
+        permisos,
+        (FuenteMock("open_finance"), fuente),
+        lambda: AHORA,
+        autorizaciones=AutorizacionesPrueba(),
     )
     try:
         yield (

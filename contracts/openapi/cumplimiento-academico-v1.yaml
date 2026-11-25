@@ -3,7 +3,9 @@ info:
   title: Cumplimiento academico de Solventa
   version: 1.0.0
   description: |
-    API backend integrada, sin UI nueva. Usa JWT Web con rol y scope asesor.
+    API backend integrada, sin UI nueva. Usa JWT Web con sid activo, rol y scope
+    asesor, sin socios y con permiso reportes:operativos. No convierte administradores
+    en asesores ni amplia los roles admitidos por el dominio.
     No implementa ACORD, un reasegurador real ni un formato oficial para autoridades.
     Fuentes: Polizas, Cotizacion y Siniestros. Reportes y acuses simulados persistidos
     en Polizas; el BFF no guarda datos. HTTPS debe mantenerse en el entorno objetivo.

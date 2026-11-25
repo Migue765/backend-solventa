@@ -9,10 +9,46 @@ from identidad.consent_outbox import ConsentOutbox
 from identidad.domain.consent import Consent
 from identidad.infrastructure.persistence.consent_repository import SqlConsentRepository
 from identidad.infrastructure.persistence.models import ConsentModel
-from sqlalchemy import MetaData, Table, create_engine, inspect
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select
 from sqlalchemy.orm import sessionmaker
 
 SERVICE_DIR = Path(__file__).resolve().parents[2]
+
+
+def test_internal_permissions_migration_keeps_legacy_roles_and_memberships(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = f"sqlite:///{tmp_path / 'roles.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.delenv("DB_SCHEMA", raising=False)
+    config = AlembicConfig(str(SERVICE_DIR / "alembic.ini"))
+    command.upgrade(config, "0010")
+    engine = create_engine(url)
+    metadata = MetaData()
+    users = Table("usuarios", metadata, autoload_with=engine)
+    partners = Table("socios", metadata, autoload_with=engine)
+    memberships = Table("asesores_socios", metadata, autoload_with=engine)
+    actor_id = uuid4().hex
+    with engine.begin() as connection:
+        connection.execute(
+            users.insert().values(
+                usuario_id=actor_id,
+                nombre="Historico",
+                correo="legacy@example.test",
+                rol="asesor",
+                password_hash="fixture",
+            )
+        )
+        connection.execute(
+            partners.insert().values(socio_id="LEGACY", nombre="Socio historico", activo=True)
+        )
+        connection.execute(memberships.insert().values(asesor_id=actor_id, socio_id="LEGACY"))
+    command.upgrade(config, "head")
+    permissions = Table("usuarios_permisos", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        assert connection.scalar(select(users.c.rol)) == "asesor"
+        assert connection.scalar(select(memberships.c.socio_id)) == "LEGACY"
+        assert connection.scalar(select(func.count()).select_from(permissions)) == 0
 
 
 def test_migrations_create_both_tables_with_their_own_version_table(
@@ -31,10 +67,18 @@ def test_migrations_create_both_tables_with_their_own_version_table(
         "refresh_tokens",
         "socios",
         "asesores_socios",
+        "usuarios_socios",
+        "usuarios_permisos",
         "alembic_version_identidad",
         "verificaciones_identidad_simuladas",
         "intentos_identidad_simulados",
-    } <= set(inspector.get_table_names())
+        "consentimientos_perfilamiento",
+        "outbox_consentimientos",
+        "credenciales_biometricas",
+        "desafios_biometricos",
+        "auditoria_biometrica",
+        "recuperaciones_contrasena",
+    } == set(inspector.get_table_names())
     assert "alembic_version" not in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("refresh_tokens")}
     assert columns == {
@@ -51,7 +95,17 @@ def test_migrations_create_both_tables_with_their_own_version_table(
 
     command.downgrade(config, "base")
     remaining = set(inspect(create_engine(url)).get_table_names())
-    assert not {"usuarios", "refresh_tokens", "socios", "asesores_socios"} & remaining
+    assert (
+        not {
+            "usuarios",
+            "refresh_tokens",
+            "socios",
+            "asesores_socios",
+            "usuarios_socios",
+            "usuarios_permisos",
+        }
+        & remaining
+    )
     assert not {"verificaciones_identidad_simuladas", "intentos_identidad_simulados"} & remaining
 
 

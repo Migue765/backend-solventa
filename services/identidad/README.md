@@ -19,7 +19,9 @@ publica. Contrato: `contracts/openapi/identidad-v1.yaml`.
 
 La lectura de autorizacion usa el token interno existente y devuelve solamente
 `{actorId,socioId,rol,autorizado}` con `Cache-Control: no-store`. Comprueba el rol y la
-pertenencia a un socio activo desde SQL, no desde un JWT antiguo. Usuario inexistente,
+pertenencia comercial a un socio activo desde SQL para `rol=socio`, no desde un JWT antiguo.
+Para `rol=asesor` exige cuenta interna sin socios y permiso exacto
+`open_finance:resolver:<socioId>` con organizacion activa. Usuario inexistente,
 rol incorrecto o pertenencia ausente/inactiva producen `autorizado:false`; no divulga
 otros socios, correo ni nombre. No concede permisos ni sustituye consentimiento.
 Perfilamiento la usa al aplicar/recuperar una operacion HU44 vinculada; debe estar
@@ -59,6 +61,66 @@ revision humana de siniestros. No concede acceso de socio ni habilita pagos.
 Contrato: `contracts/openapi/administracion-siniestros-web-v1.yaml`.
 No crear cuentas productivas hasta desplegar y autorizar el recorrido integrado
 con la web compatible; este cambio no despliega ni aprovisiona cuentas.
+
+## Separacion de asesores internos y socios comerciales
+
+El socio vende/origina servicios y usa `usuarios_socios`; `asesor` revisa siniestros
+no automaticos desde las colas y transiciones existentes. No se cambia el flujo
+parametrico automatico ni cobro, firma o emision. `administrador` conserva sus
+privilegios independientes; `distribuidor` no se transforma ni recibe acceso de socio.
+
+La migracion aditiva `0011` crea `usuarios_permisos` vacia: no modifica roles,
+`asesores_socios`, `usuarios_socios`, expedientes, decisiones ni operaciones previas.
+El JWT mantiene `rol=scope`, `socios` y agrega `permisos`; login, refresh y sesion
+actual exponen permisos cuando existen. La renovacion vuelve a leer SQL.
+Las capacidades autorizadas son:
+
+| Capacidad | Cuenta y alcance |
+| --- | --- |
+| `siniestros:revisar` | Asesor interno sin membresias; revision manual existente |
+| `open_finance:resolver:<socioId>` | Asesor interno de riesgo/suscripcion autorizado para ese socio activo |
+| `reportes:operativos` | Asesor interno autorizado a consolidacion global; nunca un socio |
+
+`create-advisor` ahora crea una cuenta interna, sin `--partner-id` ni
+`--partner-name`; los permisos se conceden explicitamente con `--permission`
+repetible. Sin permisos no da acceso a esas capacidades. Un permiso de riesgo
+requiere una organizacion existente activa; no crea una afiliacion comercial.
+
+```text
+flask --app identidad.app:create_app create-advisor --name "Revision interna" --email <correo> --permission siniestros:revisar
+flask --app identidad.app:create_app create-advisor --name "Riesgo interno" --email <correo> --permission open_finance:resolver:<socioId>
+```
+
+La contrasena se solicita sin eco y confirmada. `create-partner-user` mantiene
+su contrato separado y `usuarios_socios`. No ejecutar estas ordenes en entornos
+reales sin autorizacion. Para cuentas existentes se requiere clasificacion humana:
+no convertir todos los asesores en socios ni borrar asociaciones historicas.
+Crear cuentas comerciales/internal operativas separadas mediante los comandos
+privados aprobados y conservar los IDs/roles historicos. Cuentas asesor heredadas
+con asociaciones comerciales no obtienen capacidades internas ni originacion
+hipotecaria. La habilitacion exige migracion `0011`, consumidores compatibles,
+revision de cuentas y cierre/revocacion de familias refresh previas; permisos de
+JWT ya emitidos viven hasta su expiracion salvo revocacion de sesion.
+
+El BFF ofrece `/v1/asesor/colas-revision/...` y `/v1/asesor/siniestros/...` como
+alias de `/v1/administracion/...`; exige sesion activa, ausencia de socios y
+administrador o asesor con `siniestros:revisar`. Riesgo conserva
+`/v1/asesor/excepciones-open-finance?socioId=...` y valida el permiso exacto;
+resolver/aplicar revalidan SQL por el contrato interno existente. Un asesor
+operativo no recibe riesgo automaticamente. Reportes conserva
+`/v1/reportes/operativos` para administrador o asesor con `reportes:operativos`;
+el consolidado global no se comparte con socios.
+
+Hipoteca exige ahora `rol=scope=socio`, `socioId` autorizado y
+`consultaInformacionId` (operationId de la consulta existente de informacion del
+cliente). Recupera dicha consulta bajo el socio, revalida membresia/consentimiento
+y comprueba actor, cliente, producto y consentimiento/version antes de consultar
+Identidad. `/v1/asesor/clientes` devuelve 403 sin listar usuarios; usar consultas
+exactas consentidas y `/v1/socios/clientes` ya acotado a operaciones del socio.
+En el wire BFF-Cotizacion se usa `actorId`; Cotizacion admite tambien `asesorId`
+legacy, rechazando ambos juntos, y devuelve ambos con el mismo valor. Conserva
+`asesor_id` en almacenamiento, comandos y fingerprint para recuperar idempotencia
+e historia sin migracion destructiva. No aceptar actor en el payload publico.
 
 ## Recuperacion de contrasena (requiere habilitacion operativa)
 

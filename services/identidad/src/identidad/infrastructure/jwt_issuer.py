@@ -72,6 +72,7 @@ class RsaJwtIssuer:
         }
         if user.role in {"asesor", "socio"}:
             claims["socios"] = list(user.partner_ids)
+        claims["permisos"] = list(user.permissions)
         if session_id is not None:
             claims["sid"] = str(session_id)
         try:

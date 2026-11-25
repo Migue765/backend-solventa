@@ -80,11 +80,15 @@ def partner_authorization(partner_id: str, actor_id: UUID) -> Response:
         )
     repository = cast(SqlUserRepository, current_app.extensions["user_repository"])
     actor = repository.find_by_id(actor_id)
+    if role == "asesor":
+        authorized = repository.risk_authorized(actor_id, partner_id)
+    else:
+        authorized = actor is not None and actor.role == role and partner_id in actor.partner_ids
     response = jsonify(
         actorId=str(actor_id),
         socioId=partner_id,
         rol=role,
-        autorizado=actor is not None and actor.role == role and partner_id in actor.partner_ids,
+        autorizado=authorized,
     )
     response.headers["Cache-Control"] = "no-store"
     return response

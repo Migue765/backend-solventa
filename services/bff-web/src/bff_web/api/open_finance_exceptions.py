@@ -9,6 +9,7 @@ from bff_web.api.security import (
     audit_rejected_response,
     authenticate,
     bearer_token,
+    internal_authorized,
     invalid_session_response,
 )
 from bff_web.application.open_finance_exception_ports import OpenFinanceExceptionGateway
@@ -45,8 +46,8 @@ class _ApplyPayload(BaseModel):
 @bp.get("/excepciones-open-finance")
 def list_pending() -> Response:
     claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
+    if isinstance(claims, Response):
+        return claims
     if not _version_supported():
         return _version_error()
     partner_id = _partner_id(claims)
@@ -76,8 +77,8 @@ def list_pending() -> Response:
 @bp.get("/excepciones-open-finance/<uuid:exception_id>")
 def get_exception(exception_id: UUID) -> Response:
     claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
+    if isinstance(claims, Response):
+        return claims
     if not _version_supported():
         return _version_error()
     partner_id = _partner_id(claims)
@@ -93,8 +94,8 @@ def get_exception(exception_id: UUID) -> Response:
 @bp.post("/excepciones-open-finance/<uuid:exception_id>/resolver")
 def resolve(exception_id: UUID) -> Response:
     claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
+    if isinstance(claims, Response):
+        return claims
     if not _version_supported():
         return _version_error()
     partner_id = _partner_id(claims)
@@ -127,8 +128,8 @@ def resolve(exception_id: UUID) -> Response:
 @bp.post("/excepciones-open-finance/<uuid:exception_id>/aplicar")
 def apply_decision(exception_id: UUID) -> Response:
     claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
+    if isinstance(claims, Response):
+        return claims
     if not _version_supported():
         return _version_error()
     partner_id = _partner_id(claims)
@@ -186,17 +187,22 @@ def _apply_pending(
     return _gateway().apply(exception_id, partner_id, actor_id, str(g.correlation_id), impediment)
 
 
-def _advisor_claims() -> AccessClaims | None:
+def _advisor_claims() -> AccessClaims | Response:
     try:
         claims = authenticate()
     except InvalidAccessTokenError:
         g.audit_rejection_reason = (
             "credencial_ausente" if bearer_token() is None else "credencial_invalida"
         )
-        return None
-    if claims.scope != "asesor" or claims.user.role != "asesor":
+        return invalid_session_response()
+    if claims.scope != "asesor" or claims.user.role != "asesor" or claims.user.partner_ids:
         g.audit_rejection_reason = "alcance_insuficiente"
-        return None
+        return problem_response(
+            403,
+            "alcance_insuficiente",
+            "Acceso denegado",
+            "Se requiere personal interno de riesgo.",
+        )
     g.audit_actor_id = str(claims.user.user_id)
     return claims
 
@@ -207,10 +213,13 @@ def _partner_id(claims: AccessClaims) -> str | Response:
         return problem_response(
             400, "solicitud_invalida", "Solicitud invalida", "Indica un socio autorizado."
         )
-    if partner_id not in claims.user.partner_ids:
+    if not internal_authorized(claims, f"open_finance:resolver:{partner_id}"):
         g.audit_rejection_reason = "socio_no_autorizado"
         return problem_response(
-            403, "socio_no_autorizado", "Acceso denegado", "La cuenta no pertenece al socio."
+            403,
+            "socio_no_autorizado",
+            "Acceso denegado",
+            "Requiere autorizacion de riesgo para el socio.",
         )
     g.audit_partner_id = partner_id
     return partner_id

@@ -12,7 +12,7 @@ ADVISOR = User(
     "Laura Asesora",
     "laura@banco.co",
     "asesor",
-    partner_ids=("BANCO-001",),
+    permissions=("open_finance:resolver:BANCO-001",),
 )
 
 
@@ -103,7 +103,11 @@ class OpenFinanceExceptionGatewayStub:
 
 
 def _advisor_token(keypair: KeyPair, **overrides: Any) -> str:
-    claims: dict[str, Any] = {"socios": ["BANCO-001"]}
+    claims: dict[str, Any] = {
+        "socios": [],
+        "permisos": list(ADVISOR.permissions),
+        "sid": str(uuid4()),
+    }
     claims.update(overrides)
     return sign_token(
         keypair,
@@ -145,6 +149,30 @@ def _exception() -> dict[str, object]:
             "correlationId": "origin",
         },
     }
+
+
+def test_operational_advisor_has_no_automatic_risk_access(app: Flask, keypair: KeyPair) -> None:
+    gateway = OpenFinanceExceptionGatewayStub(record=_exception())
+    app.extensions["open_finance_exception_gateway"] = gateway
+    response = app.test_client().get(
+        "/v1/asesor/excepciones-open-finance?socioId=BANCO-001",
+        headers={
+            "Authorization": "Bearer " + _advisor_token(keypair, permisos=["siniestros:revisar"])
+        },
+    )
+    assert response.status_code == 403
+    assert gateway.calls == []
+
+
+def test_risk_permission_without_session_is_denied(app: Flask, keypair: KeyPair) -> None:
+    gateway = OpenFinanceExceptionGatewayStub(record=_exception())
+    app.extensions["open_finance_exception_gateway"] = gateway
+    response = app.test_client().get(
+        "/v1/asesor/excepciones-open-finance?socioId=BANCO-001",
+        headers={"Authorization": "Bearer " + _advisor_token(keypair, sid=None)},
+    )
+    assert response.status_code == 403
+    assert gateway.calls == []
 
 
 def test_advisor_can_list_get_and_resolve_for_authorized_partner(
@@ -196,9 +224,9 @@ def test_advisor_route_enforces_scope_partner_and_resolution_payload(
     assert (
         client.get(
             "/v1/asesor/excepciones-open-finance?socioId=BANCO-001",
-            headers={"Authorization": f"Bearer {_advisor_token(keypair, socios=[])}"},
+            headers={"Authorization": f"Bearer {_advisor_token(keypair, permisos=[])}"},
         ).status_code
-        == 401
+        == 403
     )
     assert (
         client.get(

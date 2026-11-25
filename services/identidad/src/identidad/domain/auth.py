@@ -15,6 +15,7 @@ class User:
     identification: str | None = None
     phone: str | None = None
     birth_date: date | None = None
+    permissions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

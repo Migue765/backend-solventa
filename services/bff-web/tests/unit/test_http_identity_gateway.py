@@ -27,6 +27,21 @@ def test_session_state_uses_internal_auth_and_preserves_revocation(
     assert identity_server.requests[0]["headers"]["Authorization"] == "Bearer test-internal"
 
 
+def test_identity_gateway_preserves_explicit_internal_permissions(
+    identity_server: IdentityServer,
+) -> None:
+    payload = token_response()
+    payload["scope"] = "asesor"
+    payload["usuario"].update(
+        rol="asesor", socios=[], permisos=["siniestros:revisar", "reportes:operativos"]
+    )
+    identity_server.respond("POST", "/oauth/token", 200, payload)
+    tokens = HttpIdentityGateway(identity_server.url).login(USER.email, "password", CID)
+    assert tokens.user.role == "asesor"
+    assert tokens.user.partner_ids == ()
+    assert tokens.user.permissions == ("siniestros:revisar", "reportes:operativos")
+
+
 @pytest.mark.parametrize(
     "payload", [{"sesionId": "wrong", "activa": True}, {"activa": True}, {"activa": "true"}]
 )

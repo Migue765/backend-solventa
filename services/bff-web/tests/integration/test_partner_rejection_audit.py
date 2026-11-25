@@ -9,7 +9,12 @@ from flask import Flask
 from support import USER, KeyPair, sign_token
 
 from .test_client_information_api import ClientInformationGatewayStub
-from .test_mortgage_profiling_api import ADVISOR, MortgageGatewayStub, _payload
+from .test_mortgage_profiling_api import (
+    ADVISOR,
+    MortgageGatewayStub,
+    _consented_information,
+    _payload,
+)
 from .test_partner_quotes_api import PARTNER, PATH, PartnerGateway, payload
 
 CORRELATION_ID = "338995c8-770f-45c5-a420-60e50de46363"
@@ -21,7 +26,6 @@ TARGETS = [
     ("GET", "/v1/socios/actual", False),
     ("GET", RECOVERY, False),
     ("POST", MORTGAGE, True),
-    ("GET", "/v1/asesor/clientes", True),
     ("POST", INFORMATION, False),
 ]
 
@@ -171,18 +175,16 @@ def test_role_and_scope_rejections_preserve_public_contract(
         method=method,
         headers={"Authorization": "Bearer " + token, "X-Correlation-ID": CORRELATION_ID},
     )
-    status, code = (401, "sesion_invalida") if advisor else (403, "alcance_insuficiente")
+    status, code = 403, "alcance_insuficiente"
     assert response.status_code == status
     assert response.get_json()["code"] == code
     fields = audit_event(caplog, code, status)
-    assert fields["reason"] == (
-        "credencial_invalida" if advisor and claim != "rol" else "alcance_insuficiente"
-    )
+    assert fields["reason"] == "alcance_insuficiente"
     assert "actorId" not in fields and "socioId" not in fields
     assert token not in repr(fields)
 
 
-@pytest.mark.parametrize("method,path,advisor", [TARGETS[0], TARGETS[2], TARGETS[3], TARGETS[5]])
+@pytest.mark.parametrize("method,path,advisor", [TARGETS[0], TARGETS[2], TARGETS[3], TARGETS[4]])
 def test_foreign_partner_is_never_attributed_as_authorized(
     app: Flask,
     keypair: KeyPair,
@@ -274,6 +276,10 @@ def test_admission_rejection_records_only_verified_context(
     app.extensions["mortgage_profiling_gateway"] = MortgageGatewayStub(error=error)
     user = ADVISOR if advisor else PARTNER
     body = _payload(uuid4()) if advisor else payload()
+    if advisor:
+        information = Mock()
+        information.recover.return_value = _consented_information(body)
+        app.extensions["client_information_gateway"] = information
     token = sign_token(keypair, user=user, scope=user.role, socios=["BANCO-001"])
     response = app.test_client().post(
         MORTGAGE if advisor else PATH,
@@ -290,6 +296,34 @@ def test_admission_rejection_records_only_verified_context(
     fields = audit_event(caplog, public_code, status)
     assert fields["actorId"] == str(user.user_id)
     assert fields["socioId"] == "BANCO-001"
+    assert token not in repr(fields)
+
+
+@pytest.mark.parametrize("credential", ["missing", "invalid", "expired", "valid"])
+def test_retired_global_catalog_rejection_never_attributes_identity(
+    app: Flask, keypair: KeyPair, caplog: pytest.LogCaptureFixture, credential: str
+) -> None:
+    token = sign_token(
+        keypair,
+        user=PARTNER,
+        scope="socio",
+        socios=["BANCO-001"],
+        expires_in=-60 if credential == "expired" else 60,
+    )
+    authorization = {
+        "missing": "",
+        "invalid": "Bearer no-registrar-credencial",
+        "expired": "Bearer " + token,
+        "valid": "Bearer " + token,
+    }[credential]
+    response = app.test_client().get(
+        "/v1/asesor/clientes",
+        headers={"Authorization": authorization, "X-Correlation-ID": CORRELATION_ID},
+    )
+    assert response.status_code == 403
+    assert response.get_json()["code"] == "catalogo_clientes_no_autorizado"
+    fields = audit_event(caplog, "catalogo_clientes_no_autorizado", 403)
+    assert "actorId" not in fields and "socioId" not in fields
     assert token not in repr(fields)
 
 

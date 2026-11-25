@@ -1,6 +1,6 @@
 import json
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from bff_web.domain.auth import User
@@ -34,8 +34,41 @@ def sources(app: Flask) -> FakeReportSources:
 
 
 def advisor(keypair: KeyPair) -> dict[str, str]:
-    token = sign_token(keypair, user=ADVISOR, scope="asesor", socios=["BANCO-001"])
+    token = sign_token(
+        keypair,
+        user=ADVISOR,
+        scope="asesor",
+        socios=[],
+        permisos=["reportes:operativos"],
+        sid=str(uuid4()),
+    )
     return {"Authorization": "Bearer " + token, "X-Correlation-ID": CORRELATION_ID}
+
+
+def test_revisor_sin_permiso_de_reportes_no_consulta_fuentes(
+    app: Flask, keypair: KeyPair, sources: FakeReportSources
+) -> None:
+    token = sign_token(
+        keypair, user=ADVISOR, scope="asesor", socios=[], permisos=["siniestros:revisar"]
+    )
+    response = app.test_client().get(
+        PATH, query_string=QUERY, headers={"Authorization": "Bearer " + token}
+    )
+    assert response.status_code == 403
+    assert sources.calls == []
+
+
+def test_permiso_de_reportes_no_sustituye_sesion(
+    app: Flask, keypair: KeyPair, sources: FakeReportSources
+) -> None:
+    token = sign_token(
+        keypair, user=ADVISOR, scope="asesor", socios=[], permisos=["reportes:operativos"]
+    )
+    response = app.test_client().get(
+        PATH, query_string=QUERY, headers={"Authorization": "Bearer " + token}
+    )
+    assert response.status_code == 403
+    assert sources.calls == []
 
 
 def events(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
