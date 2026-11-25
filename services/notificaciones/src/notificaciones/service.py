@@ -1,6 +1,10 @@
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
+from http.client import HTTPException
 from typing import Protocol
+from urllib.request import Request, urlopen
 
 from notificaciones.domain import Delivery, NotificationEvent, drafts
 from notificaciones.repository import NotificationRepository
@@ -20,6 +24,31 @@ class ConfiguredDeliveryGateway:
     def send(self, delivery: Delivery) -> DeliveryResult:
         if delivery.channel == "in_app":
             return DeliveryResult(True)
+        if delivery.channel == "email":
+            url = os.getenv("IDENTIDAD_URL", "").strip().rstrip("/")
+            token = os.getenv("INTERNAL_API_TOKEN", "").strip()
+            if not url or not token:
+                return DeliveryResult(False, "proveedor_no_configurado")
+            request = Request(
+                url + "/internal/v1/correos",
+                data=json.dumps(
+                    {
+                        "clienteId": str(delivery.client_id),
+                        "notificacionId": str(delivery.notification_id),
+                        "asunto": delivery.title,
+                        "contenido": delivery.content,
+                    }
+                ).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            try:
+                with urlopen(request, timeout=5) as response:
+                    result = json.load(response)
+                if result.get("aceptadoProveedor") is True and result.get("referencia"):
+                    return DeliveryResult(True)
+                return DeliveryResult(False, "confirmacion_correo_invalida")
+            except (OSError, HTTPException, ValueError):
+                return DeliveryResult(False, "proveedor_correo_no_disponible")
         return DeliveryResult(False, "proveedor_no_configurado")
 
 

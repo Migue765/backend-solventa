@@ -20,6 +20,37 @@ tags:
   - name: Polizas
   - name: Reportes
 paths:
+  /v1/backoffice/eventos-vuelo-simulados:
+    post:
+      operationId: recibirEventoVueloSimulado
+      summary: Registra cancelacion por clima de Open Data simulado (solo asesor).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [eventoId, ocurridoEn, airline, flightNumber, flightDate, estado, causa, simulada]
+              properties:
+                eventoId: {type: string, format: uuid}
+                ocurridoEn: {type: string, format: date-time}
+                airline: {type: string, minLength: 1, maxLength: 80}
+                flightNumber: {type: string, pattern: "^[A-Z0-9]{2,10}$"}
+                flightDate: {type: string, format: date}
+                estado: {const: cancelado}
+                causa: {const: clima}
+                simulada: {const: true}
+      responses:
+        "202":
+          description: Aceptado en cola durable; no acredita indemnizacion pagada.
+        "401": {description: Sesion no valida.}
+        "403": {description: Requiere rol y alcance asesor.}
+        "409": {description: Identificador repetido con otro contenido.}
+        "422": {description: "Fecha futura, fuera de vigencia o evento invalido."}
+        "503": {description: Fuente o contratos no disponibles.}
   /v1/administracion/colas-revision/{cola}/asignaciones:
     $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1colas-revision~1{cola}~1asignaciones"
   /v1/administracion/siniestros/{siniestroId}:
@@ -5319,6 +5350,24 @@ components:
         simulada:
           type: boolean
           const: true
+        indemnizacion:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/IndemnizacionDashboard"
+    IndemnizacionDashboard:
+      type: object
+      additionalProperties: false
+      required: [estado, monto, moneda, pagadaEn, referencia, simulada]
+      description: |
+        Separada de la prima y vigencia. Solo pagada contiene importe, fecha y
+        referencia confirmados por proveedor simulado; los otros estados usan null.
+      properties:
+        estado: {type: string, enum: [pendiente, pagada, rechazada]}
+        monto: {type: [string, "null"], pattern: "^[0-9]+\\.[0-9]{2}$"}
+        moneda: {type: string, pattern: "^[A-Z]{3}$"}
+        pagadaEn: {type: [string, "null"], format: date-time}
+        referencia: {type: [string, "null"], format: uuid}
+        simulada: {const: true}
     DominioNoImplementado:
       type: object
       additionalProperties: false

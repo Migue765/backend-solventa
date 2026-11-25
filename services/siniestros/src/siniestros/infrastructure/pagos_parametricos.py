@@ -135,6 +135,42 @@ class ProcesadorPagosParametricos:
                 raise Problem(404, "pago_parametrico_no_encontrado")
             return self._detalle(session, pago)
 
+    def indemnizaciones_cliente(self, cliente_id: str) -> dict[str, object]:
+        with self._repository.sessions() as session:
+            casos = session.scalars(
+                select(AutomaticPaymentCase)
+                .join(Claim, Claim.id == AutomaticPaymentCase.siniestro_id)
+                .where(Claim.owner == cliente_id)
+                .order_by(AutomaticPaymentCase.creado_en, AutomaticPaymentCase.id)
+            ).all()
+            resultado: dict[str, object] = {}
+            for caso in casos:
+                pago = session.scalar(
+                    select(ParametricPayment).where(ParametricPayment.caso_id == caso.id)
+                )
+                pagada = pago is not None and pago.estado == "confirmado"
+                estado = (
+                    "pagada"
+                    if pagada
+                    else "rechazada"
+                    if pago is not None and pago.estado == "rechazado"
+                    else "pendiente"
+                )
+                poliza_id = str(caso.payload["polizaId"])
+                # Un pago confirmado no se oculta por otro evento todavia pendiente.
+                anterior = resultado.get(poliza_id)
+                if isinstance(anterior, dict) and anterior["estado"] == "pagada":
+                    continue
+                resultado[poliza_id] = {
+                    "estado": estado,
+                    "monto": f"{pago.monto:.2f}" if pagada and pago is not None else None,
+                    "moneda": caso.payload["indemnizacion"]["moneda"],
+                    "pagadaEn": _instant(pago.finalizado_en) if pagada and pago else None,
+                    "referencia": pago.id if pagada and pago else None,
+                    "simulada": True,
+                }
+            return {"indemnizaciones": resultado}
+
     def detalle_por_siniestro(self, siniestro_id: UUID) -> dict[str, object]:
         with self._repository.sessions() as session:
             pago = session.scalar(

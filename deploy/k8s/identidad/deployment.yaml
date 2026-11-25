@@ -79,6 +79,12 @@ spec:
                   name: identidad-config
                   key: RECOVERY_EMAIL_SENDER
                   optional: true
+            - name: EMAIL_REDIRECT_TO
+              valueFrom:
+                secretKeyRef:
+                  name: identidad-config
+                  key: EMAIL_REDIRECT_TO
+                  optional: true
             - name: RECOVERY_WEB_URL
               valueFrom:
                 secretKeyRef:

@@ -22,6 +22,22 @@ from bff_web.domain.quotes import (
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
 
 
+@pytest.mark.parametrize("indemnities", [None, [], "invalido"])
+def test_dashboard_rejects_invalid_indemnities_projection(indemnities: object) -> None:
+    gateway = HttpQuoteGateway(
+        "http://cotizacion", internal_api_token="internal-test", claims_url="http://siniestros"
+    )
+    with (
+        patch.object(gateway, "_request_json", return_value={"polizas": [{"id": str(uuid4())}]}),
+        patch(
+            "bff_web.infrastructure.http_quote_gateway.urlopen",
+            return_value=BytesIO(json.dumps({"indemnizaciones": indemnities}).encode()),
+        ),
+        pytest.raises(QuoteServiceUnavailableError),
+    ):
+        gateway.get_dashboard(uuid4())
+
+
 @pytest.mark.parametrize(
     ("status", "code", "expected"),
     [

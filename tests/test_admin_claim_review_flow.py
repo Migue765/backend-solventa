@@ -193,9 +193,11 @@ def test_revision_integrada_persiste_actor_estado_y_reintento(runtime: Runtime) 
     )
     with Session(claims.extensions["siniestros_engine"]) as session:
         assert session.scalar(select(func.count()).select_from(DecisionSiniestroModel)) == 2
-        assert session.scalar(
-            select(Audit.actor).where(Audit.action == "revisar_siniestro")
-        ) == str(admin_id)
+        assert session.scalars(
+            select(Audit.actor).where(
+                Audit.action == "revisar_siniestro", Audit.result == "aprobado"
+            )
+        ).all() == [str(admin_id)]
     customer = claims.test_client().get(
         f"/v1/siniestros/{claim_id}/estado",
         headers={"Authorization": f"Bearer {INTERNAL_TOKEN}", "X-Cliente-ID": str(owner)},

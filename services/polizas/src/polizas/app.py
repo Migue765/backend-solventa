@@ -2,7 +2,7 @@ import hmac
 import logging
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from flask import Flask, Response, g, jsonify, request
@@ -110,6 +110,12 @@ def create_app(
             raise ValueError("La consulta no admite cuerpo.")
         cliente_id = UUID(request.args["clienteId"])
         return jsonify(polizas=repositorio.listar(cliente_id, datetime.now(UTC)))
+
+    @app.get("/v1/contratos-vuelo/<fecha>")
+    def contratos_vuelo(fecha: str) -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La consulta no admite parametros ni cuerpo.")
+        return jsonify(contratos=repositorio.contratos_vuelo(date.fromisoformat(fecha)))
 
     @app.get("/v1/reportes/polizas")
     def reporte() -> Response:

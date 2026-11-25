@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
@@ -332,7 +333,12 @@ class NotificationRepository:
                 )
             )
         }
-        return tuple(channel for channel in CHANNELS if stored.get(channel, channel == "in_app"))
+        email_enabled = os.getenv("NOTIFICATION_EMAIL_DEFAULT_ENABLED", "false") == "true"
+        return tuple(
+            channel
+            for channel in CHANNELS
+            if stored.get(channel, channel == "in_app" or (channel == "email" and email_enabled))
+        )
 
 
 def _utc(value: datetime) -> datetime:

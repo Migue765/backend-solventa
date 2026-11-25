@@ -5,7 +5,15 @@ from typing import Literal, Self
 from uuid import UUID
 
 from polizas.domain.condiciones import PRODUCTOS
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 TipoPoliza = Literal[
     "automotive",
@@ -52,6 +60,19 @@ class CondicionesEmision(BaseModel):
         return valor
 
 
+class ContratoVuelo(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    airline: str = Field(min_length=1, max_length=80)
+    flightNumber: str = Field(pattern=r"^[A-Z0-9]{2,10}$")
+    flightDate: date
+    coverageType: Literal["delay-cancellation", "missed-connection", "comprehensive"]
+    ofertaId: UUID
+    montoIndemnizacion: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    moneda: Literal["COP"]
+    contratadaEn: AwareDatetime
+    cancelacionClima: StrictBool
+
+
 class EvidenciaEmision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     cliente_id: UUID = Field(alias="clienteId")
@@ -62,6 +83,7 @@ class EvidenciaEmision(BaseModel):
     simulada: Literal[True]
     fechas_contratadas: FechasContratadas | None = Field(alias="fechasContratadas")
     condiciones_emision: CondicionesEmision | None = Field(default=None, alias="condicionesEmision")
+    contrato_vuelo: ContratoVuelo | None = Field(default=None, alias="contratoVuelo")
 
     @field_validator("simulada", mode="before")
     @classmethod
@@ -72,6 +94,15 @@ class EvidenciaEmision(BaseModel):
 
     @model_validator(mode="after")
     def validar_fechas(self) -> Self:
+        if self.contrato_vuelo is not None:
+            if (
+                self.tipo != "parametric"
+                or self.fechas_contratadas is None
+                or self.contrato_vuelo.flightDate != self.fechas_contratadas.inicio
+                or self.contrato_vuelo.contratadaEn != self.confirmada_en
+                or self.confirmada_en.astimezone(UTC).date() >= self.contrato_vuelo.flightDate
+            ):
+                raise ValueError("El contrato de vuelo no corresponde a la compra.")
         if self.condiciones_emision is not None:
             if self.tipo not in PRODUCTOS:
                 raise ValueError("Las condiciones mensuales no corresponden al producto.")

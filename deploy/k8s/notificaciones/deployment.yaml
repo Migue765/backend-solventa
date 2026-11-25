@@ -41,6 +41,10 @@ spec:
                 secretKeyRef:
                   name: notificaciones-runtime
                   key: NOTIFICACIONES_DATABASE_URL
+            - name: IDENTIDAD_URL
+              value: http://identidad.identidad.svc.cluster.local:8080
+            - name: NOTIFICATION_EMAIL_DEFAULT_ENABLED
+              value: "true"
           resources:
             requests:
               cpu: 100m

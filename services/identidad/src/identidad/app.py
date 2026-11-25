@@ -15,6 +15,7 @@ from identidad.api import (
     biometrics,
     consents,
     health,
+    notification_mail,
     oauth,
     password_recovery,
     session_state,
@@ -124,21 +125,22 @@ def create_app(
         clock=active_clock,
         password_hasher=partial(hash_password, iterations=active_config.password_iterations),
     )
+    configured_mail_sender = (
+        SesRecoveryMailSender(
+            active_config.recovery_ses_region,
+            active_config.recovery_email_sender,
+            active_config.recovery_web_url,
+            delivery_mode=active_config.recovery_delivery_mode,
+            admin_mailbox=active_config.recovery_admin_mailbox,
+        )
+        if active_config.recovery_ses_region
+        else None
+    )
+    app.extensions["notification_mail_sender"] = configured_mail_sender
     app.extensions["password_recovery_service"] = PasswordRecoveryService(
         user_repository,
         SqlPasswordRecoveryRepository(sessions),
-        recovery_mail_sender
-        or (
-            SesRecoveryMailSender(
-                active_config.recovery_ses_region,
-                active_config.recovery_email_sender,
-                active_config.recovery_web_url,
-                delivery_mode=active_config.recovery_delivery_mode,
-                admin_mailbox=active_config.recovery_admin_mailbox,
-            )
-            if active_config.recovery_ses_region
-            else None
-        ),
+        recovery_mail_sender or (configured_mail_sender),
         attempt_limiter,
         active_clock,
         partial(hash_password, iterations=active_config.password_iterations),
@@ -161,6 +163,7 @@ def create_app(
         )
 
     app.register_blueprint(health.bp)
+    app.register_blueprint(notification_mail.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(oauth.bp)
     app.register_blueprint(wellknown.bp)

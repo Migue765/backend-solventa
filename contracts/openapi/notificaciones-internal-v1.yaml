@@ -119,6 +119,16 @@ components:
           properties:
             tipo:
               const: pago_parametrico_ejecutado
+            indemnizacion:
+              type: object
+              additionalProperties: false
+              required: [monto, moneda, pagadaEn, referencia, simulada]
+              properties:
+                monto: {type: string, pattern: "^[0-9]+\\.[0-9]{2}$"}
+                moneda: {type: string, pattern: "^[A-Z]{3}$"}
+                pagadaEn: {type: string, format: date-time}
+                referencia: {type: string, format: uuid}
+                simulada: {const: true}
     EventoPagoConfirmado:
       unevaluatedProperties: false
       allOf:

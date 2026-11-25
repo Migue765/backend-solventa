@@ -78,6 +78,7 @@ def sign_token(key: rsa.RSAPrivateKey, user: User = USER, *, scope: str = "cotiz
             "nombre": user.name,
             "correo": user.email,
             "rol": user.role,
+            "socios": list(user.partner_ids),
         },
         key,
         algorithm="RS256",
@@ -189,7 +190,14 @@ def dashboard_runtime(
 
 
 def create_paid_request(
-    client: FlaskClient, token: str, product: str, payment_status: int = 200
+    client: FlaskClient,
+    token: str,
+    product: str,
+    payment_status: int = 200,
+    *,
+    offer_index: int = 0,
+    flight_number: str = "AV123",
+    coverage_type: str = "delay-cancellation",
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     start = date.today() + timedelta(days=30)
     product_data = {
@@ -209,8 +217,9 @@ def create_paid_request(
         },
         "parametric": {
             "airline": "Test",
-            "flightNumber": "AV123",
+            "flightNumber": flight_number,
             "flightDate": start.isoformat(),
+            "coverageType": coverage_type,
         },
         "parametric-weather": {
             "location": "Medellin",
@@ -230,7 +239,7 @@ def create_paid_request(
     base = f"/v1/solicitudes-cotizacion/{request_id}"
     response = client.get(base + "/ofertas", headers=bearer(token))
     assert response.status_code == 200, response.get_json()
-    offer = response.get_json()["ofertas"][0]
+    offer = response.get_json()["ofertas"][offer_index]
     response = client.put(
         base + "/seleccion",
         headers={**bearer(token), "Idempotency-Key": str(uuid4())},

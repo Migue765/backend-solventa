@@ -9,14 +9,14 @@ from pathlib import Path
 from threading import Thread
 from typing import Any
 
-import boto3  # type: ignore[import-untyped]
+import boto3
 import fakeredis
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from bff_web.app import create_app as create_web
 from bff_web.config import Config as WebConfig
-from botocore.stub import Stubber  # type: ignore[import-untyped]
+from botocore.stub import Stubber
 from flask import Flask
 from identidad.app import create_app
 from identidad.application.password_recovery_service import RecoveryUnavailableError
@@ -271,7 +271,7 @@ def test_request_is_generic_and_delivery_failure_never_reports_success(flow: Flo
     flow.mail.fail_send = True
     assert client.post(BASE, json={"correo": EMAIL}).status_code == 503
     with flow.sessions() as session:
-        rows = list(session.scalars(select(PasswordRecoveryModel)))
+        rows: list[PasswordRecoveryModel] = list(session.scalars(select(PasswordRecoveryModel)))
         assert len(rows) == 2 and sum(row.consumida_en is not None for row in rows) == 1
 
 
@@ -457,6 +457,54 @@ def test_ses_uses_real_sdk_and_root_entry_link_without_token_in_query() -> None:
     text = calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
     assert "https://web.example.com/app/?recuperacion=1#token=" + "a" * 64 in text
     assert calls[0]["Destination"] == {"ToAddresses": ["recipient@example.com"]}
+
+
+def test_common_mail_redirect_preserves_original_user_and_recovery_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mailbox = "redirect@example.com"
+    monkeypatch.setenv("EMAIL_REDIRECT_TO", mailbox)
+    client = boto3.client(
+        "sesv2",
+        region_name="us-east-2",
+        aws_access_key_id="synthetic",
+        aws_secret_access_key="synthetic",
+    )
+    calls: list[dict[str, Any]] = []
+    client.meta.events.register(
+        "before-parameter-build.sesv2.SendEmail",
+        lambda params, **kwargs: calls.append(params),
+    )
+    sender = SesRecoveryMailSender("us-east-2", EMAIL, "https://web.example.com", client)
+    with Stubber(client) as stub:
+        stub.add_response("get_account", {"SendingEnabled": True, "ProductionAccessEnabled": False})
+        stub.add_response("get_email_identity", {"VerifiedForSendingStatus": True})
+        stub.add_response(
+            "get_email_identity", {"VerifiedForSendingStatus": True}, {"EmailIdentity": mailbox}
+        )
+        sender.ensure_available()
+        stub.add_response("send_email", {"MessageId": "recovery-accepted"})
+        sender.send("original@example.com", "x" * 64)
+        stub.add_response("send_email", {"MessageId": "indemnity-accepted"})
+        assert (
+            sender.send_notification(
+                "other@example.com",
+                "synthetic-client",
+                "Pago simulado",
+                "Indemnizacion confirmada: 1725000.00 COP. Referencia: synthetic-payment",
+            )
+            == "indemnity-accepted"
+        )
+    assert len(calls) == 2
+    for call in calls:
+        assert call["Destination"] == {"ToAddresses": [mailbox]}
+    recovery = calls[0]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "Destinatario original: original@example.com" in recovery
+    assert "#token=" + "x" * 64 in recovery
+    payment = calls[1]["Content"]["Simple"]["Body"]["Text"]["Data"]
+    assert "Usuario: synthetic-client" in payment
+    assert "Destinatario original: other@example.com" in payment
+    assert "1725000.00 COP" in payment
 
 
 def test_ses_access_denied_is_an_explicit_unavailable_error() -> None:

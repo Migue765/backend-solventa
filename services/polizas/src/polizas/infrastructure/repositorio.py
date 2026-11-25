@@ -32,7 +32,11 @@ class RepositorioPolizas:
         huella = hashlib.sha256(
             evidencia.model_dump_json(
                 by_alias=True,
-                exclude={"condiciones_emision"} if evidencia.condiciones_emision is None else set(),
+                exclude={
+                    key
+                    for key in ("condiciones_emision", "contrato_vuelo")
+                    if getattr(evidencia, key) is None
+                },
             ).encode()
         ).hexdigest()
         inicio, fin = evidencia.vigencia()
@@ -52,6 +56,11 @@ class RepositorioPolizas:
                     emitida_en=ahora,
                     evidencia_hash=huella,
                     regla_version="academica-mes-calendario-v1",
+                    contrato_vuelo=(
+                        evidencia.contrato_vuelo.model_dump(mode="json")
+                        if evidencia.contrato_vuelo is not None
+                        else None
+                    ),
                 )
                 sesion.add(poliza)
                 sesion.flush()
@@ -98,7 +107,9 @@ class RepositorioPolizas:
             raise ConflictoEmision()
         if existentes[0].evidencia_hash != huella:
             legacy = hashlib.sha256(
-                evidencia.model_dump_json(by_alias=True, exclude={"condiciones_emision"}).encode()
+                evidencia.model_dump_json(
+                    by_alias=True, exclude={"condiciones_emision", "contrato_vuelo"}
+                ).encode()
             ).hexdigest()
             if existentes[0].evidencia_hash != legacy:
                 raise ConflictoEmision()
@@ -107,6 +118,26 @@ class RepositorioPolizas:
                 evidencia.pago_id,
             )
         return existentes[0]
+
+    def contratos_vuelo(self, fecha: date) -> list[dict[str, object]]:
+        with self.sesiones() as sesion:
+            return [
+                {
+                    "polizaId": str(poliza.poliza_id),
+                    "clienteId": str(poliza.cliente_id),
+                    "emitidaEn": _utc(poliza.emitida_en).isoformat(),
+                    **poliza.contrato_vuelo,
+                }
+                for poliza in sesion.scalars(
+                    select(PolizaModel).where(
+                        PolizaModel.tipo == "parametric",
+                        PolizaModel.estado == "activa",
+                        PolizaModel.fecha_inicio == fecha,
+                        PolizaModel.contrato_vuelo.is_not(None),
+                    )
+                )
+                if poliza.contrato_vuelo is not None
+            ]
 
     def listar(self, cliente_id: UUID, ahora: datetime) -> list[dict[str, object]]:
         with self.sesiones() as sesion:
