@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -28,7 +29,7 @@ from flask.testing import FlaskClient
 from jwt.algorithms import RSAAlgorithm
 from openapi_schema_validator import OAS31Validator
 from polizas.app import create_app as create_policy_app
-from sqlalchemy import create_engine, event, select, text, update
+from sqlalchemy import create_engine, event, func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.serving import make_server
 
@@ -259,6 +260,70 @@ def create_paid_request(
     )
     assert response.status_code == payment_status, response.get_json()
     return selection, subscription, response.get_json()
+
+
+def test_quote_history_waits_for_real_policy_emission_and_preserves_terminal_status(
+    tmp_path: Path, keypair: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch, token: str
+) -> None:
+    with policy_server(tmp_path) as (policies, url):
+        config = QuoteConfig(
+            database_url=f"sqlite:///{tmp_path / 'history.db'}",
+            internal_api_token=INTERNAL_TOKEN,
+            polizas_url=url,
+            conciliacion_emision_habilitada=True,
+        )
+        with dashboard_runtime(tmp_path, keypair, monkeypatch, config) as (client, quotes, factory):
+            reconciler = quotes.application.extensions["conciliador_emision"]
+            reconciler.cerrar()
+            policy_engine = policies.extensions["polizas_engine"]
+            with policy_engine.begin() as connection:
+                connection.execute(text("ALTER TABLE polizas RENAME TO polizas_temporal"))
+            try:
+                selection, _, _ = create_paid_request(
+                    client, token, "automotive", payment_status=503
+                )
+            finally:
+                with policy_engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE polizas_temporal RENAME TO polizas"))
+            base = f"/v1/solicitudes-cotizacion/{selection['solicitudId']}"
+            recovered_payment = client.get(base + "/pago-simulado", headers=bearer(token))
+            assert recovered_payment.status_code == 200, recovered_payment.get_json()
+            payment = recovered_payment.get_json()
+            assert payment["estado"] == "confirmado"
+            before = client.get(base + "/estado", headers=bearer(token))
+            assert before.status_code == 200, before.get_json()
+            assert before.get_json()["estado"] == "pendiente"
+            assert before.get_json()["pagoEstado"] == "confirmado"
+            assert before.get_json()["emisionEstado"] == "pago_confirmado"
+            expiry = datetime.fromisoformat(before.get_json()["validaHasta"]) + timedelta(days=1)
+            monkeypatch.setattr(
+                quotes.application.extensions["historial_solicitudes"], "_reloj", lambda: expiry
+            )
+            assert (
+                client.get(base + "/estado", headers=bearer(token)).get_json()["estado"]
+                == "pendiente"
+            )
+            time.sleep(2.1)
+            assert reconciler.conciliar_uno()
+            final = client.get(base + "/estado", headers=bearer(token))
+            assert final.status_code == 200, final.get_json()
+            assert final.get_json()["estado"] == "completada"
+            assert final.get_json()["emisionEstado"] == "emitida"
+            assert final.get_json()["completadaEn"] is not None
+            assert final.get_json()["estadoSeleccion"]["aceptacion"] == selection
+            assert (
+                client.put(
+                    base + "/rechazo",
+                    json={},
+                    headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+                ).status_code
+                == 409
+            )
+            with factory() as session:
+                assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
+            dashboard = client.get(PATH, headers=bearer(token)).get_json()
+            assert len(dashboard["polizas"]) == 1
+            assert dashboard["pagos"][0]["id"] == payment["id"]
 
 
 def validate_contract(payload: dict[str, object]) -> None:

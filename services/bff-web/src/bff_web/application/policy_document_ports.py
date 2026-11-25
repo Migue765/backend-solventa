@@ -5,6 +5,7 @@ from bff_web.domain.policy_document import (
     DocumentAcceptance,
     DocumentConfirmation,
     DocumentDownload,
+    PdfDocumentDownload,
     PolicyDocument,
 )
 
@@ -33,3 +34,11 @@ class PolicyDocumentGateway(Protocol):
         confirmation: DocumentConfirmation,
         correlation_id: str,
     ) -> tuple[DocumentAcceptance, int]: ...
+
+    def download_pdf(
+        self,
+        policy_id: UUID,
+        client_id: UUID,
+        document_id: UUID,
+        correlation_id: str,
+    ) -> PdfDocumentDownload: ...

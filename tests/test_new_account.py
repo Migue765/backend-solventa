@@ -481,6 +481,7 @@ run "reject_wrong_group_name" {
         "retry-after",
         "x-reporte-huella",
         "x-content-sha256",
+        "x-document-content-sha256",
     }
     routes = {route["route_key"]: route for route in by_type("aws_apigatewayv2_route")}
     for path in ("/v1/sesiones/desafio", "/v1/usuarios/desafio"):

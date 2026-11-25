@@ -6,6 +6,7 @@ from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
 from pydantic import TypeAdapter, ValidationError
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
+from cotizacion.api.operaciones_hipotecarias import _authorized
 from cotizacion.api.schemas import (
     ConfirmarPagoSimuladoRequest,
     RegistrarSolicitudRequest,
@@ -14,7 +15,9 @@ from cotizacion.api.schemas import (
     estado_seleccion_a_json,
     pago_simulado_a_json,
     producto_a_json,
+    rechazo_solicitud_a_json,
     resultado_ofertas_a_json,
+    resumen_solicitud_a_json,
     seleccion_oferta_a_json,
     seleccion_provisional_a_json,
     solicitud_a_json,
@@ -38,6 +41,9 @@ from cotizacion.domain.pago import PagoSimulado
 from cotizacion.domain.productos import PRODUCTOS, buscar_producto
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
+)
+from cotizacion.infrastructure.persistence.repositorio_historial_solicitudes import (
+    RepositorioHistorialSolicitudesSql,
 )
 from cotizacion.infrastructure.persistence.repositorio_pagos import RepositorioPagosSqlAlchemy
 from cotizacion.infrastructure.polizas_http import PolizasHttp
@@ -92,6 +98,79 @@ def listar_destinos_viaje() -> Response:
             for destino in sorted(DESTINOS_VIAJE, key=lambda item: item.nombre)
         ]
     )
+
+
+@bp.get("/solicitudes-cotizacion")
+def listar_solicitudes() -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    cliente_id = _cliente_historial()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    response = jsonify(
+        solicitudes=[
+            resumen_solicitud_a_json(row) for row in _historial().listar(cliente_id=cliente_id)
+        ]
+    )
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.get("/solicitudes-cotizacion/<solicitud_id>/estado")
+def consultar_estado_solicitud(solicitud_id: str) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    cliente_id = _cliente_historial()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    rows = _historial().listar(cliente_id=cliente_id, solicitud_id=solicitud_id)
+    if not rows:
+        raise SolicitudNoEncontradaError()
+    if len(rows) != 1:
+        raise ValueError("Solicitud con vinculos de operacion inconsistentes.")
+    response = jsonify(resumen_solicitud_a_json(rows[0]))
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.route("/solicitudes-cotizacion/<solicitud_id>/rechazo", methods=["GET", "PUT"])
+def rechazo_cliente(solicitud_id: str) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    cliente_id = _cliente_historial()
+    if cliente_id is None:
+        return jsonify(error="solicitud_invalida"), 400
+    if request.method == "PUT":
+        try:
+            key = UUID_ADAPTER.validate_python(request.headers.get("Idempotency-Key"))
+            payload = request.get_json(silent=False) if request.get_data() else {}
+        except (ValidationError, ValueError, BadRequest, UnsupportedMediaType):
+            return jsonify(error="solicitud_invalida"), 400
+        if payload != {}:
+            return jsonify(error="solicitud_invalida"), 400
+        rechazo = _historial().rechazar(solicitud_id, cliente_id, key)
+    else:
+        rechazo = _historial().consultar_rechazo(solicitud_id, cliente_id)
+    response = jsonify(rechazo_solicitud_a_json(rechazo))
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _historial() -> RepositorioHistorialSolicitudesSql:
+    return cast(RepositorioHistorialSolicitudesSql, current_app.extensions["historial_solicitudes"])
+
+
+def _cliente_historial() -> UUID | None:
+    if (
+        request.headers.get("API-Version", "1") != "1"
+        or set(request.args) != {"clienteId"}
+        or len(request.args.getlist("clienteId")) != 1
+    ):
+        return None
+    return _cliente_id()
 
 
 @bp.post("/solicitudes-cotizacion")

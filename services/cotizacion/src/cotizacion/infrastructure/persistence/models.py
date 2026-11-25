@@ -221,6 +221,21 @@ class SeleccionOfertaModel(Base):
     request_fingerprint: Mapped[str] = mapped_column(String(64))
 
 
+class RechazoSolicitudModel(Base):
+    __tablename__ = "rechazos_solicitud"
+    __table_args__ = (
+        UniqueConstraint("cliente_id", "idempotency_key", name="uq_rechazo_cliente_clave"),
+    )
+
+    cotizacion_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cotizaciones.cotizacion_id", ondelete="RESTRICT"), primary_key=True
+    )
+    solicitud_id: Mapped[str] = mapped_column(String(32), unique=True)
+    cliente_id: Mapped[UUID] = mapped_column(index=True)
+    rechazada_en: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[UUID]
+
+
 class SeleccionProvisionalModel(Base):
     __tablename__ = "selecciones_provisionales"
     __table_args__ = (

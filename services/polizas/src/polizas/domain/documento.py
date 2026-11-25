@@ -69,3 +69,7 @@ class ConfirmacionDocumento(BaseModel):
 
 class DocumentoDesactualizado(Exception):
     pass
+
+
+class DocumentoNoDisponible(Exception):
+    pass

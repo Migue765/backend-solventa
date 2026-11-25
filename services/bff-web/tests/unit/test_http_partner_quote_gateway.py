@@ -73,6 +73,71 @@ def test_rejects_an_offer_that_breaks_the_contract() -> None:
     assert (error.value.code, error.value.status) == ("servicio_no_disponible", 503)
 
 
+def test_selection_uses_put_with_attempt_key_not_operation_id_and_recovers_state() -> None:
+    operation_id, offer_id, key = uuid4(), uuid4(), uuid4()
+    selection = {
+        "solicitudId": "AQT-2026-123",
+        "ofertaId": str(offer_id),
+        "version": 1,
+        "nombreOferta": "Plan ampliado",
+        "prima": {"monto": "45000.00", "moneda": "COP"},
+        "periodicidad": "mensual",
+        "primaMensual": {"monto": "45000.00", "moneda": "COP"},
+        "seleccionadaEn": "2026-11-22T12:00:00Z",
+        "revision": 1,
+        "vigenteHasta": "2026-11-23T12:00:00Z",
+    }
+    body = {"ofertaId": str(offer_id), "version": 1, "revisionEsperada": 0}
+    gateway = HttpPartnerQuoteGateway("http://cotizacion", "token")
+    with patch(TARGET, return_value=BytesIO(json.dumps(selection).encode())) as urlopen:
+        result = gateway.select_offer("BANK & A", operation_id, body, key, "corr-choice")
+    request = urlopen.call_args.args[0]
+    assert request.get_method() == "PUT"
+    assert request.get_header("Idempotency-key") == str(key)
+    assert request.get_header("Api-version") == "1"
+    assert request.get_header("Authorization") == "Bearer token"
+    assert request.get_header("X-correlation-id") == "corr-choice"
+    assert request.full_url.endswith(f"/{operation_id}/seleccion-provisional?socioId=BANK+%26+A")
+    assert json.loads(request.data) == body
+    assert result.model_dump(mode="json") == selection
+    state = {
+        "solicitudId": selection["solicitudId"],
+        "seleccion": selection,
+        "aceptacion": None,
+        "estadoOferta": "disponible",
+    }
+    with patch(TARGET, return_value=BytesIO(json.dumps(state).encode())) as urlopen:
+        recovered = gateway.get_selection("BANK & A", operation_id, "corr-choice")
+    assert urlopen.call_args.args[0].get_method() == "GET"
+    assert urlopen.call_args.args[0].get_header("Idempotency-key") is None
+    assert recovered.model_dump(mode="json") == state
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (409, "seleccion_desactualizada"),
+        (409, "seleccion_no_modificable"),
+        (409, "conflicto_idempotencia"),
+        (422, "oferta_no_disponible"),
+    ],
+)
+def test_selection_keeps_controlled_conflicts(status: int, code: str) -> None:
+    error = HTTPError(
+        "http://cotizacion", status, code, Message(), BytesIO(json.dumps({"error": code}).encode())
+    )
+    with patch(TARGET, side_effect=error):
+        with pytest.raises(MortgageProfilingError) as raised:
+            HttpPartnerQuoteGateway("http://cotizacion", "token").select_offer(
+                "BANCO-001",
+                uuid4(),
+                {"ofertaId": str(uuid4()), "version": 1, "revisionEsperada": 0},
+                uuid4(),
+                "corr-choice",
+            )
+    assert (raised.value.code, raised.value.status) == (code, status)
+
+
 @pytest.mark.parametrize(
     ("status", "code", "expected"),
     [

@@ -482,6 +482,7 @@ def test_client_and_advisor_cannot_enter_partner_portal(app: Flask, keypair: Key
 class OfferGateway:
     error: MortgageProfilingError | None = None
     calls: list[tuple[str, str, UUID]] = field(default_factory=list)
+    snapshot: dict[str, Any] | None = None
 
     def calculate_offer(self, socio_id: str, operation_id: UUID, _: str) -> PartnerOfferSnapshot:
         return self._offer("calculate", socio_id, operation_id)
@@ -493,17 +494,28 @@ class OfferGateway:
         self.calls.append((action, socio_id, operation_id))
         if self.error:
             raise self.error
-        return PartnerOfferSnapshot.model_validate(partner_offer_payload(operation_id, socio_id))
+        return PartnerOfferSnapshot.model_validate(
+            self.snapshot or partner_offer_payload(operation_id, socio_id)
+        )
 
 
 def offer_url(operation_id: UUID, socio: str = "BANCO-001") -> str:
     return f"{PATH}/{operation_id}/oferta?socioId={socio}"
 
 
-def test_partner_calculates_and_recovers_offer(app: Flask, keypair: KeyPair) -> None:
-    gateway = OfferGateway()
-    app.extensions["partner_quote_gateway"] = gateway
+def test_partner_calculates_and_recovers_offer(
+    app: Flask, keypair: KeyPair, valid_consent: Mock
+) -> None:
     operation_id = uuid4()
+    snapshot = partner_offer_payload(operation_id)
+    snapshot["clienteId"] = str(USER.user_id)
+    snapshot["productoId"] = "mortgage-life"
+    snapshot["riesgo"]["consentimientoId"] = valid_consent.get_consent.return_value[
+        "consentimientoId"
+    ]
+    snapshot["riesgo"]["consentimientoVersion"] = 2
+    gateway = OfferGateway(snapshot=snapshot)
+    app.extensions["partner_quote_gateway"] = gateway
     auth = headers(keypair, payload())
 
     created = app.test_client().post(offer_url(operation_id), headers=auth)
@@ -518,6 +530,52 @@ def test_partner_calculates_and_recovers_offer(app: Flask, keypair: KeyPair) -> 
         ("calculate", "BANCO-001", operation_id),
         ("get", "BANCO-001", operation_id),
     ]
+
+
+@pytest.mark.parametrize("changed", ["estado", "version", "consentimientoId", "clienteId"])
+def test_snapshot_requires_current_matching_consent(
+    app: Flask, keypair: KeyPair, valid_consent: Mock, changed: str
+) -> None:
+    operation_id = uuid4()
+    snapshot = partner_offer_payload(operation_id)
+    snapshot["clienteId"] = str(USER.user_id)
+    snapshot["productoId"] = "mortgage-life"
+    snapshot["riesgo"]["consentimientoId"] = valid_consent.get_consent.return_value[
+        "consentimientoId"
+    ]
+    snapshot["riesgo"]["consentimientoVersion"] = 2
+    valid_consent.get_consent.return_value[changed] = {
+        "estado": "revocado",
+        "version": 3,
+        "consentimientoId": str(uuid4()),
+        "clienteId": str(uuid4()),
+    }[changed]
+    app.extensions["partner_quote_gateway"] = OfferGateway(snapshot=snapshot)
+    response = app.test_client().get(offer_url(operation_id), headers=headers(keypair, payload()))
+    assert response.status_code == 403
+    assert response.get_json()["code"] == "consentimiento_invalido"
+    assert "ofertas" not in response.get_json()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_snapshot_missing_or_malformed_consent_never_returns_partial_data(
+    app: Flask, keypair: KeyPair, valid_consent: Mock, missing: bool
+) -> None:
+    operation_id = uuid4()
+    snapshot = partner_offer_payload(operation_id)
+    snapshot["clienteId"] = str(USER.user_id)
+    snapshot["productoId"] = "mortgage-life"
+    app.extensions["partner_quote_gateway"] = OfferGateway(snapshot=snapshot)
+    if missing:
+        valid_consent.get_consent.side_effect = ProfilingError("consentimiento_ausente", 404)
+    else:
+        valid_consent.get_consent.return_value = {}
+    response = app.test_client().get(offer_url(operation_id), headers=headers(keypair, payload()))
+    assert response.status_code == (403 if missing else 503)
+    assert response.get_json()["code"] == (
+        "consentimiento_invalido" if missing else "servicio_no_disponible"
+    )
+    assert "ofertas" not in response.get_json()
 
 
 @pytest.mark.parametrize(

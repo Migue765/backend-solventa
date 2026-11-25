@@ -34,12 +34,14 @@ from cotizacion.domain.errors import (
     OperacionSocioNoEncontradaError,
     PagoNoEncontradoError,
     PagoNoPermitidoError,
+    RechazoNoEncontradoError,
     ReglaDeNegocioError,
     SeleccionDesactualizadaError,
     SeleccionNoEncontradaError,
     SeleccionNoModificableError,
     ServicioPolizasNoDisponibleError,
     SolicitudNoEncontradaError,
+    SolicitudNoRechazableError,
     SuscripcionNoEncontradaError,
 )
 from cotizacion.infrastructure.conciliacion_emision import ConciliadorEmision
@@ -51,6 +53,9 @@ from cotizacion.infrastructure.persistence.admision_socios import AdmisionRechaz
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.repositorio_cotizaciones import (
     RepositorioCotizacionesSqlAlchemy,
+)
+from cotizacion.infrastructure.persistence.repositorio_historial_solicitudes import (
+    RepositorioHistorialSolicitudesSql,
 )
 from cotizacion.infrastructure.persistence.repositorio_ofertas_socios import (
     RepositorioOfertasSociosSql,
@@ -99,6 +104,7 @@ def create_app(config: Config | None = None) -> Flask:
         vigencia=timedelta(days=config.vigencia_dias),
     )
     app.extensions["repositorio_cotizaciones"] = repositorio
+    app.extensions["historial_solicitudes"] = RepositorioHistorialSolicitudesSql(sesiones)
     pagos = RepositorioPagosSqlAlchemy(
         sesiones,
         emitir_polizas=bool(config.polizas_url),
@@ -208,6 +214,14 @@ def create_app(config: Config | None = None) -> Flask:
     @app.errorhandler(ConflictoIdempotenciaError)
     def conflicto_idempotencia(_: ConflictoIdempotenciaError):
         return jsonify(error="conflicto_idempotencia", correlationId=g.correlation_id), 409
+
+    @app.errorhandler(SolicitudNoRechazableError)
+    def solicitud_no_rechazable(_: SolicitudNoRechazableError) -> tuple[Response, int]:
+        return jsonify(error="solicitud_no_rechazable", correlationId=g.correlation_id), 409
+
+    @app.errorhandler(RechazoNoEncontradoError)
+    def rechazo_no_encontrado(_: RechazoNoEncontradoError) -> tuple[Response, int]:
+        return jsonify(error="rechazo_no_encontrado", correlationId=g.correlation_id), 404
 
     @app.errorhandler(SeleccionDesactualizadaError)
     @app.errorhandler(SeleccionNoModificableError)

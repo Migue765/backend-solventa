@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, Self
 from uuid import uuid4
@@ -5,7 +6,16 @@ from uuid import uuid4
 import pytest
 from bff_web.domain import product_data
 from flask import Flask
-from support import CLIENT_PROFILE, USER, FakeJwks, KeyPair, StubQuoteGateway, bearer, sign_token
+from support import (
+    CLIENT_PROFILE,
+    USER,
+    FakeIdentity,
+    FakeJwks,
+    KeyPair,
+    StubQuoteGateway,
+    bearer,
+    sign_token,
+)
 from werkzeug.test import TestResponse
 
 REQUEST = {
@@ -160,7 +170,7 @@ PRODUCT_DATA = {
         "departureDate": (TODAY + timedelta(days=1)).isoformat(),
         "returnDate": (TODAY + timedelta(days=30)).isoformat(),
     },
-    "life": {"birthDate": "1990-06-15"},
+    "life": {"birthDate": "1985-02-10"},
     "device-protection": {
         "deviceType": "Teléfono",
         "brandModel": "Acme",
@@ -223,7 +233,10 @@ def test_rejects_cross_product_data_and_client_identity(
     if invalid == "extra":
         data["unexpected"] = "no"
     elif invalid == "missing":
-        data.pop(next(iter(data)))
+        if product_id == "life":
+            payload.pop("productoId")
+        else:
+            data.pop("mortgageBalance" if product_id == "mortgage-life" else next(iter(data)))
     elif invalid == "cross-product":
         payload["datosProducto"] = PRODUCT_DATA["life" if product_id != "life" else "automotive"]
     else:
@@ -235,6 +248,72 @@ def test_rejects_cross_product_data_and_client_identity(
     )
     assert response.status_code == 400
     assert quotes.record is None
+
+
+@pytest.mark.parametrize("product_id", ["life", "mortgage-life"])
+def test_birth_date_is_resolved_from_registered_profile_not_quote_input(
+    app: Flask, token: str, quotes: StubQuoteGateway, product_id: str
+) -> None:
+    data = {} if product_id == "life" else {"mortgageBalance": "180000000"}
+    response = app.test_client().post(
+        "/v1/solicitudes-cotizacion",
+        json={"productoId": product_id, "datosProducto": data},
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+    assert response.status_code == 201
+    assert body(response)["datosProducto"]["birthDate"] == "1985-02-10"
+    assert body(response)["identificacion"] == CLIENT_PROFILE.identification
+    assert quotes.user_ids == [CLIENT_PROFILE.user_id]
+
+
+def test_registered_birth_date_cannot_be_overridden_and_missing_is_explicit(
+    app: Flask, token: str, quotes: StubQuoteGateway
+) -> None:
+    client = app.test_client()
+    forged = client.post(
+        "/v1/solicitudes-cotizacion",
+        json={"productoId": "life", "datosProducto": {"birthDate": "2000-01-01"}},
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+    assert forged.status_code == 400
+    assert quotes.record is None
+    app.extensions["identity_gateway"] = FakeIdentity(
+        clients=(replace(CLIENT_PROFILE, birth_date=None),)
+    )
+    missing = client.post(
+        "/v1/solicitudes-cotizacion",
+        json={"productoId": "life", "datosProducto": {}},
+        headers={**bearer(token), "Idempotency-Key": str(uuid4())},
+    )
+    assert missing.status_code == 422
+    assert body(missing)["code"] == "datos_cliente_incompletos"
+    assert quotes.record is None
+    profile = client.get("/v1/clientes/me/perfil", headers=bearer(token))
+    assert profile.status_code == 200
+    assert body(profile)["fechaNacimiento"] is None
+
+
+def test_profile_is_own_registered_data_and_rejects_identity_query(app: Flask, token: str) -> None:
+    profile = app.test_client().get("/v1/clientes/me/perfil", headers=bearer(token))
+    assert profile.status_code == 200
+    assert profile.headers["Cache-Control"] == "no-store"
+    assert profile.headers["API-Version"] == "1"
+    assert body(profile) == {
+        "clienteId": str(CLIENT_PROFILE.user_id),
+        "nombre": CLIENT_PROFILE.name,
+        "tipoDocumento": CLIENT_PROFILE.document_type,
+        "numeroDocumento": CLIENT_PROFILE.identification,
+        "correo": CLIENT_PROFILE.email,
+        "telefono": CLIENT_PROFILE.phone,
+        "fechaNacimiento": "1985-02-10",
+    }
+    assert (
+        app.test_client()
+        .get("/v1/clientes/me/perfil?clienteId=" + str(uuid4()), headers=bearer(token))
+        .status_code
+        == 400
+    )
+    assert app.test_client().get("/v1/clientes/me/perfil").status_code == 401
 
 
 def test_authenticated_client_starts_and_reads_subscription(

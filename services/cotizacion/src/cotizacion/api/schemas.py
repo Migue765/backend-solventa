@@ -15,6 +15,7 @@ from cotizacion.domain.cotizacion import Cotizacion
 from cotizacion.domain.datos_producto import validar_datos_producto
 from cotizacion.domain.dinero import Dinero
 from cotizacion.domain.documentos import validar_identificacion
+from cotizacion.domain.historial_solicitudes import RechazoSolicitud, ResumenSolicitud
 from cotizacion.domain.ofertas import (
     EstadoSeleccionProvisional,
     Oferta,
@@ -333,6 +334,37 @@ def estado_seleccion_a_json(estado: EstadoSeleccionProvisional) -> dict[str, obj
         "seleccion": seleccion_provisional_a_json(estado.seleccion) if estado.seleccion else None,
         "aceptacion": seleccion_oferta_a_json(estado.aceptacion) if estado.aceptacion else None,
         "estadoOferta": estado.estado_oferta.value if estado.estado_oferta else None,
+    }
+
+
+def resumen_solicitud_a_json(resumen: ResumenSolicitud) -> dict[str, object]:
+    return {
+        "operationId": str(resumen.operation_id) if resumen.operation_id else None,
+        "socioId": resumen.socio_id,
+        "clienteId": str(resumen.cliente_id),
+        "solicitudId": resumen.solicitud_id,
+        "cotizacionId": str(resumen.cotizacion_id),
+        "productoId": resumen.producto_id,
+        "estado": resumen.estado,
+        "creadaEn": _fecha(resumen.creada_en),
+        "actualizadaEn": _fecha(resumen.actualizada_en),
+        "validaHasta": _fecha(resumen.valida_hasta),
+        "completadaEn": _fecha(resumen.completada_en) if resumen.completada_en else None,
+        "rechazadaEn": _fecha(resumen.rechazada_en) if resumen.rechazada_en else None,
+        "estadoSeleccion": estado_seleccion_a_json(resumen.estado_seleccion),
+        "pagoEstado": resumen.pago_estado,
+        "emisionEstado": resumen.emision_estado,
+        "consentimientoId": str(resumen.consentimiento_id) if resumen.consentimiento_id else None,
+        "consentimientoVersion": resumen.consentimiento_version,
+    }
+
+
+def rechazo_solicitud_a_json(rechazo: RechazoSolicitud) -> dict[str, object]:
+    return {
+        "solicitudId": rechazo.solicitud_id,
+        "cotizacionId": str(rechazo.cotizacion_id),
+        "estado": "rechazada",
+        "rechazadaEn": _fecha(rechazo.rechazada_en),
     }
 
 

@@ -3,11 +3,11 @@ from typing import cast
 from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from pydantic.alias_generators import to_camel
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
-from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.api.security import authenticate, customer_claims, invalid_session_response
 from bff_web.application.ports import IdentityGateway
 from bff_web.application.quote_ports import QuoteGateway
 from bff_web.domain.auth import User
@@ -19,6 +19,7 @@ from bff_web.domain.quote_errors import (
     OfferSelectionConflictError,
     OfferUnavailableError,
     PaymentNotAllowedError,
+    QuoteRejectionNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
@@ -51,11 +52,6 @@ class QuoteRequestPayload(BaseModel):
 
     product_id: str = Field(alias="productoId", max_length=64)
     product_data: dict[str, str] = Field(alias="datosProducto")
-
-    @model_validator(mode="after")
-    def validate_product_fields(self) -> "QuoteRequestPayload":
-        self.product_data = validate_product_data(self.product_id, self.product_data)
-        return self
 
     def to_draft(self, user: User) -> QuoteRequestDraft:
         if user.phone is None:
@@ -162,11 +158,134 @@ def list_travel_destinations() -> Response:
     return jsonify(destinos=[_travel_destination_json(destination) for destination in destinations])
 
 
+@bp.get("/solicitudes-cotizacion")
+def list_requests() -> Response:
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.args or request.get_data() or request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Usa API-Version 1 sin parametros."
+        )
+    try:
+        history = _gateway().list_requests(claims.user.user_id)
+        if any(row.clienteId != claims.user.user_id for row in history.solicitudes):
+            return _unavailable()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(
+        solicitudes=[
+            {
+                **row.model_dump(
+                    mode="json", exclude={"consentimientoId", "consentimientoVersion"}
+                ),
+                "seleccionRestringida": False,
+            }
+            for row in history.solicitudes
+        ]
+    )
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.get("/solicitudes-cotizacion/<request_id>/estado")
+def get_request_history(request_id: str) -> Response:
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.args or request.get_data() or request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "El cliente se obtiene de la sesion."
+        )
+    try:
+        history = _gateway().get_history(claims.user.user_id, request_id)
+        if history.clienteId != claims.user.user_id or history.solicitudId != request_id:
+            return _unavailable()
+    except QuoteRequestNotFoundError:
+        return _not_found()
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(
+        **history.model_dump(mode="json", exclude={"consentimientoId", "consentimientoVersion"}),
+        seleccionRestringida=False,
+    )
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.route("/solicitudes-cotizacion/<request_id>/rechazo", methods=["GET", "PUT"])
+def reject_request(request_id: str) -> Response:
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.args or request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "El cliente se obtiene de la sesion."
+        )
+    key = None
+    if request.method == "PUT":
+        try:
+            key = UUID(request.headers["Idempotency-Key"])
+            payload = request.get_json(silent=False) if request.get_data() else {}
+        except (ValueError, KeyError, BadRequest, UnsupportedMediaType):
+            return problem_response(
+                400,
+                "solicitud_invalida",
+                "Solicitud invalida",
+                "Revisa la clave y el cuerpo vacio.",
+            )
+        if payload != {}:
+            return problem_response(
+                400,
+                "solicitud_invalida",
+                "Solicitud invalida",
+                "El rechazo no recibe datos personales.",
+            )
+    try:
+        rejection = (
+            _gateway().reject_request(claims.user.user_id, request_id, key)
+            if key is not None
+            else _gateway().get_rejection(claims.user.user_id, request_id)
+        )
+        if rejection.solicitudId != request_id:
+            return _unavailable()
+    except QuoteRejectionNotAllowedError:
+        return problem_response(
+            409,
+            "solicitud_no_rechazable",
+            "Solicitud no rechazable",
+            "La solicitud ya tiene una decision terminal.",
+        )
+    except QuoteRequestConflictError:
+        return problem_response(
+            409,
+            "conflicto_idempotencia",
+            "Conflicto de idempotencia",
+            "La clave corresponde a otra solicitud.",
+        )
+    except QuoteRequestNotFoundError:
+        return problem_response(
+            404,
+            "rechazo_no_encontrado",
+            "Rechazo no encontrado",
+            "La solicitud o rechazo no existe para este cliente.",
+        )
+    except QuoteServiceUnavailableError:
+        return _unavailable()
+    response = jsonify(rejection.model_dump(mode="json"))
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.post("/solicitudes-cotizacion")
 def create_request() -> tuple[Response, int] | Response:
-    user = _authenticated_user()
-    if user is None:
-        return _unauthorized()
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    user = claims.user
     try:
         payload = QuoteRequestPayload.model_validate(request.get_json(silent=False))
         idempotency_key = UUID(request.headers["Idempotency-Key"])
@@ -176,6 +295,42 @@ def create_request() -> tuple[Response, int] | Response:
             "solicitud_invalida",
             "Solicitud inválida",
             "Revisa los datos y la clave de idempotencia.",
+        )
+    try:
+        client = cast(IdentityGateway, current_app.extensions["identity_gateway"]).get_client(
+            user.user_id, str(g.correlation_id)
+        )
+    except IdentityUnavailableError:
+        return _unavailable()
+    if client is not None and (client.user_id != user.user_id or client.role != "cliente"):
+        return _unavailable()
+    if (
+        client is None
+        or client.phone is None
+        or (payload.product_id in {"life", "mortgage-life"} and client.birth_date is None)
+    ):
+        return problem_response(
+            422,
+            "datos_cliente_incompletos",
+            "Datos del cliente incompletos",
+            "Completa los datos de contacto y nacimiento en tu perfil registrado.",
+        )
+    if payload.product_id in {"life", "mortgage-life"}:
+        assert client.birth_date is not None
+        registered_birth_date = client.birth_date.isoformat()
+        if payload.product_data.get("birthDate", registered_birth_date) != registered_birth_date:
+            return problem_response(
+                400,
+                "solicitud_invalida",
+                "Solicitud invalida",
+                "La fecha de nacimiento se obtiene del perfil registrado.",
+            )
+        payload.product_data = {**payload.product_data, "birthDate": registered_birth_date}
+    try:
+        payload.product_data = validate_product_data(payload.product_id, payload.product_data)
+    except ValueError:
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Revisa los parametros del producto."
         )
     if payload.product_id == "travel":
         try:
@@ -188,22 +343,9 @@ def create_request() -> tuple[Response, int] | Response:
             return problem_response(
                 400,
                 "solicitud_invalida",
-                "Solicitud inválida",
-                "Selecciona un país de destino disponible.",
+                "Solicitud invalida",
+                "Selecciona un pais de destino disponible.",
             )
-    try:
-        client = cast(IdentityGateway, current_app.extensions["identity_gateway"]).get_client(
-            user.user_id, str(g.correlation_id)
-        )
-    except IdentityUnavailableError:
-        return _unavailable()
-    if client is None or client.phone is None:
-        return problem_response(
-            422,
-            "datos_cliente_incompletos",
-            "Datos del cliente incompletos",
-            "El cliente no tiene telefono registrado.",
-        )
     try:
         record = _gateway().create_request(user.user_id, payload.to_draft(client), idempotency_key)
     except InsuranceProductUnavailableError:
@@ -223,6 +365,37 @@ def create_request() -> tuple[Response, int] | Response:
     except QuoteServiceUnavailableError:
         return _unavailable()
     return jsonify(_record_json(record)), 201
+
+
+@bp.get("/clientes/me/perfil")
+def get_customer_profile() -> Response:
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    if request.args or request.get_data() or request.headers.get("API-Version", "1") != "1":
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Usa API-Version 1 sin parametros."
+        )
+    try:
+        client = cast(IdentityGateway, current_app.extensions["identity_gateway"]).get_client(
+            claims.user.user_id, str(g.correlation_id)
+        )
+    except IdentityUnavailableError:
+        return _unavailable()
+    if client is None or client.user_id != claims.user.user_id or client.role != "cliente":
+        return _unavailable()
+    response = jsonify(
+        clienteId=str(client.user_id),
+        nombre=client.name,
+        tipoDocumento=client.document_type,
+        numeroDocumento=client.identification,
+        correo=client.email,
+        telefono=client.phone,
+        fechaNacimiento=client.birth_date.isoformat() if client.birth_date else None,
+    )
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.get("/solicitudes-cotizacion/<request_id>")
@@ -274,9 +447,10 @@ def get_selection(request_id: str) -> Response:
 
 @bp.put("/solicitudes-cotizacion/<request_id>/seleccion")
 def select_offer(request_id: str) -> Response:
-    user_id = _authenticated_user_id()
-    if user_id is None:
-        return _unauthorized()
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    user_id = claims.user.user_id
     try:
         payload = OfferSelectionPayload.model_validate(request.get_json(silent=False))
         idempotency_key = UUID(request.headers["Idempotency-Key"])
@@ -349,9 +523,10 @@ def get_provisional_selection(request_id: str) -> Response:
 
 @bp.put("/solicitudes-cotizacion/<request_id>/seleccion-provisional")
 def select_provisional_offer(request_id: str) -> Response:
-    user_id = _authenticated_user_id()
-    if user_id is None:
-        return _unauthorized()
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    user_id = claims.user.user_id
     try:
         payload = ProvisionalSelectionPayload.model_validate(request.get_json(silent=False))
         clave = UUID(request.headers["Idempotency-Key"])
@@ -399,9 +574,10 @@ def _selection_conflict(error: OfferSelectionConflictError) -> Response:
 
 @bp.post("/solicitudes-cotizacion/<request_id>/suscripcion")
 def start_subscription(request_id: str) -> tuple[Response, int] | Response:
-    user_id = _authenticated_user_id()
-    if user_id is None:
-        return _unauthorized()
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    user_id = claims.user.user_id
     try:
         idempotency_key = UUID(request.headers["Idempotency-Key"])
     except (KeyError, ValueError):
@@ -450,9 +626,10 @@ def get_subscription(request_id: str) -> Response:
 
 @bp.post("/solicitudes-cotizacion/<request_id>/pago-simulado")
 def confirm_simulated_payment(request_id: str) -> Response:
-    user_id = _authenticated_user_id()
-    if user_id is None:
-        return _unauthorized()
+    claims = customer_claims()
+    if isinstance(claims, Response):
+        return claims
+    user_id = claims.user.user_id
     try:
         idempotency_key = UUID(request.headers["Idempotency-Key"])
         SimulatedPaymentPayload.model_validate(

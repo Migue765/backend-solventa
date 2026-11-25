@@ -142,6 +142,55 @@ el aviso confirmado sin duplicarlo. Sin servicio configurado responde `503`,
 nunca una confirmacion ficticia. Detalle de validaciones y operacion:
 [Siniestros](../siniestros/README.md).
 
+### Solicitudes historicas y continuacion del cliente
+
+`GET /v1/socios/solicitudes-cotizacion?socioId=...` lista **todas** las solicitudes
+realmente cotizadas de esa organizacion. `productoId` es un filtro opcional:
+omitirlo agrega los productos implementados/autorizados del flujo socio,
+actualmente solo `mortgage-life`, como `/v1/socios/actual`. No usa el limite del
+dashboard, ni deduplica por cliente, ni incluye reservas/operaciones sin cotizacion.
+JWT rol/scope socio, organizacion del claim, `API-Version: 1` y `no-store`.
+
+`GET /v1/solicitudes-cotizacion` y `GET /v1/solicitudes-cotizacion/{id}/estado`
+exponen la misma proyeccion para el cliente propietario, derivado exclusivamente
+del JWT (rol cliente, scope cliente o legado cotizaciones), sin query/cuerpo.
+La fila enlaza `operationId`/`socioId` (null en solicitudes directas), `clienteId`,
+`solicitudId`, `cotizacionId`, `productoId`, `estado`, fechas
+`creadaEn`/`actualizadaEn`/`validaHasta`/`completadaEn`/`rechazadaEn`,
+`estadoSeleccion`, `seleccionRestringida`, `pagoEstado` y `emisionEstado`.
+El socio recibe tambien `cliente` con UUID, nombre y documento enmascarado
+condicionados al consentimiento. No publica telefono, nacimiento ni IDs/versiones
+internos de consentimiento. Detalle exacto: `bff-web-v1.yaml`.
+
+`pendiente` no significa operacion fallida. Calculo, seleccion provisional,
+aceptacion y suscripcion no completan una solicitud. `completada` exige pago
+confirmado y fin real del flujo; si se solicita emision, debe estar emitida.
+`rechazada` solo significa decision explicita del cliente. Error tecnico/pago
+rechazado se muestran por separado. `vencida` deriva de vigencias persistidas de
+quote/perfil/fuentes/oferta, sin reactivar ni ofrecer nueva solicitud desde la ficha.
+Completada/rechazada permanecen terminales tras vencer; pago confirmado pendiente
+de emision mantiene pendiente para conciliar, incluso si despues vence el perfil.
+
+El historial no usa el GET sensible ni vuelve a perfilar: mantiene filas/fechas/estado
+con consentimiento vencido o revocado, redacta PII y seleccion del socio. Revocacion
+no equivale a vencimiento. Seleccion visible requiere consentimiento actual y mismo
+ID/version originales. La lectura propia del cliente conserva sus datos historicos.
+GET solicitud conserva `estado` tecnico CALCULADA y datos del producto;
+GET operacion socio conserva `estado: completada` de admision y añade
+`estadoSolicitud`. La UI usa la proyeccion autoritativa para estado/acciones.
+
+Continuar utiliza la **misma** solicitud y provisional/revision: GET seleccion,
+PUT `/seleccion` con `{ofertaId,version,revisionSeleccion}`, suscripcion y pago
+existentes, exclusivamente cliente. No nueva quote, email ni pago por socio.
+GET/PUT `/v1/solicitudes-cotizacion/{id}/rechazo` recupera/registra rechazo:
+PUT `{}` y UUID `Idempotency-Key` por intento. Replay identico recupera decision;
+clave de otra solicitud devuelve 409 `conflicto_idempotencia`. Aceptada, suscrita,
+pagada, emitida o rechazada con otra clave: 409 `solicitud_no_rechazable`.
+Rechazo y aceptacion se serializan en persistencia; no es cancelacion de poliza.
+Aplicar primero migracion `rechazos_solicitud` en Cotizacion; no requiere infraestructura
+nueva ni cambios de auth/registro. No activar estas rutas antes de actualizar todas
+las replicas que permiten aceptacion; la migracion sola no añade el guard de rechazo.
+
 ### Plataforma de socios (SOL-195)
 
 El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y
@@ -257,6 +306,32 @@ Exige el mismo JWT de socio y `socioId` en el claim `socios`; responde `201` inc
 reintentos, que devuelven la oferta persistida. `GET` sobre la misma ruta solo la lee.
 Entradas vencidas responden `422 entradas_vencidas`; una decision inconsistente,
 `422 oferta_no_disponible`; nunca se devuelve una oferta parcial.
+
+Para mostrar planes, consultar primero `GET .../{operationId}/oferta?socioId=...`.
+Si responde `404 oferta_no_encontrada`, ofrecer el `POST` explicito con `{}`:
+calcula/persiste el snapshot de tres planes, no recrea cotizacion ni selecciona.
+`ofertaId` del envelope es el snapshot; `ofertas[].ofertaId` es el ID del plan.
+`recomendada` no representa una eleccion del socio. Las lecturas/reintentos
+comprueban consentimiento actual vigente, con el mismo ID/version del riesgo.
+
+`GET/PUT /v1/socios/solicitudes-cotizacion/{operationId}/seleccion-provisional?socioId=...`
+reutiliza la eleccion persistida del flujo cliente. Exige Bearer de rol/scope
+socio, organizacion autorizada y `API-Version: 1`; solo admite `socioId` en query.
+La operacion/snapshot determinan cliente, solicitud y producto, no el consumidor.
+PUT requiere `Idempotency-Key` UUID por intento y
+`{ofertaId, version, revisionEsperada}`; revision inicial 0, respuesta 1.
+Devuelve la seleccion con importes, periodicidad, `seleccionadaEn`, `revision`
+y `vigenteHasta`. GET devuelve `{solicitudId, seleccion, aceptacion, estadoOferta}`,
+con null cuando no hay eleccion/aceptacion. GET operacion incorpora `estadoSeleccion`
+sin cambiar su oferta recomendada legacy y protege elecciones con consentimiento.
+
+Conservar clave/payload ante respuesta ambigua y recuperar GET antes de un nuevo
+intento. CAS obsoleto, clave reutilizada con otros datos y aceptacion final producen
+409 (`seleccion_desactualizada`, `conflicto_idempotencia`, `seleccion_no_modificable`).
+Planes ajenos/versiones incorrectas/vencidos producen 422; sin snapshot 404,
+consentimiento revocado o reemplazado 403, dependencia/inconsistencia 503.
+Las respuestas son `no-store`. Elegir un plan no acepta, contrata, crea suscripcion,
+paga ni envia correo. La aceptacion final del cliente sigue siendo terminal.
 
 Errores previos a perfilamiento: `400 solicitud_invalida`, `401 sesion_invalida`,
 `403 alcance_insuficiente`/`socio_no_autorizado`, `404 cliente_no_encontrado`.
@@ -657,6 +732,19 @@ cierre una sesión válida por una caída. Un `429 demasiados_intentos` conserva
 `X-Correlation-ID` se propaga a identidad.
 
 ### Importes y periodicidad de ofertas
+
+`GET /v1/clientes/me/perfil` expone solo los propios datos registrados desde
+Identidad: `{clienteId,nombre,tipoDocumento,numeroDocumento,correo,telefono,fechaNacimiento}`.
+Telefono/fecha realmente ausentes son null. Requiere rol cliente y scope cliente
+(o legado cotizaciones), `API-Version: 1`, sin query; devuelve `no-store`.
+No modifica el JWT, registro ni autenticacion y no permite elegir otro cliente.
+
+`POST /v1/solicitudes-cotizacion` usa documento/contacto y fecha de nacimiento
+autoritativos de ese perfil, no de la UI. Para life enviar `datosProducto: {}`;
+para mortgage-life conservar `mortgageBalance` sin pedir birthDate. Por compatibilidad
+se admite birthDate solo si coincide con el registro; discrepancia es 400,
+ausencia real de nacimiento/contacto es 422 `datos_cliente_incompletos`.
+La UI muestra esos datos como solo lectura y conserva parametros genuinos del producto.
 
 Las ofertas y GET/PUT de selección transmiten `prima: {monto, moneda}` y
 `periodicidad: mensual | por_viaje | por_vuelo | por_periodo` calculadas y persistidas por cotización.

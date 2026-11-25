@@ -81,6 +81,8 @@ paths:
     $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documento"
   /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga:
     $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documentos~1{documentoId}~1descarga"
+  /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga/pdf:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documentos~1{documentoId}~1descarga~1pdf"
   /v1/clientes/me/polizas/{polizaId}/aceptaciones:
     $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1aceptaciones"
   /v1/siniestros:
@@ -402,6 +404,59 @@ paths:
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/socios/solicitudes-cotizacion:
+    get:
+      tags: [Socios]
+      operationId: listarSolicitudesSocio
+      summary: Lista todas las solicitudes realmente cotizadas por el socio autorizado
+      description: |
+        Requiere rol/scope socio y socioId presente en el JWT. Una fila por cotizacion,
+        sin deduplicar clientes ni limite de dashboard; orden creadaEn descendente y
+        cotizacionId ascendente en empates. Excluye reservas y operaciones sin cotizacion.
+        productoId es un filtro opcional: omitirlo incluye todos los productos implementados
+        del flujo socio (actualmente solo mortgage-life), nunca productos ajenos.
+        Seleccion/calculo/aceptacion no significan completada: requiere pago confirmado
+        y resultado final del flujo; si se solicito emision, requiere emision concluida.
+        Rechazada es decision explicita del cliente, no error tecnico ni pago rechazado.
+        Pendientes no continuables por vigencia de quote/perfil/fuentes/oferta son vencida.
+        Terminales completada/rechazada no cambian al vencer despues. Consentimiento
+        revocado no equivale a vencida: conserva metadatos, fechas y estado, redacta PII.
+        Seleccion sensible solo visible con consentimiento actual y mismo ID/version.
+        Historial no calcula, reactiva ni crea solicitudes ni consulta detalle sensible.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 50}
+        - name: productoId
+          in: query
+          required: false
+          schema: {type: string, enum: [mortgage-life]}
+      responses:
+        "200":
+          description: Historial real; solicitudes vacia si no existen cotizaciones vinculadas
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [solicitudes]
+                properties:
+                  solicitudes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResumenSolicitudSocio"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente o socio_no_autorizado
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
     post:
       tags: [Socios]
       operationId: iniciarSolicitudSocio
@@ -513,7 +568,17 @@ paths:
         integridad de la decision; si alguna entrada esta ausente, vencida o es
         inconsistente no se genera oferta. La oferta queda persistida con fuentes,
         variables, regla y versiones. Un reintento devuelve la misma oferta sin
-        recalcular ni consultar el perfil.
+        recalcular ni consultar el perfil. El BFF comprueba el consentimiento actual
+        tambien al recuperar/reintentar: debe coincidir su ID y version con riesgo.
+        POST recibe un objeto JSON vacio y no elige ninguna oferta. La recomendada
+        es solo una sugerencia; ofertaId del envelope identifica el snapshot,
+        mientras ofertas[].ofertaId identifica cada plan elegible para seleccion.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
       responses:
         "201":
           description: Oferta persistida, incluyendo reintentos
@@ -551,9 +616,98 @@ paths:
         "401":
           $ref: "#/components/responses/NoAutorizado"
         "403":
-          description: alcance_insuficiente o socio_no_autorizado
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
         "404":
           description: operacion_no_encontrada u oferta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/solicitudes-cotizacion/{operationId}/seleccion-provisional:
+    parameters:
+      - name: operationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: socioId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 50
+      - $ref: "#/components/parameters/ApiVersion"
+    get:
+      tags: [Socios]
+      operationId: consultarSeleccionProvisionalSocio
+      summary: Recupera la eleccion persistida sin aceptar ni recalcular
+      description: >-
+        Requiere rol/scope socio y pertenencia a socioId. La operacion y snapshot
+        deben pertenecer al mismo socio, cliente y producto. No recibe clienteId.
+        El consentimiento actual debe conservar el ID/version del riesgo del
+        snapshot. Sin snapshot devuelve 404 oferta_no_encontrada; el usuario
+        puede calcularlo explicitamente con POST oferta, sin recrear cotizacion.
+        Sin eleccion devuelve seleccion y aceptacion null. Una aceptacion final
+        existente es terminal y solo consultable. Respuesta API-Version 1/no-store.
+      responses:
+        "200":
+          description: Estado persistido, incluyendo eleccion, revision y aceptacion final si existe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstadoSeleccionProvisional"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
+        "404":
+          description: operacion_no_encontrada u oferta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    put:
+      tags: [Socios]
+      operationId: elegirOfertaProvisionalSocio
+      summary: Persiste la eleccion explicita de un plan del snapshot del socio
+      description: >-
+        Usa ofertas[].ofertaId y version del snapshot persistido, nunca el
+        ofertaId del envelope ni la recomendacion como eleccion implicita.
+        Mismos permisos y consentimiento que GET. revisionEsperada comienza en 0
+        y debe coincidir con la revision persistida. Devuelve revisionEsperada+1.
+        Conservar Idempotency-Key y payload exactos tras respuesta ambigua:
+        el reintento devuelve su resultado original sin duplicar seleccion.
+        Una clave con otro payload o una revision obsoleta devuelve 409; recuperar
+        GET antes de un nuevo intento. Rechaza planes ajenos, versiones incorrectas
+        y nuevas elecciones vencidas. No acepta, contrata, envia email, crea
+        suscripcion ni paga; reutiliza la provisional del flujo cliente existente.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NuevaSeleccionProvisional"
+      responses:
+        "200":
+          description: Eleccion provisional persistida o resultado del mismo intento
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeleccionProvisional"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente, socio_no_autorizado o consentimiento_invalido
+        "404":
+          description: operacion_no_encontrada u oferta_no_encontrada
+        "409":
+          description: seleccion_desactualizada, conflicto_idempotencia o seleccion_no_modificable
+        "422":
+          description: oferta_no_disponible o entradas_vencidas; nunca devuelve seleccion parcial
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/asesor/clientes:
@@ -1153,11 +1307,95 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/clientes/me/perfil:
+    get:
+      tags: [Clientes]
+      operationId: consultarPerfilPropioCliente
+      summary: Muestra los datos registrados del cliente autenticado, sin recapturarlos
+      description: >-
+        Lectura de Identidad propia, no de claims personales del JWT. Requiere rol
+        cliente y scope cliente (tambien admite el scope legado cotizaciones).
+        No recibe clienteId ni parametros. API-Version 1, Cache-Control no-store.
+        Datos realmente ausentes permanecen null; no se sustituyen por fecha actual.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: Datos autoritativos del perfil registrado
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [clienteId, nombre, tipoDocumento, numeroDocumento, correo, telefono, fechaNacimiento]
+                properties:
+                  clienteId: {type: string, format: uuid}
+                  nombre: {type: string}
+                  tipoDocumento: {type: string}
+                  numeroDocumento: {type: string}
+                  correo: {type: string, format: email}
+                  telefono: {type: [string, "null"]}
+                  fechaNacimiento: {type: [string, "null"], format: date}
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente si no es cliente
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/solicitudes-cotizacion:
+    get:
+      tags: [Cotizaciones]
+      operationId: listarSolicitudesCliente
+      summary: Recupera todas las solicitudes propias, incluidas las creadas por socios
+      description: |
+        Rol cliente y scope cliente o legado cotizaciones. Cliente exclusivamente del JWT;
+        no admite query/cuerpo. Orden creadaEn descendente, cotizacionId ascendente.
+        Una fila por solicitud real, sin limites de dashboard. Comparte estados autenticos
+        del historial socio; terminales no desaparecen por vencimiento o revocacion posterior.
+        Permite continuar la MISMA solicitud y oferta provisional con revision, usando
+        las rutas cliente existentes de seleccion, suscripcion y pago; nunca crea otra quote.
+        GET /{solicitudId}/estado es la proyeccion individual; GET /{solicitudId} conserva
+        datos de producto y estado tecnico CALCULADA, no el estado final del cliente.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: Historial propio; solicitudes vacia si no existen solicitudes
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [solicitudes]
+                properties:
+                  solicitudes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResumenSolicitudCliente"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente; socio no puede actuar como cliente
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
     post:
       tags: [Cotizaciones]
       summary: Registra una solicitud de cotización
       operationId: crearSolicitudCotizacion
+      description: >-
+        El cliente y sus datos personales se resuelven desde Identidad autenticada.
+        life y mortgage-life no necesitan birthDate en datosProducto: se toma la
+        fecha registrada. Si se envia por compatibilidad debe coincidir exactamente;
+        una suplantacion devuelve 400. Si falta en el registro devuelve 422
+        datos_cliente_incompletos, nunca una fecha ficticia. Se conservan los
+        parametros genuinos del producto (destino, credito, vehiculo, etc.).
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1201,6 +1439,103 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "404":
           $ref: "#/components/responses/NoEncontrado"
+  /v1/solicitudes-cotizacion/{solicitudId}/estado:
+    get:
+      tags: [Cotizaciones]
+      operationId: consultarEstadoSolicitudCliente
+      summary: Consulta estado final y seleccion autentica de una solicitud propia
+      description: |
+        Misma fila que el historial cliente, sin query/cuerpo ni reprocesar perfil.
+        Conserva metadatos historicos y terminales aunque la vigencia haya terminado.
+        Solo cliente propietario; no permite ampliar permisos de socio ni reactivar.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Estado propio autoritativo
+          headers:
+            Cache-Control:
+              schema: {const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResumenSolicitudCliente"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/solicitudes-cotizacion/{solicitudId}/rechazo:
+    get:
+      tags: [Cotizaciones]
+      operationId: consultarRechazoSolicitud
+      summary: Recupera la decision explicita y persistida del cliente
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - $ref: "#/components/parameters/SolicitudId"
+      responses:
+        "200":
+          description: Decision recuperable sin reevaluar perfil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RechazoSolicitud"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente
+        "404":
+          description: rechazo_no_encontrado sin revelar solicitudes ajenas
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+    put:
+      tags: [Cotizaciones]
+      operationId: rechazarSolicitudCliente
+      summary: Rechaza una solicitud antes de la aceptacion y contratacion
+      description: |
+        Rol cliente, identidad exclusivamente del JWT; socio no puede rechazar.
+        Cuerpo vacio y UUID Idempotency-Key por intento. Persiste decision append-only.
+        Misma clave/solicitud devuelve decision original; clave de otra solicitud 409.
+        Serializa con aceptacion: ya aceptada, suscrita, pagada, emitida o rechazada
+        con otra clave produce 409 solicitud_no_rechazable. Impide nuevas selecciones/
+        aceptaciones posteriores. No cancela poliza ni interpreta pago rechazado como
+        rechazo cliente. No requiere recapturar datos personales ni conceder consentimiento.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - $ref: "#/components/parameters/SolicitudId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, maxProperties: 0}
+      responses:
+        "200":
+          description: Decision registrada o reintento identico
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RechazoSolicitud"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente
+        "404":
+          description: rechazo_no_encontrado sin revelar solicitudes ajenas
+        "409":
+          description: solicitud_no_rechazable o conflicto_idempotencia
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
   /v1/solicitudes-cotizacion/{solicitudId}/ofertas:
     get:
       tags: [Ofertas]
@@ -3290,6 +3625,12 @@ components:
           type: string
         estado:
           const: completada
+          description: Admision/calculo completados, no actuacion final del cliente.
+        estadoSolicitud:
+          description: Estado autentico del ciclo cliente; aditivo, independiente de estado tecnico.
+          oneOf:
+            - $ref: "#/components/schemas/EstadoSolicitud"
+            - type: "null"
         perfilamientoReferencia:
           type: string
           description: Referencia opaca del perfil persistido.
@@ -3300,6 +3641,14 @@ components:
           format: uuid
         oferta:
           $ref: "#/components/schemas/OfertaHipotecariaSocio"
+        estadoSeleccion:
+          description: >-
+            Estado autentico recuperable; no interpretar oferta recomendada como
+            eleccion. Si existe seleccion/aceptacion, exige consentimiento actual
+            coincidente antes de exponerlo. Campo aditivo para consumidores anteriores.
+          oneOf:
+            - $ref: "#/components/schemas/EstadoSeleccionProvisional"
+            - type: "null"
         recibidaEn:
           type: string
           format: date-time
@@ -3436,6 +3785,7 @@ components:
         hashContenido:
           type: string
           pattern: "^[0-9a-f]{64}$"
+          description: Hash del contenido canonico persistido; no del JSON proyectado con vigencia efectiva.
     PlanOfertaSocio:
       type: object
       additionalProperties: false
@@ -4599,9 +4949,9 @@ components:
     DatosVida:
       type: object
       additionalProperties: false
-      required: [birthDate]
       properties:
         birthDate:
+          description: Opcional en la solicitud; debe coincidir con la fecha registrada que resuelve el BFF.
           type: string
           format: date
     DatosDispositivo:
@@ -4687,9 +5037,10 @@ components:
     DatosVidaHipotecaria:
       type: object
       additionalProperties: false
-      required: [birthDate, mortgageBalance]
+      required: [mortgageBalance]
       properties:
         birthDate:
+          description: Opcional en la solicitud; debe coincidir con la fecha registrada que resuelve el BFF.
           type: string
           format: date
         mortgageBalance:
@@ -5029,6 +5380,116 @@ components:
         estadoOferta:
           type: [string, "null"]
           enum: [disponible, vencida, retirada, aceptada, null]
+    EstadoSolicitud:
+      type: string
+      enum: [pendiente, completada, rechazada, vencida]
+    ResumenSolicitudBase:
+      type: object
+      required: [operationId, socioId, clienteId, solicitudId, cotizacionId, productoId, estado, creadaEn, actualizadaEn, validaHasta, completadaEn, rechazadaEn, pagoEstado, emisionEstado]
+      properties:
+        operationId:
+          type: [string, "null"]
+          format: uuid
+        socioId:
+          type: [string, "null"]
+        clienteId:
+          type: string
+          format: uuid
+        solicitudId:
+          type: string
+          minLength: 1
+          maxLength: 32
+        cotizacionId:
+          type: string
+          format: uuid
+        productoId:
+          type: string
+        estado:
+          $ref: "#/components/schemas/EstadoSolicitud"
+        creadaEn:
+          type: string
+          format: date-time
+        actualizadaEn:
+          type: string
+          format: date-time
+        validaHasta:
+          type: string
+          format: date-time
+          description: Minimo autoritativo de vigencias quote/perfil/fuentes/oferta elegida.
+        completadaEn:
+          type: [string, "null"]
+          format: date-time
+        rechazadaEn:
+          type: [string, "null"]
+          format: date-time
+        pagoEstado:
+          type: [string, "null"]
+          enum: [pendiente, rechazado, confirmado, null]
+          description: Pago rechazado no equivale a decision de rechazo de cotizacion.
+        emisionEstado:
+          type: [string, "null"]
+          enum: [pago_pendiente, pago_confirmado, emitida, fallida, null]
+    ResumenSolicitudCliente:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/ResumenSolicitudBase"
+        - type: object
+          required: [estadoSeleccion, seleccionRestringida]
+          properties:
+            estadoSeleccion:
+              $ref: "#/components/schemas/EstadoSeleccionProvisional"
+            seleccionRestringida:
+              const: false
+    ResumenSolicitudSocio:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: "#/components/schemas/ResumenSolicitudBase"
+        - type: object
+          required: [estadoSeleccion, seleccionRestringida, cliente]
+          properties:
+            operationId:
+              type: string
+              format: uuid
+            socioId:
+              type: string
+              minLength: 1
+            estadoSeleccion:
+              oneOf:
+                - $ref: "#/components/schemas/EstadoSeleccionProvisional"
+                - type: "null"
+            seleccionRestringida:
+              type: boolean
+            cliente:
+              type: object
+              additionalProperties: false
+              required: [clienteId, nombre, tipoDocumento, numeroDocumentoEnmascarado, consentimientoEstado]
+              properties:
+                clienteId:
+                  type: string
+                  format: uuid
+                nombre:
+                  type: [string, "null"]
+                tipoDocumento:
+                  type: [string, "null"]
+                numeroDocumentoEnmascarado:
+                  type: [string, "null"]
+                consentimientoEstado:
+                  enum: [vigente, insuficiente, vencido, revocado, rechazado, ausente]
+    RechazoSolicitud:
+      type: object
+      additionalProperties: false
+      required: [solicitudId, cotizacionId, estado, rechazadaEn]
+      properties:
+        solicitudId:
+          type: string
+        cotizacionId:
+          type: string
+          format: uuid
+        estado:
+          const: rechazada
+        rechazadaEn:
+          type: string
+          format: date-time
     Suscripcion:
       type: object
       additionalProperties: false

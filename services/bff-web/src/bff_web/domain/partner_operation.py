@@ -11,6 +11,33 @@ class PartnerClients(BaseModel):
     clientes: tuple[UUID, ...]
 
 
+class PartnerSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solicitudId: str = Field(min_length=1, max_length=32)
+    ofertaId: UUID
+    version: int = Field(ge=1)
+    nombreOferta: str
+    prima: "PartnerMoney"
+    periodicidad: Literal["mensual", "por_viaje", "por_vuelo", "por_periodo"]
+    primaMensual: "PartnerMoney | None"
+    seleccionadaEn: datetime
+
+
+class PartnerProvisionalSelection(PartnerSelection):
+    revision: int = Field(ge=1)
+    vigenteHasta: datetime
+
+
+class PartnerSelectionState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solicitudId: str = Field(min_length=1, max_length=32)
+    seleccion: PartnerProvisionalSelection | None
+    aceptacion: PartnerSelection | None
+    estadoOferta: Literal["disponible", "vencida", "retirada", "aceptada"] | None
+
+
 class PartnerOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -19,11 +46,13 @@ class PartnerOperation(BaseModel):
     clienteId: UUID
     productoId: str = Field(min_length=1, max_length=64)
     estado: Literal["completada"]
+    estadoSolicitud: Literal["pendiente", "completada", "rechazada", "vencida"] | None = None
     perfilamientoReferencia: str = Field(min_length=1, max_length=64)
     solicitudId: str = Field(min_length=1, max_length=32)
     cotizacionId: UUID
     recibidaEn: datetime
     oferta: "PartnerOffer"
+    estadoSeleccion: PartnerSelectionState | None = None
 
 
 class PartnerMoney(BaseModel):
