@@ -414,15 +414,14 @@ class ConsultarInformacionCliente:
         correlation_id: str,
         impedimento: Literal["producto_no_autorizado", "catalogo_no_disponible"] | None = None,
     ) -> None:
-        self.autorizar_asesor(actor_id, socio_id, correlation_id)
+        presupuesto = Presupuesto(self._politica, self._ejecutor)
+        self._autorizar_actor(actor_id, socio_id, "asesor", correlation_id, presupuesto)
         caso = self._repositorio.obtener_excepcion_open_finance(excepcion_id, socio_id)
         operacion = self._repositorio.buscar_operacion_informacion(
             socio_id, UUID(str(caso["operationId"]))
         )
         if operacion is None:
             raise ErrorPerfilamiento("excepcion_sin_operacion", 409)
-        presupuesto = Presupuesto(self._politica, self._ejecutor)
-        self._autorizar_actor(actor_id, socio_id, "asesor", correlation_id, presupuesto)
         # La guarda SQL abarca el reintento acotado y su resultado/acuse atomicos.
         with self._repositorio.bloquear_operacion_informacion(excepcion_id, socio_id) as (
             transaccion,
