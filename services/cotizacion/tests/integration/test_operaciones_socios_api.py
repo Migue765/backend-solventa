@@ -71,6 +71,108 @@ def app_for(url: str, **kwargs):
     )
 
 
+def test_client_list_is_persisted_deduplicated_and_isolated_by_partner_and_product(
+    database_url, monkeypatch
+):
+    profiling = ProfilingServiceStub()
+    monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
+    app = app_for(database_url)
+    internal = {"Authorization": "Bearer " + INTERNAL_TOKEN, "API-Version": "1"}
+    query = {"socioId": "BANCO-001", "productoId": "automotive"}
+    client = app.test_client()
+    assert client.get("/v1/socios/clientes", query_string=query, headers=internal).get_json() == {
+        "clientes": []
+    }
+    first, second = payload(), payload()
+    duplicate = {**first, "operationId": str(uuid4()), "usuarioId": str(uuid4())}
+    foreign = {**payload(), "socioId": "OTHER"}
+    other_product = {
+        **payload(),
+        "productoId": "life",
+        "datosProducto": {"birthDate": "1985-02-10"},
+    }
+    for body in (first, second, duplicate, foreign, other_product):
+        result = post(app, body)
+        assert result.status_code == 201, result.get_json()
+    restarted = app_for(database_url).test_client()
+    listed = restarted.get("/v1/socios/clientes", query_string=query, headers=internal)
+    assert listed.status_code == 200
+    assert listed.get_json() == {"clientes": sorted([first["clienteId"], second["clienteId"]])}
+    assert listed.headers["Cache-Control"] == "no-store"
+    assert listed.headers["API-Version"] == "1"
+    for socio, producto, expected in (
+        ("OTHER", "automotive", [foreign["clienteId"]]),
+        ("BANCO-001", "life", [other_product["clienteId"]]),
+        ("EMPTY", "automotive", []),
+    ):
+        result = restarted.get(
+            "/v1/socios/clientes",
+            query_string={"socioId": socio, "productoId": producto},
+            headers=internal,
+        )
+        assert result.get_json() == {"clientes": expected}
+
+
+def test_client_list_excludes_pending_rejected_and_unassociated_quotes(database_url, monkeypatch):
+    profiling = ProfilingServiceStub()
+    monkeypatch.setattr("cotizacion.infrastructure.perfil_http.urlopen", profiling)
+    app = app_for(database_url)
+    internal = {"Authorization": "Bearer " + INTERNAL_TOKEN, "API-Version": "1"}
+    query = {"socioId": "BANCO-001", "productoId": "automotive"}
+    admission = app.extensions["admision_socios"]
+    admission.configurar("BANCO-001", cuota=1, concurrencia=1)
+    with admission.reservar("BANCO-001", uuid4(), "pending", global_id=True):
+        blocked = post(app, payload())
+        assert blocked.status_code == 429
+        assert blocked.get_json()["error"] == "socio_ocupado"
+        assert app.test_client().get(
+            "/v1/socios/clientes", query_string=query, headers=internal
+        ).get_json() == {"clientes": []}
+    denied = post(app, payload())
+    assert denied.status_code == 429
+    assert denied.get_json()["error"] == "cuota_socio_excedida"
+    admission.configurar("BANCO-001", cuota=60, concurrencia=2)
+    completed = payload()
+    assert post(app, completed).status_code == 201
+    with crear_sesiones(database_url).begin() as session:
+        session.execute(
+            OperacionSocioModel.__table__.delete().where(
+                OperacionSocioModel.operation_id == UUID(completed["operationId"])
+            )
+        )
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 1
+    assert app.test_client().get(
+        "/v1/socios/clientes", query_string=query, headers=internal
+    ).get_json() == {"clientes": []}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"socioId": "BANK"},
+        {"socioId": "BANK", "productoId": ""},
+        {"socioId": "BANK", "productoId": "automotive", "clienteId": "foreign"},
+        [("socioId", "BANK"), ("socioId", "OTHER"), ("productoId", "automotive")],
+    ],
+)
+def test_internal_client_list_requires_valid_context_and_internal_auth(database_url, query):
+    client = app_for(database_url).test_client()
+    assert client.get("/v1/socios/clientes", query_string=query).status_code == 401
+    internal = {"Authorization": "Bearer " + INTERNAL_TOKEN}
+    assert (
+        client.get("/v1/socios/clientes", query_string=query, headers=internal).status_code == 400
+    )
+    assert (
+        client.get(
+            "/v1/socios/clientes",
+            query_string={"socioId": "BANK", "productoId": "automotive"},
+            headers={**internal, "API-Version": "2"},
+        ).status_code
+        == 400
+    )
+
+
 @pytest.mark.parametrize(
     ("product", "data"),
     [

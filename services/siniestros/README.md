@@ -1,5 +1,20 @@
 # Siniestros
 
+## Revision administrativa desde la web
+
+El BFF Web de administracion reutiliza las colas, decisiones humanas, transiciones
+e idempotencia internas existentes. No agrega una maquina de estados ni un flujo
+de pagos alternativo. El UUID del revisor proviene de la sesion administrativa
+autenticada por el BFF y queda en la decision y auditoria SQL.
+
+`GET /internal/v1/siniestros/{id}/revision` consulta el aviso y sus evidencias
+confirmadas; `GET /internal/v1/siniestros/{id}/evidencias/{evidenciaId}/contenido`
+entrega el archivo confirmado tras verificar integridad SHA256 y pertenencia al
+siniestro. Ambas exigen el token interno y `X-Revisor-ID`, y auditan la consulta
+con ese actor, no con la identidad del cliente. El token interno nunca llega a
+la web; no deben publicarse estas rutas directamente en el Gateway.
+Contrato publico compatible: `contracts/openapi/administracion-siniestros-web-v1.yaml`.
+
 ## Despliegue en AWS
 
 El procedimiento esta en el [runbook de despliegue](../../deploy/k8s/siniestros/README.md).

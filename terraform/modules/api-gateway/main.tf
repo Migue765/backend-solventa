@@ -244,7 +244,7 @@ resource "aws_lb_listener_rule" "bff_web_claims" {
 
   condition {
     path_pattern {
-      values = ["/v1/siniestros", "/v1/siniestros/*"]
+      values = ["/v1/siniestros", "/v1/siniestros/*", "/v1/administracion/*"]
     }
   }
 

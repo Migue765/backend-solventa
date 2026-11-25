@@ -114,6 +114,68 @@ def prepare(flow: Flow) -> tuple[dict[str, str], dict]:
     return headers, body
 
 
+def test_partner_client_list_uses_registered_quotes_and_current_consent_over_http(
+    flow: Flow,
+) -> None:
+    headers, body = prepare(flow)
+    foreign = partner_headers(flow, "OTHER", "other-list@integracion.co")
+    path = "/v1/socios/clientes?socioId=BANK-E2E&productoId=mortgage-life"
+    assert flow.client.get(path, headers=headers).get_json() == {"clientes": []}
+    flow.create_quote()
+    assert flow.client.get(path, headers=headers).get_json() == {"clientes": []}
+    for operation in (body["operationId"], str(uuid4())):
+        result = flow.client.post(
+            PATH,
+            json={**body, "operationId": operation},
+            headers={**headers, "Idempotency-Key": operation},
+        )
+        assert result.status_code == 201, result.get_json()
+        client_id = result.get_json()["clienteId"]
+    with crear_sesiones(flow.quote_database)() as session:
+        assert session.scalar(select(func.count()).select_from(OperacionSocioModel)) == 2
+        assert session.scalar(select(func.count()).select_from(CotizacionModel)) == 3
+    listed = flow.client.get(path, headers=headers)
+    assert listed.status_code == 200
+    assert listed.get_json() == {
+        "clientes": [
+            {
+                "clienteId": client_id,
+                "nombre": "Cliente integrado",
+                "tipoDocumento": "cc",
+                "numeroDocumentoEnmascarado": "******5678",
+                "consentimientoEstado": "vigente",
+            }
+        ]
+    }
+    assert flow.client.get(path, headers=foreign).status_code == 403
+    assert flow.client.get(path.replace("BANK-E2E", "OTHER"), headers=foreign).get_json() == {
+        "clientes": []
+    }
+    assert flow.client.get(path, headers=flow.headers).status_code == 403
+    consent = flow.client.get(CONSENT, headers=flow.headers).get_json()
+    assert (
+        flow.client.put(
+            CONSENT,
+            json={"autorizado": False, "version": consent["version"]},
+            headers=flow.headers,
+        ).status_code
+        == 200
+    )
+    redacted = flow.client.get(path, headers=headers)
+    assert redacted.status_code == 200
+    assert redacted.get_json() == {
+        "clientes": [
+            {
+                "clienteId": client_id,
+                "nombre": None,
+                "tipoDocumento": None,
+                "numeroDocumentoEnmascarado": None,
+                "consentimientoEstado": "revocado",
+            }
+        ]
+    }
+
+
 def partner_state(flow: Flow) -> dict[str, object]:
     with crear_sesiones(flow.quote_database)() as session:
         return {

@@ -5,6 +5,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class PartnerClients(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clientes: tuple[UUID, ...]
+
+
 class PartnerOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

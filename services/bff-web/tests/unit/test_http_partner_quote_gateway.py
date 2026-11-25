@@ -13,6 +13,36 @@ from support import partner_offer_payload
 TARGET = "bff_web.infrastructure.http_partner_quote_gateway.urlopen"
 
 
+def test_lists_only_client_ids_using_encoded_partner_and_product() -> None:
+    client_id = uuid4()
+    with patch(
+        TARGET, return_value=BytesIO(json.dumps({"clientes": [str(client_id)]}).encode())
+    ) as urlopen:
+        result = HttpPartnerQuoteGateway("http://cotizacion/", "token").list_clients(
+            "BANK & A", "mortgage-life", "corr-list"
+        )
+    request = urlopen.call_args.args[0]
+    assert request.get_method() == "GET"
+    assert request.full_url == (
+        "http://cotizacion/v1/socios/clientes?socioId=BANK+%26+A&productoId=mortgage-life"
+    )
+    assert request.get_header("Authorization") == "Bearer token"
+    assert request.get_header("Api-version") == "1"
+    assert request.get_header("X-correlation-id") == "corr-list"
+    assert request.get_header("Idempotency-key") is None
+    assert result.clientes == (client_id,)
+
+
+@pytest.mark.parametrize("body", [{"clientes": ["invalid"]}, {}, {"clientes": [], "extra": 1}])
+def test_invalid_client_list_is_unavailable_not_empty(body: dict[str, object]) -> None:
+    with patch(TARGET, return_value=BytesIO(json.dumps(body).encode())):
+        with pytest.raises(MortgageProfilingError) as error:
+            HttpPartnerQuoteGateway("http://cotizacion", "token").list_clients(
+                "BANCO-001", "mortgage-life", "corr-list"
+            )
+    assert (error.value.code, error.value.status) == ("servicio_no_disponible", 503)
+
+
 def test_calculates_offer_against_the_partner_operation() -> None:
     operation_id = uuid4()
     with patch(

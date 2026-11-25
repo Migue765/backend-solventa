@@ -1,5 +1,29 @@
 # BFF Web
 
+## Revision administrativa interna
+
+`/v1/administracion` expone las colas existentes de revision, inspeccion y fraude,
+el aviso original con evidencias confirmadas, el historial vigente y la resolucion
+humana de siniestros. Contrato completo:
+`contracts/openapi/administracion-siniestros-web-v1.yaml`.
+Solo acepta JWT web `rol=scope=administrador`, sin socios y con sesion `sid` activa.
+Clientes, socios y asesores no pueden usar estas rutas; el administrador no se
+convierte en un cliente ni obtiene acceso al flujo de un socio.
+
+El BFF determina `revisorId` a partir de la sesion, envia el token interno solo al
+servicio Siniestros y conserva `X-Correlation-ID` e `Idempotency-Key`. La decision
+reutiliza las transiciones, auditoria SQL e idempotencia existentes. Solo admite
+resultado y motivo del navegador; no permite suplantar revisor ni perito. Tras un
+fallo o acuse perdido, consultar decisiones y recuperar con la misma clave/cuerpo.
+Las evidencias se descargan autenticadas y con `no-store`; no se publican URLs S3.
+
+Requiere desplegar versiones compatibles de Identidad, Siniestros y BFF y coordinar
+la pantalla administrativa en la web. No agrega aprobacion de nuevas polizas,
+pagos ni despliegue automatico. El alta privada del administrador queda en Identidad.
+La regla ALB existente del BFF incorpora `/v1/administracion/*`; su actualizacion
+Terraform tambien debe revisarse y aplicarse en ese despliegue autorizado, no basta
+con publicar las imagenes. Este cambio de fuente no aplica infraestructura.
+
 ## Siniestros y evidencia compartida
 
 Las rutas `/v1/siniestros` conservan el registro web y usan el mismo servicio
@@ -198,6 +222,33 @@ el ultimo caso necesita POST original. `409 idempotencia_conflicto` impide
 reutilizar la clave con otros datos. La admision generica garantiza UUID global
 unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
 propietario. Reintentos y lecturas siguen aislados por organizacion.
+
+`GET /v1/socios/clientes?socioId=...&productoId=mortgage-life` lista clientes de
+cotizaciones completadas y persistidas de esa organizacion y producto, nunca el
+catalogo de Identidad ni reservas pendientes/rechazadas. Requiere JWT de rol y
+scope `socio`, pertenencia al `socioId` del contexto `/v1/socios/actual` y
+`API-Version: 1` (opcional, por defecto 1). El producto coincide con el unico
+producto del flujo publico de cotizacion del socio. La respuesta es
+`{clientes:[{clienteId,nombre,tipoDocumento,numeroDocumentoEnmascarado,consentimientoEstado}]}`:
+UUID estable, sin duplicados y ordenado por `clienteId`, sin paginacion como el
+listado del asesor; `{clientes:[]}` significa ausencia de cotizaciones.
+
+El BFF consulta consentimiento vigente en Identidad antes de resolver nombre y
+documento del cliente. Sin autorizacion actual los tres datos personales son
+`null`; conserva solo asociacion y estado (`vigente`, `insuficiente`, `ausente`,
+`rechazado`, `revocado` o `vencido`). No devuelve contacto, documento completo,
+riesgo ni evidencia del consentimiento. Fallos de Cotizacion, Identidad o contrato
+producen `503 servicio_no_disponible`, nunca lista vacia ni resultados parciales.
+Usa `Cache-Control: no-store`; la consulta individual por documento no cambia.
+
+La ruta reutiliza `QUOTE_SERVICE_URL`, `IDENTIDAD_URL` e `INTERNAL_API_TOKEN`.
+No requiere tablas, migraciones ni reglas de infraestructura nuevas: API Gateway
+ya protege `ANY /v1/{proxy+}` y el ALB dirige `/v1/socios/*` al BFF; este consulta
+Cotizacion por su Service ClusterIP interno, no por el ALB publico. Actualizar
+Cotizacion y BFF juntos antes de habilitar el consumidor; con Cotizacion antigua
+el BFF responde 503. `tests/test_partner_flow.py -k client_list` valida por HTTP
+los servicios reales con SQLite temporal, cotizaciones persistidas, deduplicacion,
+ausencia de historial, aislamiento y revocacion. No acredita despliegue en AWS.
 
 `POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=...` (SOL-330)
 pide a Cotizacion la oferta explicable de una operacion completada: tres planes con

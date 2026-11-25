@@ -9,14 +9,14 @@ from pathlib import Path
 from threading import Thread
 from typing import Any
 
-import boto3  # type: ignore[import-untyped]
+import boto3
 import fakeredis
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from bff_web.app import create_app as create_web
 from bff_web.config import Config as WebConfig
-from botocore.stub import Stubber  # type: ignore[import-untyped]
+from botocore.stub import Stubber
 from flask import Flask
 from identidad.app import create_app
 from identidad.application.password_recovery_service import RecoveryUnavailableError
@@ -271,7 +271,7 @@ def test_request_is_generic_and_delivery_failure_never_reports_success(flow: Flo
     flow.mail.fail_send = True
     assert client.post(BASE, json={"correo": EMAIL}).status_code == 503
     with flow.sessions() as session:
-        rows = list(session.scalars(select(PasswordRecoveryModel)))
+        rows: list[PasswordRecoveryModel] = list(session.scalars(select(PasswordRecoveryModel)))
         assert len(rows) == 2 and sum(row.consumida_en is not None for row in rows) == 1
 
 

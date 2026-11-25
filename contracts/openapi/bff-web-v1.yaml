@@ -51,6 +51,16 @@ paths:
         "409": {description: Identificador repetido con otro contenido.}
         "422": {description: "Fecha futura, fuera de vigencia o evento invalido."}
         "503": {description: Fuente o contratos no disponibles.}
+  /v1/administracion/colas-revision/{cola}/asignaciones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1colas-revision~1{cola}~1asignaciones"
+  /v1/administracion/siniestros/{siniestroId}:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}"
+  /v1/administracion/siniestros/{siniestroId}/decisiones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones"
+  /v1/administracion/siniestros/{siniestroId}/decisiones/revision:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones~1revision"
+  /v1/administracion/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/recuperacion-contrasena:
     $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
   /v1/recuperacion-contrasena/desafio:
@@ -256,6 +266,82 @@ paths:
           description: socio_no_autorizado, actor_no_autorizado o consentimiento_invalido
         "404":
           description: consulta_no_encontrada
+        "503":
+          $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/socios/clientes:
+    get:
+      tags: [Socios]
+      operationId: listarClientesCotizadosSocio
+      summary: Lista clientes con cotizaciones persistidas del socio y producto autorizados
+      description: |
+        Requiere rol y scope socio y pertenencia a socioId, del contexto /v1/socios/actual
+        (alcance clientes:consultar). El flujo publico socio soporta mortgage-life.
+        No incluye reservas pendientes, rechazadas ni clientes sin cotizacion registrada.
+        Deduplicado por clienteId y ordenado por ese UUID, sin paginacion conforme al
+        listado de clientes del asesor. No consulta el catalogo global de Identidad.
+        Nombre y documento enmascarado solo se muestran con consentimiento actual
+        vigente para cotizacion; si no, son null, conservando la asociacion y estado.
+        No expone correo, telefono, documento completo, riesgo ni evidencia de consentimiento.
+      parameters:
+        - $ref: "#/components/parameters/ApiVersion"
+        - name: socioId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 50
+        - name: productoId
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [mortgage-life]
+      responses:
+        "200":
+          description: Lista completa, vacia cuando el socio no tiene cotizaciones del producto
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+            API-Version:
+              schema:
+                type: string
+                enum: ["1"]
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [clientes]
+                properties:
+                  clientes:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [clienteId, nombre, tipoDocumento, numeroDocumentoEnmascarado, consentimientoEstado]
+                      properties:
+                        clienteId:
+                          type: string
+                          format: uuid
+                        nombre:
+                          type: [string, "null"]
+                        tipoDocumento:
+                          type: [string, "null"]
+                          enum: [cc, ce, passport, ppt, null]
+                        numeroDocumentoEnmascarado:
+                          type: [string, "null"]
+                        consentimientoEstado:
+                          type: string
+                          enum: [vigente, insuficiente, ausente, rechazado, revocado, vencido]
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "403":
+          description: alcance_insuficiente o socio_no_autorizado
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
   /v1/socios/clientes/por-documento:
@@ -4244,7 +4330,7 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente, asesor, socio]
+          enum: [cliente, asesor, socio, administrador]
         socios:
           type: array
           uniqueItems: true
