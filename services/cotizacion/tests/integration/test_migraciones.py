@@ -107,7 +107,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     from .test_api import solicitud
 
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["pagos_simulados_pendientes"]
+    assert script.get_heads() == ["rechazos_solicitud"]
     assert script.get_revision("0006").down_revision == "academico_v1"
     command.upgrade(alembic_config, revision)
     url = alembic_config.get_main_option("sqlalchemy.url")
@@ -126,8 +126,7 @@ def test_union_desde_cualquier_rama_conserva_reglas_y_decisiones(
     with create_engine(url).connect() as conexion:
         reglas_despues = set(conexion.execute(text("select regla_id, version from reglas_tarifa")))
         assert (
-            conexion.scalar(text("select version_num from alembic_version"))
-            == "pagos_simulados_pendientes"
+            conexion.scalar(text("select version_num from alembic_version")) == "rechazos_solicitud"
         )
     assert len(reglas_despues) == 15
     assert reglas_antes <= reglas_despues
@@ -253,7 +252,12 @@ def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
                 tabla: sorted(connection.execute(text(f'SELECT * FROM "{tabla}"')).all(), key=repr)
                 for tabla in inspect(connection).get_table_names()
                 if tabla
-                not in {"alembic_version", "selecciones_provisionales", "efectos_pago_simulado"}
+                not in {
+                    "alembic_version",
+                    "selecciones_provisionales",
+                    "efectos_pago_simulado",
+                    "rechazos_solicitud",
+                }
             }
 
     try:
@@ -263,6 +267,7 @@ def test_migracion_provisional_no_reescribe_historia_y_protege_rollback(
         with motor.connect() as connection:
             assert connection.scalar(text("SELECT COUNT(*) FROM selecciones_provisionales")) == 0
             assert connection.scalar(text("SELECT COUNT(*) FROM efectos_pago_simulado")) == 0
+            assert connection.scalar(text("SELECT COUNT(*) FROM rechazos_solicitud")) == 0
         assert client.get(f"{url}/seleccion", query_string=query).get_json() == aceptada.get_json()
         otro_url, otro_query, otras = preparar(client)
         assert elegir(client, otro_url, otro_query, otras[0], 0).status_code == 200

@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from flask import Flask
 from flask.testing import FlaskClient
 from PIL import Image
+from pypdf import PdfWriter
 from siniestros import storage
 from siniestros.app import create_app
 from siniestros.domain import Config as ClaimsConfig
@@ -195,6 +196,88 @@ def test_confirmacion_publica_en_s3_y_otro_pod_entrega_el_contenido(
         assert descarga.mimetype == "image/jpeg"
         assert descarga.headers["Content-Length"] == str(len(data))
     assert list(staging(nuevo).iterdir()) == []
+
+
+@pytest.mark.parametrize("algorithm", ["RC4-128", "AES-128", "AES-256"])
+def test_pdf_cifrado_se_conserva_opaco_en_s3_sin_solicitar_clave(
+    pod: Callable[[], Flask], s3: FakeS3, algorithm: str
+) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.encrypt("clave-sintetica", algorithm=algorithm)
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    app, owner = pod(), uuid4()
+    claim_id = registrar(app, owner)
+    client = app.test_client()
+    upload_id = cargar(client, owner, claim_id, data, "application/pdf")
+    confirmation = f"/v1/siniestros/{claim_id}/cargas/{upload_id}/confirmacion"
+
+    confirmed = client.post(confirmation, headers=headers(owner))
+
+    assert confirmed.status_code == 200, confirmed.get_json()
+    assert confirmed.get_json()["estado"] == "confirmada"
+    assert client.post(confirmation, headers=headers(owner)).get_json() == confirmed.get_json()
+    assert s3.objects == {f"evidencias/{claim_id}/{upload_id}": data}
+    route = f"/v1/siniestros/{claim_id}/evidencias/{upload_id}/contenido"
+    assert client.get(route, headers=headers(uuid4())).status_code == 404
+    with pod().test_client().get(route, headers=headers(owner)) as response:
+        assert response.status_code == 200
+        assert response.get_data() == data
+        assert response.mimetype == "application/pdf"
+        assert response.headers["Content-Disposition"].startswith("attachment;")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize("damage", ["truncado", "catalogo_ausente"])
+def test_pdf_cifrado_danado_no_se_confirma(
+    pod: Callable[[], Flask], s3: FakeS3, damage: str
+) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.encrypt("clave-sintetica")
+    output = io.BytesIO()
+    writer.write(output)
+    data = output.getvalue()
+    data = (
+        data[: data.rfind(b"startxref")]
+        if damage == "truncado"
+        else data.replace(b"/Root 3 0 R", b"/Root 0 0 R")
+    )
+    app, owner = pod(), uuid4()
+    claim_id = registrar(app, owner)
+    client = app.test_client()
+    upload_id = cargar(client, owner, claim_id, data, "application/pdf")
+
+    response = client.post(
+        f"/v1/siniestros/{claim_id}/cargas/{upload_id}/confirmacion", headers=headers(owner)
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["code"] == "formato_invalido"
+    assert s3.objects == {}
+
+
+@pytest.mark.parametrize("mode,progressive", [("RGB", True), ("CMYK", False)])
+def test_jpeg_valido_se_confirma_sin_recomprimir(
+    pod: Callable[[], Flask], s3: FakeS3, mode: str, progressive: bool
+) -> None:
+    output = io.BytesIO()
+    Image.new(mode, (16, 16)).save(output, format="JPEG", progressive=progressive)
+    data = output.getvalue()
+    app, owner = pod(), uuid4()
+    claim_id = registrar(app, owner)
+    client = app.test_client()
+    upload_id = cargar(client, owner, claim_id, data)
+
+    response = client.post(
+        f"/v1/siniestros/{claim_id}/cargas/{upload_id}/confirmacion", headers=headers(owner)
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["estado"] == "confirmada"
+    assert s3.objects == {f"evidencias/{claim_id}/{upload_id}": data}
 
 
 def test_fallo_de_s3_al_confirmar_deja_la_carga_pendiente_y_reintentable(

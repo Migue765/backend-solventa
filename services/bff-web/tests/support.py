@@ -18,6 +18,7 @@ from bff_web.domain.auth import TokenSet, User
 from bff_web.domain.dashboard import Dashboard
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
 from bff_web.domain.quote_errors import SimulatedPaymentNotFoundError
+from bff_web.domain.quote_history import QuoteHistory, QuoteHistoryEntry, QuoteRejection
 from bff_web.domain.quotes import (
     InsuranceProduct,
     InsuranceProductDetail,
@@ -317,6 +318,18 @@ class StubQuoteGateway(QuoteGateway):
         self.record: QuoteRequestRecord | None = None
         self.subscription: Subscription | None = None
         self.user_ids: list[UUID] = []
+
+    def list_requests(self, user_id: UUID) -> QuoteHistory:
+        raise NotImplementedError
+
+    def get_history(self, user_id: UUID, request_id: str) -> QuoteHistoryEntry:
+        raise NotImplementedError
+
+    def get_rejection(self, user_id: UUID, request_id: str) -> QuoteRejection:
+        raise NotImplementedError
+
+    def reject_request(self, user_id: UUID, request_id: str, key: UUID) -> QuoteRejection:
+        raise NotImplementedError
 
     def get_dashboard(self, user_id: UUID) -> Dashboard:
         raise NotImplementedError

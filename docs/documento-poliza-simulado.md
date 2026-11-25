@@ -2,7 +2,8 @@
 
 Este flujo es **academico y sin validez legal**. No constituye firma electronica,
 digital ni certificada; no cambia emision, cobertura o pagos. OpenFinance/OpenData
-y pagos siguen simulados. No requiere proveedor, certificado, AWS ni libreria nueva.
+y pagos siguen simulados. No requiere proveedor, certificado ni AWS para renderizar.
+La representacion PDF utiliza ReportLab local, sin recursos externos.
 
 ## Contrato WEB
 
@@ -19,6 +20,9 @@ parametros o cuerpo. Recurso inexistente y ajeno responden igual: 404.
 3. `POST /v1/clientes/me/polizas/{polizaId}/aceptaciones` exige `Idempotency-Key`
    UUID y cuerpo `{documentoId, versionPoliza, contenidoHash, aceptaSimulacion: true}`.
    Devuelve 201 con evidencia nueva o 200 con la evidencia original del replay.
+4. `GET /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga/pdf`
+   genera una representacion PDF del snapshot ya persistido, sin crear otra
+   instantanea ni modificar HTML, version, IDs, hashes o aceptaciones.
 
 La evidencia contiene los metadatos del documento mas `id`, `actorId` y
 `aceptadaEn` UTC del servidor. No admite actor/fecha suministrados por el cliente.
@@ -77,8 +81,24 @@ nombre UUID seguro terminado en `-simulada.html`, `X-Content-SHA256`,
 El consumidor puede verificar SHA-256 de `arrayBuffer()` contra el hash del GET.
 No insertar el HTML descargado como contenido activo del DOM. El navegador no
 necesita leer Content-Disposition para construir un nombre seguro propio.
-No se cambia CORS: en despliegues cross-origin los headers personalizados pueden
-no estar expuestos; el hash del GET sigue disponible para verificar bytes.
+En HTML el hash del GET sigue disponible para verificar bytes aun sin headers expuestos.
+
+La descarga PDF es aditiva: `application/pdf`, nombre
+`poliza-{polizaId}-{documentoId}-simulada.pdf`, con los mismos controles privados.
+`X-Content-SHA256` verifica los **bytes PDF**; `X-Document-Content-SHA256` enlaza con
+el `contenidoHash` HTML original. Nunca comparar bytes PDF con el hash HTML.
+El BFF valida MIME, firma/fin PDF, tamano (1 a 1.048.576 bytes), nombre asociado,
+ambos hashes y estructura PDF estricta. Rechaza cifrado, acciones/formularios y
+metadata que no vincule el documento, poliza, cliente y hash HTML esperados.
+La plantilla contiene marca Solventa (SVG vectorial autoritativo de web), aviso
+SIMULADO, datos canonicos, coberturas/condiciones y paginacion. No agrega datos
+personales, precios, condiciones actuales ni fechas de consulta. La metadata tecnica
+de ReportLab es invariante para conservar bytes reproducibles con la misma version
+del renderer; la fecha de emision visible procede del snapshot, no de esa metadata.
+Un contenido incoherente produce 503, nunca un PDF sustituto.
+IaC primary agrega solo la exposicion de `x-document-content-sha256`; ambos hashes
+deben estar legibles para un consumidor cross-origin que verifique el vinculo.
+Esto no modifica origenes, metodos ni aplica configuracion AWS por si mismo.
 
 ## Historial, lifecycle y persistencia
 

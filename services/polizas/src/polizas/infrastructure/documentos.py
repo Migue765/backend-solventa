@@ -2,16 +2,19 @@ import json
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from jinja2 import UndefinedError
 from polizas.domain.consulta import condiciones_detalle, nombre_producto, tiene_condiciones
 from polizas.domain.documento import (
     AVISO,
     FORMATO_VERSION,
     ConfirmacionDocumento,
     DocumentoDesactualizado,
+    DocumentoNoDisponible,
     archivo_html,
     canonico,
     hash_contenido,
 )
+from polizas.domain.documento_pdf import archivo_pdf
 from polizas.infrastructure.consultas import _utc
 from polizas.infrastructure.models import (
     AceptacionDocumentoModel,
@@ -21,6 +24,7 @@ from polizas.infrastructure.models import (
 )
 from polizas.infrastructure.renovaciones import IdempotenciaConflictiva, PolizaNoEncontrada
 from polizas.infrastructure.versiones import condiciones_vigentes
+from reportlab.platypus import LayoutError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -92,6 +96,37 @@ class RepositorioDocumentos:
             if documento is None or documento.poliza_id != poliza_id:
                 raise PolizaNoEncontrada()
             return documento.archivo
+
+    def descargar_pdf(
+        self, poliza_id: UUID, cliente_id: UUID, documento_id: UUID
+    ) -> tuple[bytes, str]:
+        with self.sesiones() as sesion:
+            _poliza(sesion, poliza_id, cliente_id)
+            documento = sesion.get(DocumentoPolizaModel, documento_id)
+            if documento is None or documento.poliza_id != poliza_id:
+                raise PolizaNoEncontrada()
+            try:
+                if len(documento.contenido.encode("utf-8")) > 1_048_576:
+                    raise DocumentoNoDisponible()
+                datos = json.loads(documento.contenido)
+                if (
+                    hash_contenido(documento.archivo) != documento.contenido_hash
+                    or archivo_html(documento.contenido) != documento.archivo
+                    or canonico(datos) != documento.contenido
+                    or datos["polizaId"] != str(poliza_id)
+                    or datos["clienteId"] != str(cliente_id)
+                    or datos["version"] != documento.version_poliza
+                    or datos["simulada"] is not True
+                    or datos["formatoVersion"] != FORMATO_VERSION
+                    or datos["aviso"] != AVISO
+                ):
+                    raise DocumentoNoDisponible()
+                pdf = archivo_pdf(documento.contenido, documento_id, documento.contenido_hash)
+                if len(pdf) > 1_048_576:
+                    raise DocumentoNoDisponible()
+            except (ValueError, KeyError, TypeError, UndefinedError, LayoutError) as error:
+                raise DocumentoNoDisponible() from error
+            return pdf, documento.contenido_hash
 
     def aceptar(
         self,

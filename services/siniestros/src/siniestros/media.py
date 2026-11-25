@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import warnings
 from collections.abc import Mapping
@@ -10,9 +11,11 @@ import av
 from PIL import Image, UnidentifiedImageError
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
-from pypdf.generic import DictionaryObject, StreamObject
+from pypdf.generic import DictionaryObject, IndirectObject, StreamObject
 
 from siniestros.domain import Config, Problem
+
+logger = logging.getLogger(__name__)
 
 GEO = re.compile(rb"gps|latitude|longitude|location|geotag|iso6709|geospatial", re.I)
 GEO_KEY = re.compile(r"gps|latitude|longitude|geotag|iso6709|geospatial", re.I)
@@ -155,7 +158,17 @@ def _pdf(path: Path, consent: bool) -> None:
             raise Problem(422, "formato_invalido")
         stream.seek(0)
         reader = PdfReader(stream, strict=True)
-        if reader.is_encrypted or not reader.pages or len(reader.pages) > 500:
+        if reader.is_encrypted:
+            root_reference = reader.trailer.get("/Root")
+            if not isinstance(root_reference, IndirectObject) or (
+                root_reference.idnum not in reader.xref.get(root_reference.generation, {})
+                and root_reference.idnum not in reader.xref_objStm
+            ):
+                raise Problem(422, "formato_invalido")
+            # Sin clave solo se valida la envoltura; no se descifra ni transforma el adjunto.
+            logger.info("siniestros.pdf_cifrado_adjunto_opaco")
+            return
+        if not reader.pages or len(reader.pages) > 500:
             raise Problem(422, "formato_invalido")
         _metadata_geo(reader.metadata, consent)
         root = reader.trailer["/Root"]

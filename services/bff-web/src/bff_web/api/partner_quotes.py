@@ -4,8 +4,10 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api.mortgage_profiling import _error_response
+from bff_web.api.quotes import ProvisionalSelectionPayload
 from bff_web.api.schemas import user_to_json
 from bff_web.api.security import audit_rejected_response, partner_claims
 from bff_web.application.ports import IdentityGateway
@@ -15,13 +17,16 @@ from bff_web.domain.auth import User
 from bff_web.domain.document_types import validate_identification
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
 from bff_web.domain.partner_offer import PartnerOffer as PartnerOfferSnapshot
+from bff_web.domain.partner_operation import PartnerOperation
 from bff_web.domain.profiling import ProfilingError
 from bff_web.domain.quote_errors import QuoteServiceUnavailableError
+from bff_web.domain.quote_history import QuoteHistoryEntry
 from bff_web.infrastructure.http_partner_quote_gateway import HttpPartnerQuoteGateway
 from bff_web.problems import problem_response
 
 bp = Blueprint("partner_quotes", __name__, url_prefix="/v1/socios")
 bp.after_request(audit_rejected_response)
+PARTNER_PRODUCTS = ("mortgage-life",)
 
 
 class PartnerClientPayload(BaseModel):
@@ -95,7 +100,7 @@ def current_partner() -> Response:
         products = [
             product.product_id
             for product in gateway.list_products()
-            if product.available and product.product_id == "mortgage-life"
+            if product.available and product.product_id in PARTNER_PRODUCTS
         ]
     except QuoteServiceUnavailableError:
         return problem_response(
@@ -265,7 +270,10 @@ def list_clients() -> Response:
 
 
 def _listed_client(client_id: UUID) -> dict[str, object]:
-    status = _consent_status(client_id)
+    return _client_metadata(client_id, _consent_status(client_id))
+
+
+def _client_metadata(client_id: UUID, status: str) -> dict[str, object]:
     result: dict[str, object] = {
         "clienteId": str(client_id),
         "nombre": None,
@@ -288,20 +296,25 @@ def _listed_client(client_id: UUID) -> dict[str, object]:
 
 
 def _consent_status(client_id: UUID) -> str:
+    return _current_consent(client_id)[0]
+
+
+def _current_consent(client_id: UUID) -> tuple[str, ConsentDecision | None]:
     try:
         consent = _consent_for_id(client_id)
-        return (
+        status = (
             "vigente"
             if consent.is_current_for(client_id)
             else "insuficiente"
             if consent.estado == "autorizado"
             else consent.estado
         )
+        return status, consent
     except ProfilingError as error:
         if error.code == "consentimiento_ausente":
-            return "ausente"
+            return "ausente", None
         if error.code == "consentimiento_no_vigente":
-            return "vencido"
+            return "vencido", None
         raise
 
 
@@ -312,6 +325,79 @@ def _client_list_unavailable() -> Response:
         "Servicio no disponible",
         "No fue posible consultar los clientes cotizados.",
     )
+
+
+@bp.get("/solicitudes-cotizacion")
+def list_requests() -> Response:
+    partner_id = _offer_partner()
+    if isinstance(partner_id, Response):
+        return partner_id
+    product_id = request.args.get("productoId")
+    if (
+        (product_id is not None and product_id not in PARTNER_PRODUCTS)
+        or set(request.args) not in ({"socioId"}, {"socioId", "productoId"})
+        or any(len(request.args.getlist(key)) != 1 for key in request.args)
+        or request.get_data()
+    ):
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Revisa el socio y producto."
+        )
+    try:
+        products = (product_id,) if product_id is not None else PARTNER_PRODUCTS
+        persisted = [
+            row
+            for product in products
+            for row in _gateway()
+            .list_requests(partner_id, product, str(g.correlation_id))
+            .solicitudes
+        ]
+        persisted.sort(key=lambda row: row.cotizacionId)
+        persisted.sort(key=lambda row: row.creadaEn, reverse=True)
+        clients: dict[UUID, tuple[dict[str, object], ConsentDecision | None]] = {}
+        rows = []
+        for row in persisted:
+            if (
+                row.socioId != partner_id
+                or row.productoId not in products
+                or row.operationId is None
+            ):
+                raise MortgageProfilingError("servicio_no_disponible", 503)
+            if row.clienteId not in clients:
+                status, consent = _current_consent(row.clienteId)
+                clients[row.clienteId] = (_client_metadata(row.clienteId, status), consent)
+            metadata, consent = clients[row.clienteId]
+            rows.append(_history_row(row, metadata, consent))
+    except (MortgageProfilingError, ProfilingError, ValueError):
+        return problem_response(
+            503,
+            "servicio_no_disponible",
+            "Servicio no disponible",
+            "No fue posible consultar las solicitudes cotizadas.",
+        )
+    response = jsonify(solicitudes=rows)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
+def _history_row(
+    row: QuoteHistoryEntry, metadata: dict[str, object], consent: ConsentDecision | None
+) -> dict[str, object]:
+    visible = (
+        consent is not None
+        and consent.is_current_for(row.clienteId)
+        and consent.consentimientoId == row.consentimientoId
+        and consent.version == row.consentimientoVersion
+    )
+    return {
+        **row.model_dump(mode="json", exclude={"consentimientoId", "consentimientoVersion"}),
+        "cliente": metadata,
+        "estadoSeleccion": row.estadoSeleccion.model_dump(mode="json") if visible else None,
+        "seleccionRestringida": not visible
+        and (
+            row.estadoSeleccion.seleccion is not None or row.estadoSeleccion.aceptacion is not None
+        ),
+    }
 
 
 @bp.get("/solicitudes-cotizacion/<uuid:operation_id>")
@@ -327,8 +413,16 @@ def get(operation_id: UUID) -> Response:
     g.audit_partner_id = partner_id
     try:
         result = _gateway().get(partner_id, operation_id, str(g.correlation_id))
-    except MortgageProfilingError as error:
-        return _error_response(error)
+        if result.estadoSeleccion is not None and (
+            result.estadoSeleccion.seleccion is not None
+            or result.estadoSeleccion.aceptacion is not None
+        ):
+            offer = _gateway().get_offer(partner_id, operation_id, str(g.correlation_id))
+            _validate_offer(offer, partner_id, operation_id)
+            if offer.clienteId != result.clienteId:
+                raise MortgageProfilingError("servicio_no_disponible", 503)
+    except (MortgageProfilingError, ProfilingError) as error:
+        return _offer_error_response(error)
     response = jsonify(result.model_dump(mode="json"))
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"
@@ -342,7 +436,8 @@ def calculate_offer(operation_id: UUID) -> tuple[Response, int] | Response:
         return partner_id
     try:
         offer = _gateway().calculate_offer(partner_id, operation_id, str(g.correlation_id))
-    except MortgageProfilingError as error:
+        _validate_offer(offer, partner_id, operation_id)
+    except (MortgageProfilingError, ProfilingError) as error:
         return _offer_error_response(error)
     return _offer_response(offer), 201
 
@@ -354,9 +449,123 @@ def get_offer(operation_id: UUID) -> Response:
         return partner_id
     try:
         offer = _gateway().get_offer(partner_id, operation_id, str(g.correlation_id))
-    except MortgageProfilingError as error:
+        _validate_offer(offer, partner_id, operation_id)
+    except (MortgageProfilingError, ProfilingError) as error:
         return _offer_error_response(error)
     return _offer_response(offer)
+
+
+@bp.get("/solicitudes-cotizacion/<uuid:operation_id>/seleccion-provisional")
+def get_selection(operation_id: UUID) -> Response:
+    partner_id = _selection_partner()
+    if isinstance(partner_id, Response):
+        return partner_id
+    try:
+        operation, _ = _selection_operation(partner_id, operation_id)
+        state = _gateway().get_selection(partner_id, operation_id, str(g.correlation_id))
+        if state.solicitudId != operation.solicitudId or any(
+            item is not None and item.solicitudId != operation.solicitudId
+            for item in (state.seleccion, state.aceptacion)
+        ):
+            raise MortgageProfilingError("servicio_no_disponible", 503)
+    except (MortgageProfilingError, ProfilingError) as error:
+        return _offer_error_response(error)
+    return _offer_response(state)
+
+
+@bp.put("/solicitudes-cotizacion/<uuid:operation_id>/seleccion-provisional")
+def select_offer(operation_id: UUID) -> Response:
+    partner_id = _selection_partner()
+    if isinstance(partner_id, Response):
+        return partner_id
+    try:
+        payload = ProvisionalSelectionPayload.model_validate(request.get_json(silent=False))
+        key = UUID(request.headers["Idempotency-Key"])
+    except (ValidationError, ValueError, TypeError, KeyError, BadRequest, UnsupportedMediaType):
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Revisa la seleccion y su clave."
+        )
+    try:
+        operation, offer = _selection_operation(partner_id, operation_id)
+        chosen = next(
+            (
+                item
+                for item in offer.ofertas
+                if item.ofertaId == payload.offer_id and item.version == payload.version
+            ),
+            None,
+        )
+        if chosen is None:
+            raise MortgageProfilingError("oferta_no_disponible", 422)
+        selection = _gateway().select_offer(
+            partner_id,
+            operation_id,
+            payload.model_dump(mode="json", by_alias=True),
+            key,
+            str(g.correlation_id),
+        )
+        if (
+            selection.solicitudId != operation.solicitudId
+            or selection.ofertaId != payload.offer_id
+            or selection.version != payload.version
+            or selection.revision != payload.expected_revision + 1
+            or selection.prima.monto != chosen.prima.monto
+            or selection.prima.moneda != chosen.prima.moneda
+            or selection.periodicidad != chosen.periodicidad
+        ):
+            raise MortgageProfilingError("servicio_no_disponible", 503)
+    except (MortgageProfilingError, ProfilingError) as error:
+        return _offer_error_response(error)
+    return _offer_response(selection)
+
+
+def _selection_partner() -> str | Response:
+    partner = _offer_partner()
+    if isinstance(partner, Response):
+        return partner
+    if set(request.args) != {"socioId"} or len(request.args.getlist("socioId")) != 1:
+        return problem_response(
+            400, "solicitud_invalida", "Solicitud invalida", "Indica solo el socio autorizado."
+        )
+    return partner
+
+
+def _selection_operation(
+    partner_id: str, operation_id: UUID
+) -> tuple[PartnerOperation, PartnerOfferSnapshot]:
+    operation = _gateway().get(partner_id, operation_id, str(g.correlation_id))
+    offer = _gateway().get_offer(partner_id, operation_id, str(g.correlation_id))
+    _validate_offer(offer, partner_id, operation_id)
+    if (
+        operation.operationId != operation_id
+        or operation.socioId != partner_id
+        or operation.clienteId != offer.clienteId
+        or operation.productoId != offer.productoId
+        or operation.solicitudId != offer.solicitudId
+        or operation.cotizacionId != offer.cotizacionId
+        or operation.oferta.trazabilidad.hashDecision != offer.decision.hashDecision
+    ):
+        raise MortgageProfilingError("servicio_no_disponible", 503)
+    return operation, offer
+
+
+def _validate_offer(offer: PartnerOfferSnapshot, partner_id: str, operation_id: UUID) -> None:
+    if (
+        offer.socioId != partner_id
+        or offer.operationId != operation_id
+        or offer.productoId != "mortgage-life"
+    ):
+        raise MortgageProfilingError("servicio_no_disponible", 503)
+    try:
+        consent = _consent_for_id(offer.clienteId)
+    except ValidationError as error:
+        raise MortgageProfilingError("servicio_no_disponible", 503) from error
+    if (
+        not consent.is_current_for(offer.clienteId)
+        or consent.consentimientoId != offer.riesgo.consentimientoId
+        or consent.version != offer.riesgo.consentimientoVersion
+    ):
+        raise MortgageProfilingError("consentimiento_no_vigente", 403)
 
 
 def _offer_partner() -> str | Response:
@@ -372,17 +581,23 @@ def _offer_partner() -> str | Response:
     return partner_id
 
 
-def _offer_response(offer: PartnerOfferSnapshot) -> Response:
+def _offer_response(offer: BaseModel) -> Response:
     response = jsonify(offer.model_dump(mode="json"))
     response.headers["Cache-Control"] = "no-store"
     response.headers["API-Version"] = "1"
     return response
 
 
-def _offer_error_response(error: MortgageProfilingError) -> Response:
+def _offer_error_response(error: MortgageProfilingError | ProfilingError) -> Response:
     public = {
         "operacion_no_encontrada": ("operacion_no_encontrada", "Operacion no encontrada"),
         "oferta_no_encontrada": ("oferta_no_encontrada", "Oferta no encontrada"),
+        "oferta_no_disponible": ("oferta_no_disponible", "Oferta no disponible"),
+        "no_encontrado": ("operacion_no_encontrada", "Operacion no encontrada"),
+        "conflicto_idempotencia": ("conflicto_idempotencia", "Conflicto de idempotencia"),
+        "seleccion_desactualizada": ("seleccion_desactualizada", "Seleccion desactualizada"),
+        "seleccion_no_modificable": ("seleccion_no_modificable", "Seleccion no modificable"),
+        "solicitud_invalida": ("solicitud_invalida", "Solicitud invalida"),
         "cotizacion_vencida": ("entradas_vencidas", "Entradas vencidas"),
         "perfil_vencido": ("entradas_vencidas", "Entradas vencidas"),
         "fuente_vencida": ("entradas_vencidas", "Entradas vencidas"),
@@ -394,7 +609,13 @@ def _offer_error_response(error: MortgageProfilingError) -> Response:
         "consentimiento_no_vigente": ("consentimiento_invalido", "Consentimiento invalido"),
     }
     code, title = public.get(error.code, ("servicio_no_disponible", "Servicio no disponible"))
-    status = error.status if error.code in public else 503
+    status = (
+        403
+        if error.code in {"consentimiento_ausente", "consentimiento_no_vigente"}
+        else error.status
+        if error.code in public
+        else 503
+    )
     return problem_response(status, code, title, "No fue posible obtener la oferta.")
 
 

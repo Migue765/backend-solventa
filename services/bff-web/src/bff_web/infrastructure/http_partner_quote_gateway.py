@@ -9,14 +9,22 @@ from pydantic import BaseModel
 
 from bff_web.domain.mortgage_profiling import MortgageProfilingError
 from bff_web.domain.partner_offer import PartnerOffer
-from bff_web.domain.partner_operation import PartnerClients, PartnerOperation
+from bff_web.domain.partner_operation import (
+    PartnerClients,
+    PartnerOperation,
+    PartnerProvisionalSelection,
+    PartnerSelectionState,
+)
+from bff_web.domain.quote_history import QuoteHistory
 from bff_web.infrastructure.http_mortgage_profiling_gateway import _controlled_error
 
 _Model = TypeVar("_Model", bound=BaseModel)
 
 OFFER_ERRORS = {
-    404: {"operacion_no_encontrada", "oferta_no_encontrada"},
+    404: {"operacion_no_encontrada", "oferta_no_encontrada", "no_encontrado"},
+    409: {"conflicto_idempotencia", "seleccion_desactualizada", "seleccion_no_modificable"},
     422: {
+        "oferta_no_disponible",
         "cotizacion_vencida",
         "perfil_vencido",
         "fuente_vencida",
@@ -56,6 +64,14 @@ class HttpPartnerQuoteGateway:
             resource="/v1/socios/clientes",
         )
 
+    def list_requests(self, socio_id: str, product_id: str, correlation_id: str) -> QuoteHistory:
+        return self._request(
+            f"?{urlencode({'socioId': socio_id, 'productoId': product_id})}",
+            None,
+            correlation_id,
+            QuoteHistory,
+        )
+
     def calculate_offer(
         self, socio_id: str, operation_id: UUID, correlation_id: str
     ) -> PartnerOffer:
@@ -75,6 +91,33 @@ class HttpPartnerQuoteGateway:
             PartnerOffer,
         )
 
+    def get_selection(
+        self, socio_id: str, operation_id: UUID, correlation_id: str
+    ) -> PartnerSelectionState:
+        return self._request(
+            f"/{operation_id}/seleccion-provisional?{urlencode({'socioId': socio_id})}",
+            None,
+            correlation_id,
+            PartnerSelectionState,
+        )
+
+    def select_offer(
+        self,
+        socio_id: str,
+        operation_id: UUID,
+        payload: dict[str, object],
+        key: UUID,
+        correlation_id: str,
+    ) -> PartnerProvisionalSelection:
+        return self._request(
+            f"/{operation_id}/seleccion-provisional?{urlencode({'socioId': socio_id})}",
+            key,
+            correlation_id,
+            PartnerProvisionalSelection,
+            payload,
+            method="PUT",
+        )
+
     def _request(
         self,
         suffix: str,
@@ -84,13 +127,14 @@ class HttpPartnerQuoteGateway:
         payload: dict[str, object] | None = None,
         *,
         resource: str = "/v1/socios/solicitudes-cotizacion",
+        method: str | None = None,
     ) -> _Model:
         if not self._token:
             raise MortgageProfilingError("servicio_no_disponible", 503)
         request = Request(
             f"{self._base_url}{resource}{suffix}",
             data=json.dumps(payload).encode() if payload is not None else None,
-            method="POST" if payload is not None else "GET",
+            method=method or ("POST" if payload is not None else "GET"),
             headers={
                 "Authorization": f"Bearer {self._token}",
                 "Content-Type": "application/json",
@@ -105,7 +149,7 @@ class HttpPartnerQuoteGateway:
             with urlopen(request, timeout=self._timeout) as response:  # noqa: S310
                 return model.model_validate(json.load(response))
         except HTTPError as error:
-            if model is PartnerOffer:
+            if model in (PartnerOffer, PartnerSelectionState, PartnerProvisionalSelection):
                 raise _offer_error(error) from error
             raise _controlled_error(error) from error
         except (URLError, OSError, TimeoutError, ValueError) as error:

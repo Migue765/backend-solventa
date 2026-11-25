@@ -1,12 +1,14 @@
+import hashlib
 from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from polizas.domain.documento import (
     ConfirmacionDocumento,
     DocumentoDesactualizado,
+    DocumentoNoDisponible,
     hash_contenido,
 )
 from polizas.infrastructure.documentos import RepositorioDocumentos
@@ -50,6 +52,24 @@ def documentos_blueprint(
             reloj(),
         )
         return jsonify(resultado), 201 if nueva else 200
+
+    @bp.get("/<uuid:poliza_id>/documentos/<uuid:documento_id>/descarga/pdf")
+    def descargar_pdf(poliza_id: UUID, documento_id: UUID) -> Response:
+        if request.args or request.get_data():
+            raise ValueError("La descarga no admite parametros ni cuerpo.")
+        archivo, hash_html = repositorio.descargar_pdf(poliza_id, _cliente(), documento_id)
+        response = Response(archivo, content_type="application/pdf")
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="poliza-{poliza_id}-{documento_id}-simulada.pdf"'
+        )
+        response.headers["X-Content-SHA256"] = hashlib.sha256(archivo).hexdigest()
+        response.headers["X-Document-Content-SHA256"] = hash_html
+        return response
+
+    @bp.errorhandler(DocumentoNoDisponible)
+    def no_disponible(_: DocumentoNoDisponible) -> tuple[Response, int]:
+        current_app.logger.error("documentos.pdf_no_disponible correlationId=%s", g.correlation_id)
+        return jsonify(error="servicio_no_disponible", correlationId=g.correlation_id), 503
 
     @bp.errorhandler(DocumentoDesactualizado)
     def desactualizado(_: DocumentoDesactualizado) -> tuple[Response, int]:

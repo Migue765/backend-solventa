@@ -2,6 +2,7 @@ from typing import Protocol
 from uuid import UUID
 
 from bff_web.domain.dashboard import Dashboard
+from bff_web.domain.quote_history import QuoteHistory, QuoteHistoryEntry, QuoteRejection
 from bff_web.domain.quotes import (
     InsuranceProduct,
     InsuranceProductDetail,
@@ -18,6 +19,14 @@ from bff_web.domain.quotes import (
 
 
 class QuoteGateway(Protocol):
+    def list_requests(self, user_id: UUID) -> QuoteHistory: ...
+
+    def get_history(self, user_id: UUID, request_id: str) -> QuoteHistoryEntry: ...
+
+    def get_rejection(self, user_id: UUID, request_id: str) -> QuoteRejection: ...
+
+    def reject_request(self, user_id: UUID, request_id: str, key: UUID) -> QuoteRejection: ...
+
     def get_dashboard(self, user_id: UUID) -> Dashboard: ...
 
     def list_products(self) -> tuple[InsuranceProduct, ...]: ...

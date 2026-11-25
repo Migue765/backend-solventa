@@ -73,6 +73,50 @@ paths:
         '403': {$ref: '#/components/responses/Alcance'}
         '404': {$ref: '#/components/responses/NoEncontrada'}
         '503': {$ref: '#/components/responses/NoDisponible'}
+  /v1/clientes/me/polizas/{polizaId}/documentos/{documentoId}/descarga/pdf:
+    parameters:
+      - $ref: '#/components/parameters/Poliza'
+      - name: documentoId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: descargarPdfDocumentoPolizaSimulado
+      summary: Representacion PDF privada del documento persistido
+      description: >-
+        PDF determinista generado desde la instantanea canonica original, vigente
+        o historica. No materializa documentos, modifica HTML ni registra aceptaciones.
+        Incluye identificadores, hash HTML original y aviso de simulacion sin validez
+        legal. Maximo 1.048.576 bytes. No admite parametros ni cuerpo.
+        No descarga fuentes o recursos externos.
+      responses:
+        '200':
+          description: PDF legible de Solventa, academico y sin validez legal
+          headers:
+            Content-Disposition:
+              description: attachment; filename="poliza-{polizaId}-{documentoId}-simulada.pdf"
+              schema: {type: string}
+            Cache-Control:
+              schema: {const: no-store}
+            X-Content-Type-Options:
+              schema: {const: nosniff}
+            X-Content-SHA256:
+              description: SHA-256 de los bytes PDF; NO es contenidoHash del HTML.
+              schema: {type: string, pattern: '^[a-f0-9]{64}$'}
+            X-Document-Content-SHA256:
+              description: contenidoHash del documento HTML canonico que representa el PDF.
+              schema: {$ref: '#/components/schemas/Hash'}
+            Content-Security-Policy:
+              schema:
+                const: "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+          content:
+            application/pdf:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/Invalida'}
+        '401': {$ref: '#/components/responses/Sesion'}
+        '403': {$ref: '#/components/responses/Alcance'}
+        '404': {$ref: '#/components/responses/NoEncontrada'}
+        '503': {$ref: '#/components/responses/NoDisponible'}
   /v1/clientes/me/polizas/{polizaId}/aceptaciones:
     parameters:
       - $ref: '#/components/parameters/Poliza'

@@ -1,7 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from cotizacion.infrastructure.persistence.database import crear_sesiones
 from cotizacion.infrastructure.persistence.models import (
@@ -9,6 +9,8 @@ from cotizacion.infrastructure.persistence.models import (
     InstantaneaDecisionModel,
     OfertaSocioModel,
     OutboxEventoModel,
+    SeleccionOfertaModel,
+    SeleccionProvisionalModel,
 )
 from cotizacion.infrastructure.persistence.repositorio_ofertas_socios import (
     RepositorioOfertasSociosSql,
@@ -114,6 +116,68 @@ def test_oferta_climatica_explica_su_propio_modelo(database_url, monkeypatch):
     factores = {f["codigo"]: f["valor"] for f in oferta["ofertas"][0]["factores"]}
     assert factores["tasa_diaria"] == "0.0001"
     assert factores["ajuste_riesgo"] == "1.00"
+
+
+def test_seleccion_socio_sobrevive_reinicio_sin_recalcular_y_rechaza_oferta_vencida(
+    database_url, monkeypatch
+):
+    app, body, profiling = operacion(database_url, monkeypatch)
+    client = app.test_client()
+    snapshot = client.post(oferta_path(body), headers=AUTH).get_json()
+    path = f"{PATH}/{body['operationId']}/seleccion-provisional?socioId=BANCO-001"
+    choice = snapshot["ofertas"][1]
+    attempt = {"ofertaId": choice["ofertaId"], "version": choice["version"], "revisionEsperada": 0}
+    selected = client.put(path, json=attempt, headers={**AUTH, "Idempotency-Key": str(uuid4())})
+    assert selected.status_code == 200, selected.get_json()
+    assert conteo(database_url, SeleccionProvisionalModel) == 1
+    assert conteo(database_url, SeleccionOfertaModel) == 0
+    restarted = app_for(database_url)
+    reads = profiling.reads
+    recovered = restarted.test_client().get(path, headers=AUTH)
+    assert recovered.status_code == 200
+    assert recovered.get_json()["seleccion"] == selected.get_json()
+    assert recovered.get_json()["aceptacion"] is None
+    assert profiling.reads == reads
+    expired = datetime.fromisoformat(selected.get_json()["vigenteHasta"].replace("Z", "+00:00"))
+    monkeypatch.setattr(
+        restarted.extensions["gestionar_ofertas"], "_reloj", lambda: expired + timedelta(seconds=1)
+    )
+    monkeypatch.setattr(
+        restarted.extensions["historial_solicitudes"],
+        "_reloj",
+        lambda: expired + timedelta(seconds=1),
+    )
+    state = restarted.test_client().get(path, headers=AUTH)
+    assert state.status_code == 200
+    assert state.get_json()["estadoOferta"] == "vencida"
+    rejected = restarted.test_client().put(
+        path,
+        json={**attempt, "revisionEsperada": 1},
+        headers={**AUTH, "Idempotency-Key": str(uuid4())},
+    )
+    assert rejected.status_code == 422, rejected.get_json()
+    assert rejected.get_json()["error"] == "oferta_no_disponible"
+    assert conteo(database_url, SeleccionProvisionalModel) == 1
+
+
+def test_seleccion_socio_valida_query_json_clave_y_no_crea_snapshot(database_url, monkeypatch):
+    app, body, _ = operacion(database_url, monkeypatch)
+    path = f"{PATH}/{body['operationId']}/seleccion-provisional?socioId=BANCO-001"
+    client = app.test_client()
+    assert client.get(path, headers=AUTH).status_code == 404
+    assert client.get(path, headers={}).status_code == 401
+    assert client.get(path + "&clienteId=" + body["clienteId"], headers=AUTH).status_code == 400
+    assert client.get(path + "&socioId=BANCO-001", headers=AUTH).status_code == 400
+    malformed = client.put(
+        path,
+        data="{",
+        content_type="application/json",
+        headers={**AUTH, "Idempotency-Key": str(uuid4())},
+    )
+    assert malformed.status_code == 400
+    assert malformed.get_json()["error"] == "solicitud_invalida"
+    assert client.put(path, json={}, headers=AUTH).status_code == 400
+    assert conteo(database_url, OfertaSocioModel) == 0
 
 
 def test_operacion_ajena_o_inexistente_y_oferta_pendiente(database_url, monkeypatch):

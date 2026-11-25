@@ -13,6 +13,10 @@ class QuoteRequestConflictError(Exception):
     """La clave de idempotencia se reutilizó con datos diferentes."""
 
 
+class QuoteRejectionNotAllowedError(Exception):
+    """La solicitud ya fue aceptada o tiene otra decision terminal."""
+
+
 class InsuranceProductUnavailableError(Exception):
     """El seguro no está disponible para cotizar."""
 

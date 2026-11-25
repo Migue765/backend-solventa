@@ -106,6 +106,11 @@ class DocumentDownload:
     content_hash: str
 
 
+@dataclass(frozen=True)
+class PdfDocumentDownload(DocumentDownload):
+    document_content_hash: str
+
+
 class DocumentConflictError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)

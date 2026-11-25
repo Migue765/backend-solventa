@@ -4,11 +4,13 @@ from email.message import Message
 from io import BytesIO
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
 from bff_web.domain.quote_errors import (
     PaymentNotAllowedError,
+    QuoteRejectionNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
@@ -66,6 +68,119 @@ def test_never_turns_unmarked_gateway_response_into_simulated_success(simulada: 
     ):
         with pytest.raises(QuoteServiceUnavailableError):
             HttpQuoteGateway("http://cotizacion").get_simulated_payment(uuid4(), "AQT-test")
+
+
+def history_entry_payload() -> dict[str, object]:
+    return {
+        "operationId": None,
+        "socioId": None,
+        "clienteId": str(uuid4()),
+        "solicitudId": "AQT-test",
+        "cotizacionId": str(uuid4()),
+        "productoId": "life",
+        "estado": "pendiente",
+        "creadaEn": "2026-11-01T12:00:00Z",
+        "actualizadaEn": "2026-11-01T12:00:00Z",
+        "validaHasta": "2026-11-02T12:00:00Z",
+        "completadaEn": None,
+        "rechazadaEn": None,
+        "pagoEstado": None,
+        "emisionEstado": None,
+        "consentimientoId": None,
+        "consentimientoVersion": None,
+        "estadoSeleccion": {
+            "solicitudId": "AQT-test",
+            "seleccion": None,
+            "aceptacion": None,
+            "estadoOferta": None,
+        },
+    }
+
+
+@pytest.mark.parametrize("individual", [False, True])
+def test_history_reads_are_typed_and_forward_only_authorized_client_and_service_token(
+    individual: bool,
+) -> None:
+    user_id = uuid4()
+    entry = {**history_entry_payload(), "clienteId": str(user_id)}
+    payload = entry if individual else {"solicitudes": [entry]}
+    with patch(
+        "bff_web.infrastructure.http_quote_gateway.urlopen",
+        return_value=BytesIO(json.dumps(payload).encode()),
+    ) as call:
+        gateway = HttpQuoteGateway("http://cotizacion", internal_api_token="fixture-only")
+        if individual:
+            assert gateway.get_history(user_id, "AQT-test").solicitudId == "AQT-test"
+        else:
+            assert len(gateway.list_requests(user_id).solicitudes) == 1
+    request = call.call_args.args[0]
+    assert parse_qs(urlparse(request.full_url).query) == {"clienteId": [str(user_id)]}
+    assert request.get_header("Authorization") == "Bearer fixture-only"
+    assert request.get_header("Api-version") == "1"
+    assert request.data is None
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"estado": "completada", "completadaEn": "2026-11-01T13:00:00Z"},
+        {"estado": "rechazada"},
+        {"creadaEn": "2026-11-01T12:00:00"},
+        {
+            "estadoSeleccion": {
+                "solicitudId": "AQT-foreign",
+                "seleccion": None,
+                "aceptacion": None,
+                "estadoOferta": None,
+            }
+        },
+    ],
+)
+def test_history_does_not_accept_invented_terminal_states_or_foreign_selection(
+    changed: dict[str, object],
+) -> None:
+    entry = {**history_entry_payload(), **changed}
+    with (
+        patch(
+            "bff_web.infrastructure.http_quote_gateway.urlopen",
+            return_value=BytesIO(json.dumps({"solicitudes": [entry]}).encode()),
+        ),
+        pytest.raises(QuoteServiceUnavailableError),
+    ):
+        HttpQuoteGateway("http://cotizacion", internal_api_token="fixture-only").list_requests(
+            uuid4()
+        )
+
+
+def test_history_duplicate_requests_are_inconsistent_not_silently_deduplicated() -> None:
+    entry = history_entry_payload()
+    with (
+        patch(
+            "bff_web.infrastructure.http_quote_gateway.urlopen",
+            return_value=BytesIO(json.dumps({"solicitudes": [entry, entry]}).encode()),
+        ),
+        pytest.raises(QuoteServiceUnavailableError),
+    ):
+        HttpQuoteGateway("http://cotizacion", internal_api_token="fixture-only").list_requests(
+            uuid4()
+        )
+
+
+def test_rejection_terminal_error_is_not_a_payment_or_technical_rejection() -> None:
+    error = HTTPError(
+        "http://cotizacion",
+        409,
+        "terminal",
+        Message(),
+        BytesIO(json.dumps({"error": "solicitud_no_rechazable"}).encode()),
+    )
+    with (
+        patch("bff_web.infrastructure.http_quote_gateway.urlopen", side_effect=error),
+        pytest.raises(QuoteRejectionNotAllowedError),
+    ):
+        HttpQuoteGateway("http://cotizacion", internal_api_token="fixture-only").reject_request(
+            uuid4(), "AQT-test", uuid4()
+        )
 
 
 def rejected_payment_payload() -> dict[str, object]:

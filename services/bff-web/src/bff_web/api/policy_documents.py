@@ -73,6 +73,31 @@ def download(policy_id: str, document_id: str) -> Response:
     return response
 
 
+@bp.get("/<policy_id>/documentos/<document_id>/descarga/pdf")
+def download_pdf(policy_id: str, document_id: str) -> Response:
+    client_id = _client()
+    if isinstance(client_id, Response):
+        return client_id
+    policy, document = _uuid(policy_id), _uuid(document_id)
+    if policy is None or document is None or request.args or request.get_data():
+        return _invalid(
+            "La descarga requiere UUID de poliza y documento, sin parametros ni cuerpo."
+        )
+    try:
+        result = _gateway().download_pdf(policy, client_id, document, str(g.correlation_id))
+    except PolicyNotFoundError:
+        return _not_found()
+    except RenewalServiceUnavailableError:
+        return _unavailable("No fue posible descargar el PDF; no se genero un sustituto.")
+    response = Response(result.content, content_type="application/pdf")
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="poliza-{policy}-{document}-simulada.pdf"'
+    )
+    response.headers["X-Content-SHA256"] = result.content_hash
+    response.headers["X-Document-Content-SHA256"] = result.document_content_hash
+    return response
+
+
 @bp.post("/<policy_id>/aceptaciones")
 def accept(policy_id: str) -> Response:
     client_id = _client()

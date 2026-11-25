@@ -19,12 +19,14 @@ from bff_web.domain.quote_errors import (
     OfferSelectionConflictError,
     OfferUnavailableError,
     PaymentNotAllowedError,
+    QuoteRejectionNotAllowedError,
     QuoteRequestConflictError,
     QuoteRequestNotFoundError,
     QuoteServiceUnavailableError,
     SimulatedPaymentInProgressError,
     SimulatedPaymentNotFoundError,
 )
+from bff_web.domain.quote_history import QuoteHistory, QuoteHistoryEntry, QuoteRejection
 from bff_web.domain.quotes import (
     InsuranceProduct,
     InsuranceProductDetail,
@@ -92,6 +94,67 @@ class HttpQuoteGateway(QuoteGateway):
                 }
             )
         except (OSError, HTTPException, ValueError, TypeError, KeyError) as error:
+            raise QuoteServiceUnavailableError() from error
+
+    def list_requests(self, user_id: UUID) -> QuoteHistory:
+        if not self._internal_api_token:
+            raise QuoteServiceUnavailableError()
+        query = urlencode({"clienteId": str(user_id)})
+        try:
+            return QuoteHistory.model_validate(
+                self._request_json(
+                    f"/v1/solicitudes-cotizacion?{query}",
+                    headers={
+                        "Authorization": f"Bearer {self._internal_api_token}",
+                        "API-Version": "1",
+                    },
+                )
+            )
+        except (ValueError, TypeError) as error:
+            raise QuoteServiceUnavailableError() from error
+
+    def get_rejection(self, user_id: UUID, request_id: str) -> QuoteRejection:
+        return self._rejection_request(user_id, request_id)
+
+    def get_history(self, user_id: UUID, request_id: str) -> QuoteHistoryEntry:
+        if not self._internal_api_token:
+            raise QuoteServiceUnavailableError()
+        query = urlencode({"clienteId": str(user_id)})
+        try:
+            return QuoteHistoryEntry.model_validate(
+                self._request_json(
+                    f"/v1/solicitudes-cotizacion/{request_id}/estado?{query}",
+                    headers={
+                        "Authorization": f"Bearer {self._internal_api_token}",
+                        "API-Version": "1",
+                    },
+                )
+            )
+        except (ValueError, TypeError) as error:
+            raise QuoteServiceUnavailableError() from error
+
+    def reject_request(self, user_id: UUID, request_id: str, key: UUID) -> QuoteRejection:
+        return self._rejection_request(user_id, request_id, key)
+
+    def _rejection_request(
+        self, user_id: UUID, request_id: str, key: UUID | None = None
+    ) -> QuoteRejection:
+        if not self._internal_api_token:
+            raise QuoteServiceUnavailableError()
+        headers = {"Authorization": f"Bearer {self._internal_api_token}", "API-Version": "1"}
+        if key is not None:
+            headers["Idempotency-Key"] = str(key)
+        query = urlencode({"clienteId": str(user_id)})
+        try:
+            return QuoteRejection.model_validate(
+                self._request_json(
+                    f"/v1/solicitudes-cotizacion/{request_id}/rechazo?{query}",
+                    headers=headers,
+                    method="PUT" if key is not None else "GET",
+                    body={} if key is not None else None,
+                )
+            )
+        except (ValueError, TypeError) as error:
             raise QuoteServiceUnavailableError() from error
 
     def list_products(self) -> tuple[InsuranceProduct, ...]:
@@ -334,6 +397,8 @@ class HttpQuoteGateway(QuoteGateway):
                 except (ValueError, OSError):
                     raise QuoteRequestConflictError() from error
                 code = problem.get("error") if isinstance(problem, dict) else None
+                if code == "solicitud_no_rechazable":
+                    raise QuoteRejectionNotAllowedError() from error
                 if code == "pago_en_proceso":
                     try:
                         pago_id = UUID(problem["pagoId"])

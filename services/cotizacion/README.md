@@ -71,6 +71,38 @@ El producto interno es un filtro de persistencia; el flujo publico socio actual
 solo admite `mortgage-life`. Usa las tablas existentes y el Service ClusterIP
 `cotizacion` en puerto 8080; no necesita migraciones ni rutas ALB adicionales.
 
+### Historial y rechazo explicito de solicitudes
+
+Aplicar `alembic upgrade head`: `rechazos_solicitud`
+(`0019_rechazos_solicitud.py`, sobre `pagos_simulados_pendientes`) agrega decisiones
+append-only con FK a cotizacion, cliente, fecha y UUID de idempotencia. Downgrade
+impide borrar decisiones existentes. No modifica ni cancela pagos, polizas o contratos.
+Actualizar todas las replicas con el guard de rechazo antes de habilitar su consumidor.
+
+GET interno `/v1/socios/solicitudes-cotizacion?socioId=...&productoId=...` requiere
+token de servicio, API1 y ambos filtros unicos. El BFF agrega solo productos autorizados
+si se omite el filtro publico. GET `/v1/solicitudes-cotizacion?clienteId=...` y
+`/{solicitudId}/estado?clienteId=...` usan el mismo token con propietario explicito.
+Consulta SQL comun: todas las solicitudes registradas por fecha descendente, unidas
+a operacion, seleccion, aceptacion, suscripcion, saga, pago/intento y rechazo; no usa
+el dashboard limitado ni consulta perfiles/remotas por fila. Reserva sin quote no entra.
+
+Proyecta `pendiente`, `completada`, `rechazada`, `vencida`. Completada requiere
+aceptacion, suscripcion aprobada y pago confirmado; si se solicito emision, saga emitida.
+Pago confirmado sin emision pendiente de conciliar no se convierte en vencida.
+Rechazada exige decision persistida del cliente, nunca underwriting/pago rechazado.
+Pendiente vencida se deriva del minimo quote/perfil/fuentes/provisional guardado;
+terminales completada/rechazada tienen prioridad sobre vencimientos posteriores.
+Conserva metadatos historicos aunque no sea posible leer detalle sensible.
+El BFF verifica consentimiento actual y redacta PII/seleccion de socio sin borrar filas.
+
+GET/PUT `/{solicitudId}/rechazo?clienteId=...` recupera/registra rechazo previo a
+aceptacion. PUT vacio + UUID key; misma clave/quote replay, clave de otra quote
+409 conflicto_idempotencia. Aceptada/suscrita/pagada/rechazada con nueva clave:
+409 solicitud_no_rechazable. UPDATE no-op de quote serializa rechazo con aceptacion/
+seleccion en SQLite/PostgreSQL; nuevas elecciones tambien comprueban el rechazo.
+Continuacion cliente reutiliza solicitud, oferta y revision existentes; no nuevo flujo.
+
 ### Oferta explicable de vida hipotecaria (HU49)
 
 Para `mortgage-life`, la operacion persiste además una oferta inmutable en
@@ -108,7 +140,8 @@ mismo perfil en el calculo y conserva su evidencia en la instantanea de decision
 `GET /v1/solicitudes-cotizacion/{id}/perfilamiento?clienteId={uuid}` comprueba
 titularidad, referencia, integridad y vigencia. Ofertas, seleccion y nueva
 suscripcion revalidan el consentimiento y el perfil; no hay fallback si fallan.
-Las solicitudes antiguas sin evidencia necesitan una nueva cotizacion.
+El historial conserva solicitudes antiguas sin inventar evidencia ni habilitar
+acciones de reactivacion; las vigencias conocidas determinan el estado vencida.
 Si la bandera esta deshabilitada se mantiene el flujo previo con un warning.
 
 ### Oferta de la operación del socio (SOL-330)
@@ -154,6 +187,19 @@ Requiere `COTIZACION_PERFILAMIENTO_HABILITADO=true`.
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/suscripcion` | Consulta o aprueba una suscripción |
 | GET/POST | `/v1/solicitudes-cotizacion/{id}/pago-simulado` | Recupera o confirma un pago exclusivamente simulado |
 | GET/POST | `/v1/socios/solicitudes-cotizacion/{operationId}/oferta` | Recupera o calcula y persiste la oferta del socio |
+| GET/PUT | `/v1/socios/solicitudes-cotizacion/{operationId}/seleccion-provisional` | Recupera o elige explicitamente un plan del snapshot del socio |
+
+La seleccion de socio exige `INTERNAL_API_TOKEN`, `API-Version: 1` y una unica
+query `socioId`. Deriva solicitud/cliente de la operacion persistida y requiere
+snapshot ya calculado; no acepta clienteId ni calcula implicitamente. PUT usa
+`{ofertaId, version, revisionEsperada}` y `Idempotency-Key` UUID del intento.
+Solo admite IDs/versiones de `ofertas[]`, no el UUID del snapshot. Reutiliza
+`GestionarOfertas` y `selecciones_provisionales`, con CAS/reintentos existentes:
+no necesita migracion ni registra aceptacion final o inicia pago/suscripcion.
+GET y GET operacion (`estadoSeleccion`) leen la provisional/aceptacion persistida
+sin recalcular ni consultar el perfil; PUT conserva las validaciones vigentes.
+El BFF comprueba rol, organizacion, producto y consentimiento actual coincidente
+con el snapshot antes de ofrecer o elegir. Una aceptacion final es terminal.
 
 ### Selección provisional y aceptación (SOL-300 / SOL-304)
 
