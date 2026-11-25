@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from cotizacion.application.ports import ProveedorPerfil, RepositorioReglas, Tarificador
 from cotizacion.domain.beneficios_plan import PresentacionPlan, beneficios_plan
@@ -30,6 +30,7 @@ class _PlanAcademico(TypedDict):
     factor: str
     prima: str
     presentacion: PresentacionPlan
+    indemnizacion: NotRequired[str]
 
 
 class CalculadoraCotizacion:
@@ -128,6 +129,13 @@ class CalculadoraCotizacion:
                 }
                 for codigo, nombre, factor in FACTORES_PLAN
             ]
+            if producto.producto_id == "parametric":
+                for plan, (_, _, factor) in zip(planes, FACTORES_PLAN, strict=True):
+                    plan["indemnizacion"] = f"{(base * factor).quantize(Decimal('0.01')):.2f}"
+                    plan["presentacion"]["coberturaPrincipal"] = (
+                        plan["presentacion"]["coberturaPrincipal"]
+                        + f". Indemnizacion contratada: {plan['indemnizacion']} COP"
+                    )
             detalle = {
                 "modelo": VERSION_ACADEMICA,
                 "productoId": producto.producto_id,

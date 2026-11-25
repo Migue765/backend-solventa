@@ -184,6 +184,11 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
         empty()
         return jsonify(pagos_parametricos.detalle(caso_id))
 
+    @app.get("/v1/indemnizaciones")
+    def indemnizaciones_cliente() -> Response:
+        empty()
+        return jsonify(pagos_parametricos.indemnizaciones_cliente(g.owner))
+
     @app.post("/internal/v1/siniestros/<uuid:siniestro_id>/decisiones/automatica")
     def decidir_siniestro(siniestro_id: UUID) -> tuple[Response, int]:
         evaluacion = ResultadoEvaluacion.model_validate(body())

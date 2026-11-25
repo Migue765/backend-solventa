@@ -1,3 +1,4 @@
+import os
 from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 
@@ -8,6 +9,7 @@ from pydantic.networks import EmailStr
 
 from identidad.application.password_recovery_service import RecoveryUnavailableError
 from identidad.config import RecoveryDeliveryMode, validate_recovery_delivery
+from identidad.infrastructure.mail_transport import send_mail
 
 
 class SesClient(Protocol):
@@ -55,18 +57,18 @@ class SesRecoveryMailSender:
                 or identity.get("VerifiedForSendingStatus") is not True
             ):
                 raise RecoveryUnavailableError()
-            if self._mode == "usuario":
+            redirect = os.getenv("EMAIL_REDIRECT_TO", "").strip()
+            if self._mode == "usuario" and not redirect:
                 if account.get("ProductionAccessEnabled") is not True:
                     raise RecoveryUnavailableError()
             else:
                 destination_identity = identity
-                if self._admin_mailbox.casefold() != self._sender.casefold():
-                    destination_identity = client.get_email_identity(
-                        EmailIdentity=self._admin_mailbox
-                    )
+                target = str(TypeAdapter(EmailStr).validate_python(redirect or self._admin_mailbox))
+                if target.casefold() != self._sender.casefold():
+                    destination_identity = client.get_email_identity(EmailIdentity=target)
                 if destination_identity.get("VerifiedForSendingStatus") is not True:
                     raise RecoveryUnavailableError()
-        except (BotoCoreError, ClientError) as error:
+        except (BotoCoreError, ClientError, ValueError) as error:
             raise RecoveryUnavailableError() from error
 
     def send(self, email: str, token: str) -> None:
@@ -87,29 +89,23 @@ class SesRecoveryMailSender:
             "Si no solicitaste este cambio, ignora este correo."
         )
         try:
-            result = self._ses().send_email(
-                FromEmailAddress=self._sender,
-                Destination={"ToAddresses": [destination]},
-                Content={
-                    "Simple": {
-                        "Subject": {
-                            "Data": (
-                                "Recuperacion academica administrada de Solventa"
-                                if academic
-                                else "Recupera tu contrasena de Solventa"
-                            ),
-                            "Charset": "UTF-8",
-                        },
-                        "Body": {
-                            "Text": {
-                                "Data": message,
-                                "Charset": "UTF-8",
-                            }
-                        },
-                    }
-                },
+            send_mail(
+                self._ses(),
+                self._sender,
+                email,
+                (
+                    "Recuperacion academica administrada de Solventa"
+                    if academic
+                    else "Recupera tu contrasena de Solventa"
+                ),
+                message,
+                destination=destination,
             )
-            if not isinstance(result.get("MessageId"), str) or not result["MessageId"]:
-                raise RecoveryUnavailableError()
-        except (BotoCoreError, ClientError) as error:
+        except (BotoCoreError, ClientError, ValueError) as error:
+            raise RecoveryUnavailableError() from error
+
+    def send_notification(self, email: str, user_id: str, subject: str, content: str) -> str:
+        try:
+            return send_mail(self._ses(), self._sender, email, subject, content, user_id=user_id)
+        except (BotoCoreError, ClientError, ValueError) as error:
             raise RecoveryUnavailableError() from error

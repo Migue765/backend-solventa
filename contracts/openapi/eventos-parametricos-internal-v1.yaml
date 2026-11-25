@@ -256,6 +256,17 @@ components:
         ocurridoEn: {type: string, format: date-time}
         tipoEvento: {type: string, minLength: 1, maxLength: 100}
         ubicacionCodigo: {type: string, minLength: 1, maxLength: 100}
+        vuelo:
+          type: object
+          additionalProperties: false
+          required: [airline, flightNumber, flightDate, estado, causa, simulada]
+          properties:
+            airline: {type: string, minLength: 1, maxLength: 80}
+            flightNumber: {type: string, pattern: "^[A-Z0-9]{2,10}$"}
+            flightDate: {type: string, format: date}
+            estado: {const: cancelado}
+            causa: {const: clima}
+            simulada: {const: true}
         metrica:
           type: object
           additionalProperties: false

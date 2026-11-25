@@ -2,6 +2,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Literal, Self
 from uuid import UUID
 
@@ -36,9 +37,12 @@ class NotificationEvent(BaseModel):
     resource: Resource = Field(alias="recurso")
     status: str | None = Field(default=None, alias="estado", max_length=30)
     end_date: date | None = Field(default=None, alias="fechaFin")
+    indemnizacion: "ConfirmedIndemnity | None" = None
 
     @model_validator(mode="after")
     def validate_context(self) -> Self:
+        if self.indemnizacion is not None and self.type != "pago_parametrico_ejecutado":
+            raise ValueError("La indemnizacion no corresponde al evento.")
         expected = {
             "pago_parametrico_ejecutado": "pago",
             "pago_confirmado": "pago",
@@ -62,6 +66,15 @@ class NotificationEvent(BaseModel):
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
+
+
+class ConfirmedIndemnity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    monto: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    moneda: str = Field(pattern=r"^[A-Z]{3}$")
+    pagadaEn: AwareDatetime
+    referencia: UUID
+    simulada: Literal[True]
 
 
 class Preference(BaseModel):
@@ -124,7 +137,14 @@ def drafts(
             NotificationDraft(
                 "pagos",
                 title,
-                "Consulta el detalle del pago en Solventa.",
+                (
+                    f"Indemnizacion simulada confirmada: {event.indemnizacion.monto:.2f} "
+                    f"{event.indemnizacion.moneda}. Fecha: "
+                    f"{event.indemnizacion.pagadaEn.isoformat()}. Referencia: "
+                    f"{event.indemnizacion.referencia}. No es una transferencia bancaria real."
+                    if event.indemnizacion is not None
+                    else "Consulta el detalle del pago en Solventa."
+                ),
                 event.resource.type,
                 event.resource.id,
                 instant,

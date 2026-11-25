@@ -118,6 +118,52 @@ class RepositorioPagosSqlAlchemy:
                     "Emision anterior sin condiciones de oferta persistidas: pago=%s",
                     modelo.pago_id,
                 )
+            vuelo = None
+            if (
+                tipo == "parametric"
+                and detalle is not None
+                and any("indemnizacion" in p for p in detalle.get("planes", []))
+            ):
+                planes = detalle.get("planes", []) if detalle else []
+                plan_vuelo = next(
+                    (
+                        p
+                        for p in planes
+                        if identificador_oferta(
+                            modelo.solicitud_id, f"{VERSION_ACADEMICA}:{p['codigo']}"
+                        )
+                        == modelo.oferta_id
+                    ),
+                    None,
+                )
+                if (
+                    plan_vuelo is None
+                    or "indemnizacion" not in plan_vuelo
+                    or Decimal(plan_vuelo["prima"]) != modelo.monto
+                    or modelo.oferta_version != 1
+                    or modelo.moneda != "COP"
+                    or modelo.periodicidad != "por_vuelo"
+                ):
+                    raise ServicioPolizasNoDisponibleError()
+                vuelo = {
+                    "airline": datos["airline"].strip().casefold(),
+                    "flightNumber": datos["flightNumber"].upper(),
+                    "flightDate": datos["flightDate"],
+                    "coverageType": datos.get("coverageType", "delay-cancellation"),
+                    "ofertaId": str(modelo.oferta_id),
+                    "montoIndemnizacion": plan_vuelo["indemnizacion"],
+                    "cancelacionClima": any(
+                        c.startswith("Cancelación:")
+                        for c in plan_vuelo["presentacion"]["coberturas"]
+                    ),
+                    "moneda": modelo.moneda,
+                    "contratadaEn": _utc(modelo.confirmada_en).isoformat(),
+                }
+            elif tipo == "parametric":
+                logger.warning(
+                    "Emision historica sin contrato de vuelo automatico: pago=%s",
+                    modelo.pago_id,
+                )
             return {
                 "clienteId": str(modelo.cliente_id),
                 "suscripcionId": str(modelo.suscripcion_id),
@@ -127,6 +173,7 @@ class RepositorioPagosSqlAlchemy:
                 "simulada": True,
                 "fechasContratadas": fechas,
                 **({"condicionesEmision": condiciones} if condiciones is not None else {}),
+                **({"contratoVuelo": vuelo} if vuelo is not None else {}),
             }
 
     def marcar_emitida(self, pago: PagoSimulado, poliza: PolizaEmitida) -> None:

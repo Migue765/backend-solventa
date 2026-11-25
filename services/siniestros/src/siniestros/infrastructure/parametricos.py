@@ -8,6 +8,7 @@ from uuid import UUID, uuid4, uuid5
 from siniestros.domain import ClaimInput, Config, Problem
 from siniestros.domain.parametricos import EventoParametrico, ReglaParametrica, cumple
 from siniestros.infrastructure.models import CambioEstadoModel
+from siniestros.infrastructure.vuelos import preparar_reglas
 from siniestros.models import (
     AutomaticPaymentCase,
     Claim,
@@ -18,6 +19,8 @@ from siniestros.models import (
 )
 from siniestros.repository import Repository, fingerprint
 from sqlalchemy import insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 NAMESPACE_SINIESTROS_PARAMETRICOS = UUID("3f6ad36f-f134-4df5-b506-d72f72e64b23")
@@ -51,47 +54,56 @@ class RepositorioEventosParametricos:
         payload = regla.model_dump(mode="json")
         digest = fingerprint(payload)
         with self.write() as session:
-            existente = session.scalar(
-                select(ParametricRule).where(
-                    ParametricRule.regla_id == str(regla.reglaId),
-                    ParametricRule.version == regla.version,
-                )
+            return self._guardar_regla(session, regla, digest)
+
+    def _guardar_regla(
+        self, session: Session, regla: ReglaParametrica, digest: str
+    ) -> tuple[dict[str, object], int]:
+        existente = session.scalar(
+            select(ParametricRule).where(
+                ParametricRule.regla_id == str(regla.reglaId),
+                ParametricRule.version == regla.version,
             )
-            if existente is not None:
-                if existente.fingerprint != digest:
-                    raise Problem(409, "version_regla_conflictiva")
-                return self._regla(existente), 200
-            creada = datetime.now(UTC)
-            modelo = ParametricRule(
-                id=str(uuid4()),
-                regla_id=str(regla.reglaId),
-                version=regla.version,
-                fingerprint=digest,
-                fuente=regla.fuente,
-                tipo_evento=regla.tipoEvento,
-                metrica=regla.metrica,
-                operador=regla.operador,
-                umbral=regla.umbral,
-                unidad=regla.unidad,
-                ubicacion_codigo=regla.ubicacionCodigo,
-                cliente_id=str(regla.clienteId),
-                poliza_id=str(regla.polizaId),
-                beneficiario_id=str(regla.beneficiarioId),
-                monto_indemnizacion=regla.montoIndemnizacion,
-                moneda=regla.moneda,
-                vigente_desde=regla.vigenteDesde,
-                vigente_hasta=regla.vigenteHasta,
-                creada_en=creada,
-            )
-            session.add(modelo)
-            session.flush()
-            return self._regla(modelo), 201
+        )
+        if existente is not None:
+            if existente.fingerprint != digest:
+                raise Problem(409, "version_regla_conflictiva")
+            return self._regla(existente), 200
+        creada = datetime.now(UTC)
+        modelo = ParametricRule(
+            id=str(uuid4()),
+            regla_id=str(regla.reglaId),
+            version=regla.version,
+            fingerprint=digest,
+            fuente=regla.fuente,
+            tipo_evento=regla.tipoEvento,
+            metrica=regla.metrica,
+            operador=regla.operador,
+            umbral=regla.umbral,
+            unidad=regla.unidad,
+            ubicacion_codigo=regla.ubicacionCodigo,
+            cliente_id=str(regla.clienteId),
+            poliza_id=str(regla.polizaId),
+            beneficiario_id=str(regla.beneficiarioId),
+            monto_indemnizacion=regla.montoIndemnizacion,
+            moneda=regla.moneda,
+            vigente_desde=regla.vigenteDesde,
+            vigente_hasta=regla.vigenteHasta,
+            creada_en=creada,
+        )
+        session.add(modelo)
+        session.flush()
+        return self._regla(modelo), 201
 
     def recibir(self, fuente: str, eventos: Sequence[EventoParametrico]) -> dict[str, object]:
         unicos: dict[str, tuple[EventoParametrico, dict[str, Any], str]] = {}
         repetidos_lote = 0
         for evento in eventos:
-            payload = evento.model_dump(mode="json")
+            if evento.vuelo is not None and evento.ubicacionCodigo != str(evento.eventoId):
+                raise Problem(422, "identidad_evento_vuelo_invalida")
+            payload = evento.model_dump(
+                mode="json", exclude={"vuelo"} if evento.vuelo is None else set()
+            )
             digest = fingerprint(payload)
             key = str(evento.eventoId)
             previo = unicos.get(key)
@@ -101,6 +113,10 @@ class RepositorioEventosParametricos:
                 repetidos_lote += 1
                 continue
             unicos[key] = (evento, payload, digest)
+
+        candidatas = {
+            key: preparar_reglas(self.config, fuente, item[0]) for key, item in unicos.items()
+        }
 
         with self.write() as session:
             estado = session.get(ParametricQueueState, 1, with_for_update=True)
@@ -129,6 +145,11 @@ class RepositorioEventosParametricos:
 
             recibido = datetime.now(UTC)
             if nuevos:
+                for evento, _, _ in nuevos:
+                    for regla in candidatas[str(evento.eventoId)]:
+                        self._guardar_regla(
+                            session, regla, fingerprint(regla.model_dump(mode="json"))
+                        )
                 session.execute(
                     insert(ParametricEvent),
                     [
@@ -296,6 +317,15 @@ class RepositorioEventosParametricos:
         procesado: datetime,
     ) -> str:
         semilla = f"{evento.fuente}:{evento.evento_id}:{regla.regla_id}:{regla.version}"
+        if entrada.vuelo is not None:
+            semilla = "cancelacion-vuelo:" + fingerprint(
+                {
+                    "polizaId": regla.poliza_id,
+                    "airline": entrada.vuelo.airline.strip().casefold(),
+                    "flightNumber": entrada.vuelo.flightNumber,
+                    "flightDate": entrada.vuelo.flightDate.isoformat(),
+                }
+            )
         siniestro_id = str(uuid5(NAMESPACE_SINIESTROS_PARAMETRICOS, f"siniestro:{semilla}"))
         caso_id = str(uuid5(NAMESPACE_SINIESTROS_PARAMETRICOS, f"caso:{semilla}"))
         payload = ClaimInput.model_validate(
@@ -322,8 +352,29 @@ class RepositorioEventosParametricos:
             estado="aprobado",
             actualizado_en=procesado,
         )
-        session.add(claim)
-        session.flush()
+        if entrada.vuelo is not None:
+            insertar = sqlite_insert if session.get_bind().dialect.name == "sqlite" else pg_insert
+            creada = session.scalar(
+                insertar(Claim)
+                .values(
+                    id=claim.id,
+                    owner=claim.owner,
+                    operation=claim.operation,
+                    fingerprint=claim.fingerprint,
+                    payload=claim.payload,
+                    created=claim.created,
+                    tipo=claim.tipo,
+                    estado=claim.estado,
+                    actualizado_en=claim.actualizado_en,
+                )
+                .on_conflict_do_nothing(index_elements=["id"])
+                .returning(Claim.id)
+            )
+            if creada is None:
+                return siniestro_id
+        else:
+            session.add(claim)
+            session.flush()
         session.add_all(
             [
                 CambioEstadoModel(
