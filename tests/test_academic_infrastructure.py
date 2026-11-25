@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 from copy import deepcopy
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -573,16 +574,41 @@ def test_first_polizas_rollout_failure_has_no_previous_revision_to_undo() -> Non
     assert "completado." not in result.stdout
 
 
-def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> None:
+@pytest.mark.parametrize(
+    ("path", "routed"),
+    [
+        ("/v1/siniestros", True),
+        ("/v1/siniestros/123", True),
+        ("/v1/administracion/siniestros/123", True),
+        ("/v1/backoffice/eventos-vuelo-simulados", True),
+        ("/internal/v1/eventos-parametricos/recepcion", False),
+        ("/v1/backoffice-interno/eventos-vuelo-simulados", False),
+    ],
+)
+def test_claims_are_routed_through_authenticated_bff_and_internal_service(
+    path: str, routed: bool
+) -> None:
     gateway = (ROOT / "terraform" / "modules" / "api-gateway" / "main.tf").read_text(
         encoding="utf-8"
     )
     routing = gateway.split('resource "aws_lb_listener_rule" "bff_web_claims" {', 1)[1]
     routing = routing.split('resource "', 1)[0]
-    assert 'values = ["/v1/siniestros", "/v1/siniestros/*", "/v1/administracion/*"]' in routing
+    condition = re.search(r"path_pattern\s*\{\s*values\s*=\s*(\[[^]]+\])", routing)
+    assert condition is not None
+    patterns = json.loads(condition[1])
+    assert set(patterns) == {
+        "/v1/siniestros",
+        "/v1/siniestros/*",
+        "/v1/administracion/*",
+        "/v1/backoffice/*",
+    }
+    assert any(fnmatchcase(path, pattern) for pattern in patterns) is routed
     assert "target_group_arn = aws_lb_target_group.bff_web.arn" in routing
-    assert 'route_key          = "ANY /v1/{proxy+}"' in gateway
-    assert 'authorization_type = "JWT"' in gateway
+    protected_route = gateway.split('resource "aws_apigatewayv2_route" "v1" {', 1)[1]
+    protected_route = protected_route.split('resource "', 1)[0]
+    assert 'route_key          = "ANY /v1/{proxy+}"' in protected_route
+    assert 'authorization_type = "JWT"' in protected_route
+    assert "authorizer_id      = aws_apigatewayv2_authorizer.jwt[0].id" in protected_route
     service = yaml.safe_load((K8S / "siniestros" / "service.yaml").read_text(encoding="utf-8"))
     assert service["spec"]["type"] == "ClusterIP"
     deployment = yaml.safe_load(
