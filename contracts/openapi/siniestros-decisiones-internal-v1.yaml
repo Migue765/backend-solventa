@@ -10,6 +10,45 @@ info:
 servers:
   - url: /internal/v1
 paths:
+  /siniestros/{siniestroId}/revision:
+    get:
+      operationId: consultarDetalleRevisionInterna
+      description: Aviso y evidencias confirmadas para revision; audita al revisor del BFF.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/SiniestroId"
+        - $ref: "#/components/parameters/RevisorId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: Detalle del aviso y evidencias, sin URLs publicas.
+          content:
+            application/json:
+              schema:
+                $ref: "./administracion-siniestros-web-v1.yaml#/components/schemas/Detalle"
+        default: {$ref: "#/components/responses/Problema"}
+  /siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    get:
+      operationId: descargarEvidenciaRevisionInterna
+      description: Evidencia confirmada, verificada por SHA256 y auditada al revisor.
+      security: [{internalToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/SiniestroId"
+        - $ref: "#/components/parameters/RevisorId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - name: evidenciaId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Descarga con Content-Length y Content-Disposition attachment.
+          content:
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            application/pdf: {schema: {type: string, format: binary}}
+            video/mp4: {schema: {type: string, format: binary}}
+        default: {$ref: "#/components/responses/Problema"}
   /siniestros/{siniestroId}/decisiones/automatica:
     post:
       operationId: decidirSiniestroAutomaticamente
@@ -136,6 +175,12 @@ components:
       type: http
       scheme: bearer
   parameters:
+    RevisorId:
+      name: X-Revisor-ID
+      in: header
+      required: true
+      description: UUID del administrador autenticado por el BFF, nunca una cabecera del navegador.
+      schema: {type: string, format: uuid}
     SiniestroId:
       name: siniestroId
       in: path

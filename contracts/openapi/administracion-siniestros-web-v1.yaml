@@ -1,0 +1,179 @@
+openapi: 3.1.0
+info:
+  title: Solventa revision administrativa de siniestros
+  version: 1.0.0
+  description: >
+    Acceso interno de Solventa, separado de asesores y socios. Requiere JWT web con
+    rol y scope administrador, sid vigente y sin membresias de socios. El usuario JSON
+    del login, renovacion y sesion actual conserva id, nombre, correo y rol; no incluye
+    socios ni scope. El registro publico nunca asigna este rol. Aprovisionamiento
+    privado mediante create-admin. No habilita pagos ni aprobacion de nuevas polizas.
+    Todas las respuestas llevan Cache-Control no-store y X-Correlation-ID.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /v1/administracion/colas-revision/{cola}/asignaciones:
+    get:
+      operationId: listarColaRevisionAdministrativa
+      description: Asignaciones activas en orden de llegada. No admite query ni cuerpo.
+      parameters:
+        - name: cola
+          in: path
+          required: true
+          schema: {type: string, enum: [revision, inspeccion, fraude]}
+      responses:
+        "200":
+          description: Cola real; un fallo de dependencia nunca se presenta como lista vacia.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [tipo, destino, asignaciones]
+                properties:
+                  tipo: {const: cola}
+                  destino: {type: string, enum: [revision, inspeccion, fraude]}
+                  asignaciones:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Asignacion"
+                        - required: [estadoSiniestro]
+                          properties:
+                            tipo: {const: cola}
+                            estado: {const: activa}
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/administracion/siniestros/{siniestroId}:
+    get:
+      operationId: consultarSiniestroAdministrativo
+      description: >
+        Aviso original y evidencias confirmadas. El estado registrado del aviso no es
+        el estado vigente; este se consulta en decisiones. No admite query ni cuerpo.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      responses:
+        "200":
+          description: Detalle consultado y auditado con el actor autenticado.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Detalle"}
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/administracion/siniestros/{siniestroId}/decisiones:
+    get:
+      operationId: consultarDecisionesAdministrativas
+      description: Estado vigente e historial durable. No admite query ni cuerpo.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+      responses:
+        "200":
+          description: Estado, asignacion vigente e historial de decisiones.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Historial"}
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/administracion/siniestros/{siniestroId}/decisiones/revision:
+    post:
+      operationId: resolverRevisionAdministrativa
+      description: >
+        Solo resuelve casos en_revision o en_inspeccion, conservando las transiciones
+        existentes. revisorId proviene exclusivamente de la sesion, no del navegador.
+        No admite peritoId: inspeccion se enruta a su cola existente. La misma clave,
+        actor y contenido devuelven 200 sin repetir la decision. 409
+        idempotencia_conflictiva si se cambia el contenido; 409 transicion_no_permitida
+        si el caso ya no admite la decision. Ante 503 no se afirma que no se guardo:
+        consultar decisiones y recuperar con la misma clave y cuerpo.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [resultado, motivo]
+              properties:
+                resultado: {type: string, enum: [aprobado, rechazado, inspeccion]}
+                motivo: {type: string, minLength: 10, maxLength: 1000}
+      responses:
+        "201": {$ref: "#/components/responses/Decision"}
+        "200": {$ref: "#/components/responses/Decision"}
+        default: {$ref: "#/components/responses/Problema"}
+  /v1/administracion/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    get:
+      operationId: descargarEvidenciaAdministrativa
+      description: >
+        Descarga autenticada y auditada de evidencia confirmada e integra del siniestro.
+        No devuelve URLs publicas ni credenciales internas. No admite query ni cuerpo.
+      parameters:
+        - {$ref: "#/components/parameters/SiniestroId"}
+        - name: evidenciaId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Contenido verificado SHA256, descarga con Content-Length.
+          headers:
+            Content-Length: {schema: {type: integer, minimum: 1}}
+            Content-Disposition: {schema: {type: string}}
+          content:
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            application/pdf: {schema: {type: string, format: binary}}
+            video/mp4: {schema: {type: string, format: binary}}
+        default: {$ref: "#/components/responses/Problema"}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    SiniestroId:
+      name: siniestroId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    Detalle:
+      type: object
+      additionalProperties: false
+      required: [siniestro, evidencias]
+      properties:
+        siniestro: {$ref: "./siniestros-v1.yaml#/components/schemas/Siniestro"}
+        evidencias:
+          type: array
+          items: {$ref: "./siniestros-v1.yaml#/components/schemas/Evidencia"}
+    Historial:
+      type: object
+      additionalProperties: false
+      required: [siniestroId, estado, asignacionActiva, decisiones]
+      properties:
+        siniestroId: {type: string, format: uuid}
+        estado: {$ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Estado"}
+        asignacionActiva:
+          oneOf:
+            - {$ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Asignacion"}
+            - {type: "null"}
+        decisiones:
+          type: array
+          items: {$ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Decision"}
+  responses:
+    Decision:
+      description: Decision durable con actor, motivo, transiciones e identificador de operacion.
+      content:
+        application/json:
+          schema: {$ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Decision"}
+    Problema:
+      description: >
+        400 solicitud_invalida; 401 sesion_invalida; 403 alcance_insuficiente;
+        404 siniestro_no_encontrado o evidencia_no_encontrada; 409 transicion_no_permitida
+        o idempotencia_conflictiva; 413 limite de cuerpo; 503 servicio_no_disponible
+        (Retry-After 5). Sin datos de negocio ni tokens.
+      content:
+        application/problem+json:
+          schema: {$ref: "./bff-web-v1.yaml#/components/schemas/Problema"}

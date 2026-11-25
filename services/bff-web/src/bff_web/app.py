@@ -5,6 +5,7 @@ from flask import Flask, Response, g, request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from bff_web.api import (
+    claim_reviews,
     claim_status,
     claims,
     client_information,
@@ -43,6 +44,7 @@ from bff_web.domain.auth import CHANNEL
 from bff_web.domain.errors import IdentityUnavailableError
 from bff_web.domain.profiling import ProfilingError
 from bff_web.infrastructure.http_claim_gateway import HttpClaimGateway
+from bff_web.infrastructure.http_claim_review_gateway import HttpClaimReviewGateway
 from bff_web.infrastructure.http_client_information_gateway import (
     HttpClientInformationGateway,
 )
@@ -140,6 +142,9 @@ def create_app(
     app.extensions["claim_gateway"] = claim_gateway or HttpClaimGateway(
         active_config.claims_service_url, active_config.internal_api_token
     )
+    app.extensions["claim_review_gateway"] = HttpClaimReviewGateway(
+        active_config.claims_service_url, active_config.internal_api_token
+    )
     app.extensions["policy_renewal_gateway"] = policy_renewal_gateway or HttpPolicyRenewalGateway(
         active_config.policies_service_url, active_config.internal_api_token
     )
@@ -183,6 +188,7 @@ def create_app(
     app.register_blueprint(client_information.bp)
     app.register_blueprint(claims.bp)
     app.register_blueprint(claim_status.bp)
+    app.register_blueprint(claim_reviews.bp)
     app.register_blueprint(policy_renewals.bp)
     app.register_blueprint(policy_modifications.bp)
     app.register_blueprint(policy_cancellations.bp)

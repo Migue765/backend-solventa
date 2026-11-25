@@ -9,7 +9,7 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "alembic>=1.14,<2",
     "Pillow>=11.3,<13",
-    "pypdf>=6.0,<7",
+    "pypdf[crypto]>=6.0,<7",
     "av>=16,<17",
     "boto3>=1.35,<2",
 ]

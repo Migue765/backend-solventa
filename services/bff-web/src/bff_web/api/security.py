@@ -80,3 +80,16 @@ def partner_claims() -> AccessClaims | Response:
         )
     g.audit_actor_id = str(claims.user.user_id)
     return claims
+
+
+def customer_claims() -> AccessClaims | Response:
+    try:
+        claims = authenticate()
+    except InvalidAccessTokenError:
+        return invalid_session_response()
+    if claims.user.role != "cliente" or claims.scope not in {"cliente", "cotizaciones"}:
+        return problem_response(
+            403, "alcance_insuficiente", "Acceso denegado", "Se requiere una cuenta de cliente."
+        )
+    g.audit_actor_id = str(claims.user.user_id)
+    return claims

@@ -50,7 +50,15 @@ class SeleccionDesactualizadaError(Exception):
 
 
 class SeleccionNoModificableError(Exception):
-    """La operacion ya tiene una aceptacion terminal."""
+    """La operacion ya tiene una aceptacion o rechazo terminal."""
+
+
+class SolicitudNoRechazableError(Exception):
+    """La solicitud ya tiene una decision terminal."""
+
+
+class RechazoNoEncontradoError(Exception):
+    """El cliente todavia no ha rechazado esta solicitud."""
 
 
 class SuscripcionNoEncontradaError(Exception):

@@ -67,6 +67,7 @@ class Flow:
     identity: Flask
     identity_database: str
     profile_url: str
+    quotes: Flask
 
     def authorize(self, version: int = 0) -> None:
         response = self.client.put(
@@ -98,7 +99,9 @@ class Flow:
 
 
 @pytest.fixture
-def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
+def flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, polizas_url: str | None = None
+) -> Iterator[Flow]:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_SCHEMA", raising=False)
     databases = {}
@@ -140,6 +143,7 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
                 perfilamiento_habilitado=True,
                 perfilamiento_url=profile_url,
                 internal_api_token=INTERNAL_TOKEN,
+                polizas_url=polizas_url,
             )
         )
         quote_url = stack.enter_context(serve(quotes))
@@ -182,6 +186,7 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
             identity,
             databases["identidad"],
             profile_url,
+            quotes,
         )
 
 

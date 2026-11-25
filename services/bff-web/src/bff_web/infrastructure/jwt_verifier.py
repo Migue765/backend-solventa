@@ -128,6 +128,10 @@ class JwtVerifier:
                 not isinstance(partners_claim, list)
                 or not all(isinstance(partner, str) and partner for partner in partners_claim)
                 or (role == "asesor" and (scope != "asesor" or not partners_claim))
+                or (
+                    role == "administrador"
+                    and (scope != "administrador" or partners_claim or session_id is None)
+                )
             ):
                 raise InvalidAccessTokenError()
             return AccessClaims(

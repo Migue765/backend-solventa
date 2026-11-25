@@ -208,6 +208,23 @@ class GestionarOfertas:
                 estado = EstadoOferta.ACEPTADA
         return EstadoSeleccionProvisional(solicitud_id, provisional, aceptacion, estado)
 
+    def consultar_estado_persistido(
+        self, solicitud_id: str, cliente_id: UUID
+    ) -> EstadoSeleccionProvisional:
+        provisional, aceptacion = self._selecciones.consultar_estado_seleccion(
+            solicitud_id, cliente_id
+        )
+        estado = None
+        if provisional is not None:
+            estado = (
+                EstadoOferta.DISPONIBLE
+                if provisional.vigente_hasta > self._reloj()
+                else EstadoOferta.VENCIDA
+            )
+            if aceptacion is not None:
+                estado = EstadoOferta.ACEPTADA
+        return EstadoSeleccionProvisional(solicitud_id, provisional, aceptacion, estado)
+
     def _nueva_seleccion(
         self,
         solicitud_id: str,

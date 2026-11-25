@@ -615,6 +615,38 @@ class Repository:
                 raise
         if upload.status != "confirmada":
             raise Problem(404, "evidencia_no_encontrada")
+        return self._verified_content(upload, owner, cid)
+
+    def review_detail(self, claim_id: str, reviewer: str, cid: str) -> dict[str, Any]:
+        with self.write() as session:
+            claim = session.get(Claim, claim_id)
+            if claim is None:
+                raise Problem(404, "siniestro_no_encontrado")
+            validar(session, claim)
+            records = session.scalars(
+                select(Upload)
+                .where(Upload.claim_id == claim_id, Upload.status == "confirmada")
+                .order_by(Upload.confirmed, Upload.id)
+            )
+            result = {
+                "siniestro": claim_record(claim),
+                "evidencias": [evidence_record(upload) for upload in records],
+            }
+            self.audit(session, reviewer, "consultar_revision", "autorizado", cid)
+            return result
+
+    def review_content(
+        self, claim_id: str, upload_id: str, reviewer: str, cid: str
+    ) -> tuple[BinaryIO, str, int]:
+        with self.sessions() as session:
+            if session.get(Claim, claim_id) is None:
+                raise Problem(404, "siniestro_no_encontrado")
+            upload = session.get(Upload, upload_id)
+            if upload is None or upload.claim_id != claim_id or upload.status != "confirmada":
+                raise Problem(404, "evidencia_no_encontrada")
+        return self._verified_content(upload, reviewer, cid)
+
+    def _verified_content(self, upload: Upload, actor: str, cid: str) -> tuple[BinaryIO, str, int]:
         # Confirmed evidence is immutable, so it is fetched and verified outside the write lock.
         stream = self.evidence.open(self.evidence_name(upload), self.path(upload))
         try:
@@ -627,7 +659,7 @@ class Repository:
                 raise Problem(503, "servicio_no_disponible")
             stream.seek(0)
             with self.write() as session:
-                self.audit(session, owner, "consultar_contenido", "autorizado", cid)
+                self.audit(session, actor, "consultar_contenido", "autorizado", cid)
         except BaseException:
             stream.close()
             raise

@@ -1,5 +1,29 @@
 # BFF Web
 
+## Revision administrativa interna
+
+`/v1/administracion` expone las colas existentes de revision, inspeccion y fraude,
+el aviso original con evidencias confirmadas, el historial vigente y la resolucion
+humana de siniestros. Contrato completo:
+`contracts/openapi/administracion-siniestros-web-v1.yaml`.
+Solo acepta JWT web `rol=scope=administrador`, sin socios y con sesion `sid` activa.
+Clientes, socios y asesores no pueden usar estas rutas; el administrador no se
+convierte en un cliente ni obtiene acceso al flujo de un socio.
+
+El BFF determina `revisorId` a partir de la sesion, envia el token interno solo al
+servicio Siniestros y conserva `X-Correlation-ID` e `Idempotency-Key`. La decision
+reutiliza las transiciones, auditoria SQL e idempotencia existentes. Solo admite
+resultado y motivo del navegador; no permite suplantar revisor ni perito. Tras un
+fallo o acuse perdido, consultar decisiones y recuperar con la misma clave/cuerpo.
+Las evidencias se descargan autenticadas y con `no-store`; no se publican URLs S3.
+
+Requiere desplegar versiones compatibles de Identidad, Siniestros y BFF y coordinar
+la pantalla administrativa en la web. No agrega aprobacion de nuevas polizas,
+pagos ni despliegue automatico. El alta privada del administrador queda en Identidad.
+La regla ALB existente del BFF incorpora `/v1/administracion/*`; su actualizacion
+Terraform tambien debe revisarse y aplicarse en ese despliegue autorizado, no basta
+con publicar las imagenes. Este cambio de fuente no aplica infraestructura.
+
 ## Siniestros y evidencia compartida
 
 Las rutas `/v1/siniestros` conservan el registro web y usan el mismo servicio
@@ -118,6 +142,55 @@ el aviso confirmado sin duplicarlo. Sin servicio configurado responde `503`,
 nunca una confirmacion ficticia. Detalle de validaciones y operacion:
 [Siniestros](../siniestros/README.md).
 
+### Solicitudes historicas y continuacion del cliente
+
+`GET /v1/socios/solicitudes-cotizacion?socioId=...` lista **todas** las solicitudes
+realmente cotizadas de esa organizacion. `productoId` es un filtro opcional:
+omitirlo agrega los productos implementados/autorizados del flujo socio,
+actualmente solo `mortgage-life`, como `/v1/socios/actual`. No usa el limite del
+dashboard, ni deduplica por cliente, ni incluye reservas/operaciones sin cotizacion.
+JWT rol/scope socio, organizacion del claim, `API-Version: 1` y `no-store`.
+
+`GET /v1/solicitudes-cotizacion` y `GET /v1/solicitudes-cotizacion/{id}/estado`
+exponen la misma proyeccion para el cliente propietario, derivado exclusivamente
+del JWT (rol cliente, scope cliente o legado cotizaciones), sin query/cuerpo.
+La fila enlaza `operationId`/`socioId` (null en solicitudes directas), `clienteId`,
+`solicitudId`, `cotizacionId`, `productoId`, `estado`, fechas
+`creadaEn`/`actualizadaEn`/`validaHasta`/`completadaEn`/`rechazadaEn`,
+`estadoSeleccion`, `seleccionRestringida`, `pagoEstado` y `emisionEstado`.
+El socio recibe tambien `cliente` con UUID, nombre y documento enmascarado
+condicionados al consentimiento. No publica telefono, nacimiento ni IDs/versiones
+internos de consentimiento. Detalle exacto: `bff-web-v1.yaml`.
+
+`pendiente` no significa operacion fallida. Calculo, seleccion provisional,
+aceptacion y suscripcion no completan una solicitud. `completada` exige pago
+confirmado y fin real del flujo; si se solicita emision, debe estar emitida.
+`rechazada` solo significa decision explicita del cliente. Error tecnico/pago
+rechazado se muestran por separado. `vencida` deriva de vigencias persistidas de
+quote/perfil/fuentes/oferta, sin reactivar ni ofrecer nueva solicitud desde la ficha.
+Completada/rechazada permanecen terminales tras vencer; pago confirmado pendiente
+de emision mantiene pendiente para conciliar, incluso si despues vence el perfil.
+
+El historial no usa el GET sensible ni vuelve a perfilar: mantiene filas/fechas/estado
+con consentimiento vencido o revocado, redacta PII y seleccion del socio. Revocacion
+no equivale a vencimiento. Seleccion visible requiere consentimiento actual y mismo
+ID/version originales. La lectura propia del cliente conserva sus datos historicos.
+GET solicitud conserva `estado` tecnico CALCULADA y datos del producto;
+GET operacion socio conserva `estado: completada` de admision y añade
+`estadoSolicitud`. La UI usa la proyeccion autoritativa para estado/acciones.
+
+Continuar utiliza la **misma** solicitud y provisional/revision: GET seleccion,
+PUT `/seleccion` con `{ofertaId,version,revisionSeleccion}`, suscripcion y pago
+existentes, exclusivamente cliente. No nueva quote, email ni pago por socio.
+GET/PUT `/v1/solicitudes-cotizacion/{id}/rechazo` recupera/registra rechazo:
+PUT `{}` y UUID `Idempotency-Key` por intento. Replay identico recupera decision;
+clave de otra solicitud devuelve 409 `conflicto_idempotencia`. Aceptada, suscrita,
+pagada, emitida o rechazada con otra clave: 409 `solicitud_no_rechazable`.
+Rechazo y aceptacion se serializan en persistencia; no es cancelacion de poliza.
+Aplicar primero migracion `rechazos_solicitud` en Cotizacion; no requiere infraestructura
+nueva ni cambios de auth/registro. No activar estas rutas antes de actualizar todas
+las replicas que permiten aceptacion; la migracion sola no añade el guard de rechazo.
+
 ### Plataforma de socios (SOL-195)
 
 El rol `socio` es distinto de `asesor` y `cliente`. Usa el mismo login, refresh y
@@ -199,6 +272,33 @@ reutilizar la clave con otros datos. La admision generica garantiza UUID global
 unico incluso entre organizaciones: una colision devuelve409 sin revelar el socio
 propietario. Reintentos y lecturas siguen aislados por organizacion.
 
+`GET /v1/socios/clientes?socioId=...&productoId=mortgage-life` lista clientes de
+cotizaciones completadas y persistidas de esa organizacion y producto, nunca el
+catalogo de Identidad ni reservas pendientes/rechazadas. Requiere JWT de rol y
+scope `socio`, pertenencia al `socioId` del contexto `/v1/socios/actual` y
+`API-Version: 1` (opcional, por defecto 1). El producto coincide con el unico
+producto del flujo publico de cotizacion del socio. La respuesta es
+`{clientes:[{clienteId,nombre,tipoDocumento,numeroDocumentoEnmascarado,consentimientoEstado}]}`:
+UUID estable, sin duplicados y ordenado por `clienteId`, sin paginacion como el
+listado del asesor; `{clientes:[]}` significa ausencia de cotizaciones.
+
+El BFF consulta consentimiento vigente en Identidad antes de resolver nombre y
+documento del cliente. Sin autorizacion actual los tres datos personales son
+`null`; conserva solo asociacion y estado (`vigente`, `insuficiente`, `ausente`,
+`rechazado`, `revocado` o `vencido`). No devuelve contacto, documento completo,
+riesgo ni evidencia del consentimiento. Fallos de Cotizacion, Identidad o contrato
+producen `503 servicio_no_disponible`, nunca lista vacia ni resultados parciales.
+Usa `Cache-Control: no-store`; la consulta individual por documento no cambia.
+
+La ruta reutiliza `QUOTE_SERVICE_URL`, `IDENTIDAD_URL` e `INTERNAL_API_TOKEN`.
+No requiere tablas, migraciones ni reglas de infraestructura nuevas: API Gateway
+ya protege `ANY /v1/{proxy+}` y el ALB dirige `/v1/socios/*` al BFF; este consulta
+Cotizacion por su Service ClusterIP interno, no por el ALB publico. Actualizar
+Cotizacion y BFF juntos antes de habilitar el consumidor; con Cotizacion antigua
+el BFF responde 503. `tests/test_partner_flow.py -k client_list` valida por HTTP
+los servicios reales con SQLite temporal, cotizaciones persistidas, deduplicacion,
+ausencia de historial, aislamiento y revocacion. No acredita despliegue en AWS.
+
 `POST /v1/socios/solicitudes-cotizacion/{operationId}/oferta?socioId=...` (SOL-330)
 pide a Cotizacion la oferta explicable de una operacion completada: tres planes con
 precio, coberturas, condiciones y factores, mas riesgo, fuentes, variables y versiones.
@@ -206,6 +306,32 @@ Exige el mismo JWT de socio y `socioId` en el claim `socios`; responde `201` inc
 reintentos, que devuelven la oferta persistida. `GET` sobre la misma ruta solo la lee.
 Entradas vencidas responden `422 entradas_vencidas`; una decision inconsistente,
 `422 oferta_no_disponible`; nunca se devuelve una oferta parcial.
+
+Para mostrar planes, consultar primero `GET .../{operationId}/oferta?socioId=...`.
+Si responde `404 oferta_no_encontrada`, ofrecer el `POST` explicito con `{}`:
+calcula/persiste el snapshot de tres planes, no recrea cotizacion ni selecciona.
+`ofertaId` del envelope es el snapshot; `ofertas[].ofertaId` es el ID del plan.
+`recomendada` no representa una eleccion del socio. Las lecturas/reintentos
+comprueban consentimiento actual vigente, con el mismo ID/version del riesgo.
+
+`GET/PUT /v1/socios/solicitudes-cotizacion/{operationId}/seleccion-provisional?socioId=...`
+reutiliza la eleccion persistida del flujo cliente. Exige Bearer de rol/scope
+socio, organizacion autorizada y `API-Version: 1`; solo admite `socioId` en query.
+La operacion/snapshot determinan cliente, solicitud y producto, no el consumidor.
+PUT requiere `Idempotency-Key` UUID por intento y
+`{ofertaId, version, revisionEsperada}`; revision inicial 0, respuesta 1.
+Devuelve la seleccion con importes, periodicidad, `seleccionadaEn`, `revision`
+y `vigenteHasta`. GET devuelve `{solicitudId, seleccion, aceptacion, estadoOferta}`,
+con null cuando no hay eleccion/aceptacion. GET operacion incorpora `estadoSeleccion`
+sin cambiar su oferta recomendada legacy y protege elecciones con consentimiento.
+
+Conservar clave/payload ante respuesta ambigua y recuperar GET antes de un nuevo
+intento. CAS obsoleto, clave reutilizada con otros datos y aceptacion final producen
+409 (`seleccion_desactualizada`, `conflicto_idempotencia`, `seleccion_no_modificable`).
+Planes ajenos/versiones incorrectas/vencidos producen 422; sin snapshot 404,
+consentimiento revocado o reemplazado 403, dependencia/inconsistencia 503.
+Las respuestas son `no-store`. Elegir un plan no acepta, contrata, crea suscripcion,
+paga ni envia correo. La aceptacion final del cliente sigue siendo terminal.
 
 Errores previos a perfilamiento: `400 solicitud_invalida`, `401 sesion_invalida`,
 `403 alcance_insuficiente`/`socio_no_autorizado`, `404 cliente_no_encontrado`.
@@ -606,6 +732,19 @@ cierre una sesión válida por una caída. Un `429 demasiados_intentos` conserva
 `X-Correlation-ID` se propaga a identidad.
 
 ### Importes y periodicidad de ofertas
+
+`GET /v1/clientes/me/perfil` expone solo los propios datos registrados desde
+Identidad: `{clienteId,nombre,tipoDocumento,numeroDocumento,correo,telefono,fechaNacimiento}`.
+Telefono/fecha realmente ausentes son null. Requiere rol cliente y scope cliente
+(o legado cotizaciones), `API-Version: 1`, sin query; devuelve `no-store`.
+No modifica el JWT, registro ni autenticacion y no permite elegir otro cliente.
+
+`POST /v1/solicitudes-cotizacion` usa documento/contacto y fecha de nacimiento
+autoritativos de ese perfil, no de la UI. Para life enviar `datosProducto: {}`;
+para mortgage-life conservar `mortgageBalance` sin pedir birthDate. Por compatibilidad
+se admite birthDate solo si coincide con el registro; discrepancia es 400,
+ausencia real de nacimiento/contacto es 422 `datos_cliente_incompletos`.
+La UI muestra esos datos como solo lectura y conserva parametros genuinos del producto.
 
 Las ofertas y GET/PUT de selección transmiten `prima: {monto, moneda}` y
 `periodicidad: mensual | por_viaje | por_vuelo | por_periodo` calculadas y persistidas por cotización.

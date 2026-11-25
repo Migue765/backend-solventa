@@ -5,9 +5,17 @@ from uuid import UUID
 
 from flask import Blueprint, Response, current_app, jsonify, request
 from pydantic import Field, ValidationError
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from cotizacion.api.operaciones_hipotecarias import _authorized
-from cotizacion.api.schemas import RegistrarSolicitudRequest, resultado_ofertas_a_json
+from cotizacion.api.schemas import (
+    RegistrarSolicitudRequest,
+    SeleccionarProvisionalRequest,
+    estado_seleccion_a_json,
+    resultado_ofertas_a_json,
+    resumen_solicitud_a_json,
+    seleccion_provisional_a_json,
+)
 from cotizacion.application.iniciar_solicitud_socio import (
     IniciarSolicitudSocio,
     OperacionSocio,
@@ -15,8 +23,14 @@ from cotizacion.application.iniciar_solicitud_socio import (
 )
 from cotizacion.application.ofertas import GestionarOfertas
 from cotizacion.application.ofertas_socio import CalcularOfertaSocio
+from cotizacion.domain.errors import OfertaNoDisponibleError, OperacionSocioNoEncontradaError
+from cotizacion.domain.historial_solicitudes import ResumenSolicitud
 from cotizacion.domain.oferta_socio import OfertaSocio
+from cotizacion.domain.productos import buscar_producto
 from cotizacion.infrastructure.persistence.admision_socios import AdmisionSocios
+from cotizacion.infrastructure.persistence.repositorio_historial_solicitudes import (
+    RepositorioHistorialSolicitudesSql,
+)
 from cotizacion.infrastructure.persistence.repositorio_operaciones_socios import (
     RepositorioOperacionesSociosSql,
 )
@@ -31,6 +45,30 @@ class SolicitudSocioRequest(RegistrarSolicitudRequest):
     consentimiento_id: UUID
     consentimiento_version: int = Field(ge=1)
     referencia_credito: str = Field(pattern=r"^[A-Za-z0-9-]{4,30}$")
+
+
+@bp.get("/clientes")
+def listar_clientes() -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_valido()
+    producto = request.args.get("productoId", "")
+    if (
+        socio is None
+        or not 0 < len(producto) <= 64
+        or set(request.args) != {"socioId", "productoId"}
+        or any(len(request.args.getlist(key)) != 1 for key in request.args)
+    ):
+        return jsonify(error="solicitud_invalida"), 400
+    repositorio = cast(
+        RepositorioOperacionesSociosSql, current_app.extensions["operaciones_socios"]
+    )
+    response = jsonify(
+        clientes=[str(client) for client in repositorio.listar_clientes(socio, producto)]
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
 
 
 @bp.post("/solicitudes-cotizacion")
@@ -63,6 +101,30 @@ def iniciar() -> tuple[Response, int] | Response:
     response = jsonify(_a_json(operacion))
     response.headers["Cache-Control"] = "no-store"
     return response, 201
+
+
+@bp.get("/solicitudes-cotizacion")
+def listar_solicitudes() -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_valido()
+    producto = request.args.get("productoId", "")
+    if (
+        socio is None
+        or buscar_producto(producto) is None
+        or set(request.args) != {"socioId", "productoId"}
+        or any(len(request.args.getlist(key)) != 1 for key in request.args)
+    ):
+        return jsonify(error="solicitud_invalida"), 400
+    response = jsonify(
+        solicitudes=[
+            resumen_solicitud_a_json(row)
+            for row in _historial().listar(socio_id=socio, producto_id=producto)
+        ]
+    )
+    response.headers["API-Version"] = "1"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.get("/solicitudes-cotizacion/<uuid:operation_id>")
@@ -116,6 +178,87 @@ def consultar_oferta(operation_id: UUID) -> tuple[Response, int] | Response:
     return response
 
 
+@bp.get("/solicitudes-cotizacion/<uuid:operation_id>/seleccion-provisional")
+def consultar_seleccion(operation_id: UUID) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_seleccion()
+    if socio is None:
+        return jsonify(error="solicitud_invalida"), 400
+    operacion = _operacion(socio, operation_id)
+    caso = cast(CalcularOfertaSocio, current_app.extensions["calcular_oferta_socio"])
+    caso.consultar(socio, operation_id)
+    response = jsonify(estado_seleccion_a_json(_historia(operacion).estado_seleccion))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
+@bp.put("/solicitudes-cotizacion/<uuid:operation_id>/seleccion-provisional")
+def seleccionar_oferta(operation_id: UUID) -> tuple[Response, int] | Response:
+    if not _authorized():
+        return jsonify(error="no_autorizado"), 401
+    socio = _socio_seleccion()
+    if socio is None:
+        return jsonify(error="solicitud_invalida"), 400
+    try:
+        payload = SeleccionarProvisionalRequest.model_validate(request.get_json(silent=False))
+        key = UUID(request.headers["Idempotency-Key"])
+    except (ValidationError, ValueError, KeyError, TypeError, BadRequest, UnsupportedMediaType):
+        return jsonify(error="solicitud_invalida"), 400
+    operacion = _operacion(socio, operation_id)
+    caso = cast(CalcularOfertaSocio, current_app.extensions["calcular_oferta_socio"])
+    snapshot = caso.consultar(socio, operation_id)
+    if not any(
+        item["ofertaId"] == str(payload.oferta_id) and item["version"] == payload.version
+        for item in snapshot.contenido["ofertas"]
+    ):
+        raise OfertaNoDisponibleError()
+    seleccion = _ofertas().seleccionar_provisional(
+        operacion.solicitud_id,
+        operacion.cliente_id,
+        payload.oferta_id,
+        payload.version,
+        payload.revision_esperada,
+        key,
+    )
+    response = jsonify(seleccion_provisional_a_json(seleccion))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["API-Version"] = "1"
+    return response
+
+
+def _socio_seleccion() -> str | None:
+    if set(request.args) != {"socioId"} or len(request.args.getlist("socioId")) != 1:
+        return None
+    return _socio_valido()
+
+
+def _operacion(socio: str, operation_id: UUID) -> OperacionSocio:
+    repositorio = cast(
+        RepositorioOperacionesSociosSql, current_app.extensions["operaciones_socios"]
+    )
+    operacion = repositorio.buscar(socio, operation_id)
+    if operacion is None:
+        raise OperacionSocioNoEncontradaError()
+    return operacion
+
+
+def _historial() -> RepositorioHistorialSolicitudesSql:
+    return cast(RepositorioHistorialSolicitudesSql, current_app.extensions["historial_solicitudes"])
+
+
+def _historia(operacion: OperacionSocio) -> ResumenSolicitud:
+    rows = _historial().listar(
+        socio_id=operacion.socio_id,
+        producto_id=operacion.producto_id,
+        solicitud_id=operacion.solicitud_id,
+    )
+    if len(rows) != 1 or rows[0].cotizacion_id != operacion.cotizacion_id:
+        raise ValueError("Operacion sin cotizacion coherente en historial.")
+    return rows[0]
+
+
 def _socio_valido() -> str | None:
     if request.headers.get("API-Version", "1") != "1":
         return None
@@ -125,6 +268,14 @@ def _socio_valido() -> str | None:
 
 def _oferta_a_json(oferta: OfertaSocio) -> dict[str, object]:
     contenido = oferta.contenido
+    limite = min(
+        oferta.vigente_hasta,
+        datetime.fromisoformat(contenido["riesgo"]["vigenteHasta"].replace("Z", "+00:00")),
+        *(
+            datetime.fromisoformat(fuente["vigenteHasta"].replace("Z", "+00:00"))
+            for fuente in contenido["fuentes"]
+        ),
+    )
     return dict(
         ofertaId=str(oferta.oferta_socio_id),
         operationId=str(oferta.operation_id),
@@ -133,9 +284,9 @@ def _oferta_a_json(oferta: OfertaSocio) -> dict[str, object]:
         productoId=oferta.producto_id,
         solicitudId=oferta.solicitud_id,
         cotizacionId=str(oferta.cotizacion_id),
-        estado="vigente" if oferta.vigente_hasta > datetime.now(UTC) else "vencida",
+        estado="vigente" if limite > datetime.now(UTC) else "vencida",
         calculadaEn=_iso(oferta.calculada_en),
-        vigenteHasta=_iso(oferta.vigente_hasta),
+        vigenteHasta=_iso(limite),
         decision=contenido["decision"],
         riesgo=contenido["riesgo"],
         fuentes=contenido["fuentes"],
@@ -150,6 +301,7 @@ def _iso(fecha: datetime) -> str:
 
 
 def _a_json(operacion: OperacionSocio) -> dict[str, object]:
+    historia = _historia(operacion)
     oferta = (
         operacion.oferta_hipotecaria.contenido
         if operacion.oferta_hipotecaria is not None
@@ -161,11 +313,13 @@ def _a_json(operacion: OperacionSocio) -> dict[str, object]:
         clienteId=str(operacion.cliente_id),
         productoId=operacion.producto_id,
         estado="completada",
+        estadoSolicitud=historia.estado,
         perfilamientoReferencia=operacion.perfilamiento_referencia,
         solicitudId=operacion.solicitud_id,
         cotizacionId=str(operacion.cotizacion_id),
         recibidaEn=operacion.creada_en.isoformat().replace("+00:00", "Z"),
         oferta=oferta,
+        estadoSeleccion=estado_seleccion_a_json(historia.estado_seleccion),
     )
 
 

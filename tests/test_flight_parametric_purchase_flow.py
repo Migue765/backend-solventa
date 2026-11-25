@@ -2,9 +2,10 @@
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from threading import Thread
+from typing import Self
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from bff_web.infrastructure.http_quote_gateway import HttpQuoteGateway
+from cryptography.hazmat.primitives.asymmetric import rsa
 from siniestros.app import create_app
 from siniestros.domain import Config
 from siniestros.infrastructure import pagos_parametricos, parametricos, vuelos
@@ -26,6 +28,7 @@ from tests.test_dashboard_flow import (
     INTERNAL_TOKEN,
     ROOT,
     USER,
+    Runtime,
     bearer,
     create_paid_request,
     sign_token,
@@ -41,9 +44,9 @@ SOURCE_HEADERS = {"Authorization": "Bearer flight-source-test", "X-Fuente-ID": v
 
 
 def test_purchase_flight_contract_drives_two_confirmed_indemnities_once(
-    policy_runtime,
-    keypair,
-    token,
+    policy_runtime: Runtime,
+    keypair: rsa.RSAPrivateKey,
+    token: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -93,8 +96,8 @@ def test_purchase_flight_contract_drives_two_confirmed_indemnities_once(
 
     class TestClock(datetime):
         @classmethod
-        def now(cls, tz=None):
-            return occurred + timedelta(minutes=1)
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return cls.fromtimestamp((occurred + timedelta(minutes=1)).timestamp(), tz)
 
     monkeypatch.setattr(vuelos, "datetime", TestClock)
     monkeypatch.setattr(parametricos, "datetime", TestClock)
@@ -260,8 +263,10 @@ def test_purchase_flight_contract_drives_two_confirmed_indemnities_once(
         assert paid_policy["estado"] == "programada"
         assert {p["suscripcionId"] for p in dashboard["polizas"]} >= {subscription1["id"]}
         assert subscription2["id"] not in {p["suscripcionId"] for p in dashboard["polizas"]}
-        assert premium1["importe"]["monto"] != "1725000.00"
-        assert premium2["importe"]["monto"] != "1950000.00"
+        for premium, indemnity in ((premium1, "1725000.00"), (premium2, "1950000.00")):
+            premium_amount = premium["importe"]
+            assert isinstance(premium_amount, dict)
+            assert premium_amount["monto"] != indemnity
         unauthenticated = api.get("/v1/indemnizaciones")
         assert unauthenticated.status_code == 401
     finally:

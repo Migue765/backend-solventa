@@ -488,7 +488,7 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente, asesor, socio]
+          enum: [cliente, asesor, socio, administrador]
         socios:
           type: array
           uniqueItems: true
@@ -614,7 +614,7 @@ components:
           description: Vida del refresh token en segundos (web 28800, movil 2592000).
         scope:
           type: string
-          enum: [cliente, asesor, socio]
+          enum: [cliente, asesor, socio, administrador]
         usuario:
           $ref: "#/components/schemas/Usuario"
     SolicitudRevocacion:

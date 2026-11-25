@@ -34,6 +34,7 @@ from cotizacion.infrastructure.persistence.models import (
     IntentoPagoSimuladoModel,
     OutboxEventoModel,
     PagoSimuladoModel,
+    RechazoSolicitudModel,
     SagaEmisionModel,
     SeleccionOfertaModel,
     SeleccionProvisionalModel,
@@ -518,6 +519,8 @@ def _bloquear_seleccion(sesion: Session, seleccion: SeleccionOferta, cliente_id:
     )
     if vigencia is None:
         raise SolicitudNoEncontradaError()
+    if sesion.get(RechazoSolicitudModel, seleccion.cotizacion_id) is not None:
+        raise SeleccionNoModificableError()
     return _fecha_seleccion(vigencia)
 
 

@@ -210,6 +210,34 @@ def create_app(config: Config | None = None, fraude: ConfiguracionFraude | None 
         empty()
         return jsonify(decisiones.consultar(siniestro_id))
 
+    def reviewer() -> str:
+        try:
+            return str(UUID(request.headers.get("X-Revisor-ID", "")))
+        except ValueError as error:
+            raise Problem(400, "solicitud_invalida") from error
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/revision")
+    def detalle_revision(siniestro_id: UUID) -> Response:
+        empty()
+        return jsonify(repo.review_detail(str(siniestro_id), reviewer(), g.correlation_id))
+
+    @app.get("/internal/v1/siniestros/<uuid:siniestro_id>/evidencias/<uuid:evidencia_id>/contenido")
+    def contenido_revision(siniestro_id: UUID, evidencia_id: UUID) -> Response:
+        empty()
+        stream, mime, size = repo.review_content(
+            str(siniestro_id), str(evidencia_id), reviewer(), g.correlation_id
+        )
+        response = send_file(
+            stream,
+            mimetype=mime,
+            as_attachment=True,
+            download_name=str(evidencia_id),
+            conditional=False,
+            etag=False,
+        )
+        response.headers["Content-Length"] = str(size)
+        return response
+
     @app.get("/internal/v1/colas-revision/<cola>/asignaciones")
     def asignaciones_cola(cola: str) -> Response:
         empty()
