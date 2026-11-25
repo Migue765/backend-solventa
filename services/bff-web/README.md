@@ -1,5 +1,29 @@
 # BFF Web
 
+## Revision administrativa interna
+
+`/v1/administracion` expone las colas existentes de revision, inspeccion y fraude,
+el aviso original con evidencias confirmadas, el historial vigente y la resolucion
+humana de siniestros. Contrato completo:
+`contracts/openapi/administracion-siniestros-web-v1.yaml`.
+Solo acepta JWT web `rol=scope=administrador`, sin socios y con sesion `sid` activa.
+Clientes, socios y asesores no pueden usar estas rutas; el administrador no se
+convierte en un cliente ni obtiene acceso al flujo de un socio.
+
+El BFF determina `revisorId` a partir de la sesion, envia el token interno solo al
+servicio Siniestros y conserva `X-Correlation-ID` e `Idempotency-Key`. La decision
+reutiliza las transiciones, auditoria SQL e idempotencia existentes. Solo admite
+resultado y motivo del navegador; no permite suplantar revisor ni perito. Tras un
+fallo o acuse perdido, consultar decisiones y recuperar con la misma clave/cuerpo.
+Las evidencias se descargan autenticadas y con `no-store`; no se publican URLs S3.
+
+Requiere desplegar versiones compatibles de Identidad, Siniestros y BFF y coordinar
+la pantalla administrativa en la web. No agrega aprobacion de nuevas polizas,
+pagos ni despliegue automatico. El alta privada del administrador queda en Identidad.
+La regla ALB existente del BFF incorpora `/v1/administracion/*`; su actualizacion
+Terraform tambien debe revisarse y aplicarse en ese despliegue autorizado, no basta
+con publicar las imagenes. Este cambio de fuente no aplica infraestructura.
+
 ## Siniestros y evidencia compartida
 
 Las rutas `/v1/siniestros` conservan el registro web y usan el mismo servicio

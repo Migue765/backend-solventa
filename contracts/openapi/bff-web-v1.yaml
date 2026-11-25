@@ -20,6 +20,16 @@ tags:
   - name: Polizas
   - name: Reportes
 paths:
+  /v1/administracion/colas-revision/{cola}/asignaciones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1colas-revision~1{cola}~1asignaciones"
+  /v1/administracion/siniestros/{siniestroId}:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}"
+  /v1/administracion/siniestros/{siniestroId}/decisiones:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones"
+  /v1/administracion/siniestros/{siniestroId}/decisiones/revision:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1decisiones~1revision"
+  /v1/administracion/siniestros/{siniestroId}/evidencias/{evidenciaId}/contenido:
+    $ref: "./administracion-siniestros-web-v1.yaml#/paths/~1v1~1administracion~1siniestros~1{siniestroId}~1evidencias~1{evidenciaId}~1contenido"
   /v1/recuperacion-contrasena:
     $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
   /v1/recuperacion-contrasena/desafio:
@@ -4289,7 +4299,7 @@ components:
           format: email
         rol:
           type: string
-          enum: [cliente, asesor, socio]
+          enum: [cliente, asesor, socio, administrador]
         socios:
           type: array
           uniqueItems: true

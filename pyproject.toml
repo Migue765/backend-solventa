@@ -46,6 +46,7 @@ module = [
     "tests.test_parametric_acceptance_flow",
     "tests.test_simulated_identity_flow", "test_simulated_identity_flow",
     "tests.test_backend_compliance_flow", "test_backend_compliance_flow",
+    "tests.test_admin_claim_review_flow", "test_admin_claim_review_flow",
 ]
 disable_error_code = ["import-untyped"]
 
