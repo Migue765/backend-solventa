@@ -38,7 +38,12 @@ paths:
                   asignaciones:
                     type: array
                     items:
-                      $ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Asignacion"
+                      allOf:
+                        - $ref: "./siniestros-decisiones-internal-v1.yaml#/components/schemas/Asignacion"
+                        - required: [estadoSiniestro]
+                          properties:
+                            tipo: {const: cola}
+                            estado: {const: activa}
         default: {$ref: "#/components/responses/Problema"}
   /v1/administracion/siniestros/{siniestroId}:
     get:

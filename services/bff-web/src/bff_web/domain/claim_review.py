@@ -88,7 +88,7 @@ class ClaimDecisions(ReviewModel):
 
 
 class EvidenceLocation(ReviewModel):
-    consentimiento: bool
+    consentimiento: Literal[True]
     latitud: float = Field(ge=-90, le=90, allow_inf_nan=False)
     longitud: float = Field(ge=-180, le=180, allow_inf_nan=False)
     fecha: AwareDatetime
