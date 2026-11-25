@@ -579,7 +579,10 @@ def test_claims_are_routed_through_authenticated_bff_and_internal_service() -> N
     )
     routing = gateway.split('resource "aws_lb_listener_rule" "bff_web_claims" {', 1)[1]
     routing = routing.split('resource "', 1)[0]
-    assert 'values = ["/v1/siniestros", "/v1/siniestros/*"]' in routing
+    assert (
+        'values = ["/v1/siniestros", "/v1/siniestros/*", "/v1/administracion/*"]'
+        in routing
+    )
     assert "target_group_arn = aws_lb_target_group.bff_web.arn" in routing
     assert 'route_key          = "ANY /v1/{proxy+}"' in gateway
     assert 'authorization_type = "JWT"' in gateway
