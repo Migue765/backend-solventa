@@ -286,8 +286,16 @@ un tipo sin validador o un valor vacio impide arrancar. Nuevos fragmentos y conf
 pendientes vuelven a verificar la politica actual; las evidencias ya confirmadas se conservan.
 
 Formatos soportados: JPEG, PNG, PDF y MP4. Pillow verifica y decodifica fotos
-(una imagen, hasta 40 millones de pixeles); pypdf exige PDF legible no cifrado,
-sin archivos adjuntos y de 1 a 500 paginas; PyAV exige MP4 con una pista de video decodificable, hasta
+(una imagen, hasta 40 millones de pixeles); pypdf exige PDF no cifrado legible,
+sin archivos adjuntos y de 1 a 500 paginas. Los PDF cifrados se admiten sin pedir
+clave como adjuntos opacos: se comprueban cabecera, estructura de referencias
+y catalogo referenciado, pero no se inspeccionan paginas, adjuntos ni metadatos
+cifrados y no se afirma que esten libres de contenido geografico. La aceptacion
+opaca se registra en el log; el archivo se conserva sin descifrar ni transformar.
+El extra `pypdf[crypto]` permite procesar tambien envolturas AES.
+Todos los formatos conservan los limites de bytes/cantidad, SHA-256,
+ownership y descarga privada como adjunto con `nosniff`.
+PyAV exige MP4 con una pista de video decodificable, hasta
 3840x2160 y un presupuesto de 60 cuadros por segundo de duracion maxima.
 No se ejecutan binarios CLI descargados ni servicios externos de analisis.
 Estos controles no sustituyen un antivirus ni detectan contenido geografico
@@ -298,7 +306,8 @@ lo registra el servidor. `ubicacion` requiere consentimiento booleano `true`,
 coordenadas en rango y `fecha` ISO con zona. Fechas de captura/ubicacion futuras
 mas de cinco minutos se rechazan. El backend rechaza GPS EXIF, bloques IPTC
 Photoshop, metadatos estructurados GPS o coordenadas en PNG/XMP/PDF y GeoPDF
-sin consentimiento; las palabras aisladas en texto y localidades sin coordenadas
+sin consentimiento cuando esos metadatos son inspeccionables (no dentro de un
+PDF cifrado opaco); las palabras aisladas en texto y localidades sin coordenadas
 no se interpretan como GPS. La revision de MP4 conserva su politica anterior.
 El cliente debe quitar metadata geografica antes de calcular el hash cuando no
 tiene permiso. No se recomprime ni cambia el hash silenciosamente.

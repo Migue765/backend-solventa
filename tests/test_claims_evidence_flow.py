@@ -483,7 +483,9 @@ def test_invalid_pdf_is_rejected(runtime: dict) -> None:
 
 
 @pytest.mark.parametrize("channel", ["mobile", "web"])
-def test_protected_pdf_reject_reconcile_cancel_and_replace(runtime: dict, channel: str) -> None:
+def test_protected_pdf_confirms_without_password_and_downloads_unchanged(
+    runtime: dict, channel: str
+) -> None:
     writer = PdfWriter()
     writer.add_blank_page(width=100, height=100)
     writer.encrypt("synthetic-password")
@@ -521,14 +523,15 @@ def test_protected_pdf_reject_reconcile_cancel_and_replace(runtime: dict, channe
         return url
 
     url = create(data)
-    status, problem = call(url + "/confirmacion", "POST", token=token)
-    assert (status, problem["code"]) == (422, "formato_invalido")
-    status, upload = call(url, token=token)
-    assert status == 200 and upload["estado"] == "pendiente" and upload["offset"] == 0
-    assert upload["ultimoResultado"]["code"] == "formato_invalido"
-    assert call(url, "DELETE", token=token)[0] == 204
-    replacement = create(pdf_bytes())
-    assert call(replacement + "/confirmacion", "POST", token=token)[0] == 200
+    status, confirmed = call(url + "/confirmacion", "POST", token=token)
+    assert status == 200 and confirmed["estado"] == "confirmada"
+    assert call(url + "/confirmacion", "POST", token=token) == (200, confirmed)
+    assert call(url, token=token)[1]["offset"] == len(data)
+    download = root + "/evidencias/" + url.rsplit("/", 1)[-1] + "/contenido"
+    assert call(download, token=token) == (200, data)
+    other = runtime["users"][1]
+    other_token = other["token"] if channel == "mobile" else other["webToken"]
+    assert call(download, token=other_token)[0] == 404
 
 
 @pytest.mark.parametrize(
