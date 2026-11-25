@@ -29,8 +29,12 @@ Además de Identidad, Pólizas y `INTERNAL_API_TOKEN`, la fábrica requiere `QUO
 El contrato de Android está en `contracts/openapi/bff-movil-v1.yaml`. Bajo `/movil/v1`,
 el cliente puede consultar productos y destinos, dar o retirar consentimiento, cotizar,
 retomar solicitudes propias, seleccionar una oferta, suscribirse y consultar el resultado.
-`pago-simulado` no cobra dinero: para conocer la emisión, consultar `suscripcion` con la
-misma solicitud, sin repetir el pago. Las rutas de documentos y cancelación verifican al
+En el entorno real no se publican `GET` ni `POST` de `pago-simulado` (404). Consultar
+`GET /solicitudes-cotizacion/{solicitudId}/suscripcion` devuelve el estado registrado:
+solo `saga.estado=emitida` indica emisión. No se inicia ningún cobro con esa consulta.
+Para la demo, iniciar el BFF con `MOVIL_ENTORNO=sintetico` y con Identidad, Cotización
+y Pólizas en loopback, con datos aislados. Solo esa configuración publica `pago-simulado`.
+Las rutas de documentos y cancelación verifican al
 titular. El buzón, las asistencias y las evidencias usan sus servicios internos; no garantizan
 push, atención externa ni cobertura de una aseguradora real.
 

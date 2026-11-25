@@ -1,6 +1,7 @@
 """Operaciones de cliente compartidas con el BFF movil; no monta el portal web."""
 
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from flask import Blueprint, Flask, Response, g, jsonify, request
 from pydantic import ValidationError
@@ -28,7 +29,14 @@ from bff_web.infrastructure.jwt_verifier import JwksKeyStore, JwtVerifier, http_
 from bff_web.problems import problem_response
 
 
-def register_mobile_journey(app: Flask, config: Config) -> None:
+def register_mobile_journey(app: Flask, config: Config, *, entorno: str = "real") -> None:
+    if entorno not in {"real", "sintetico"}:
+        raise ValueError("MOVIL_ENTORNO debe ser real o sintetico.")
+    if entorno == "sintetico" and any(
+        urlsplit(url).hostname not in {"localhost", "127.0.0.1", "::1"}
+        for url in (config.identity_url, config.quote_service_url, config.policies_service_url)
+    ):
+        raise ValueError("El pago simulado requiere servicios sinteticos en loopback.")
     token = config.internal_api_token
     identity = HttpIdentityGateway(
         config.identity_url,
@@ -107,8 +115,9 @@ def register_mobile_journey(app: Flask, config: Config) -> None:
     bp.put(quote + "/seleccion")(quotes.select_offer)
     bp.post(quote + "/suscripcion")(quotes.start_subscription)
     bp.get(quote + "/suscripcion")(quotes.get_subscription)
-    bp.post(quote + "/pago-simulado")(quotes.confirm_simulated_payment)
-    bp.get(quote + "/pago-simulado")(quotes.get_simulated_payment)
+    if entorno == "sintetico":
+        bp.post(quote + "/pago-simulado")(quotes.confirm_simulated_payment)
+        bp.get(quote + "/pago-simulado")(quotes.get_simulated_payment)
     bp.get(policy + "/documento")(policy_documents.get_document)
     bp.get(policy + "/documentos/<document_id>/descarga")(policy_documents.download)
     bp.get(policy + "/cancelacion")(policy_cancellations.get_state)

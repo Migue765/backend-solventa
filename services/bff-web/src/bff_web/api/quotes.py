@@ -653,9 +653,7 @@ def confirm_simulated_payment(request_id: str) -> Response:
             "Consulta el intento existente; no inicies otro pago.",
             extensions={"pagoId": str(error.payment_id)},
         )
-        response.headers["Location"] = url_for(
-            ".get_simulated_payment", request_id=request_id
-        )
+        response.headers["Location"] = url_for(".get_simulated_payment", request_id=request_id)
         return response
     except QuoteRequestNotFoundError:
         return _not_found()

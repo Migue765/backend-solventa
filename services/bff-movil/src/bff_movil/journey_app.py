@@ -27,5 +27,5 @@ def create_app(config: Config | None = None, journey_config: JourneyConfig | Non
             internal_api_token=active.internal_api_token,
         )
     app = mobile_app(active)
-    register_mobile_journey(app, journey_config)
+    register_mobile_journey(app, journey_config, entorno=os.getenv("MOVIL_ENTORNO", "real"))
     return app

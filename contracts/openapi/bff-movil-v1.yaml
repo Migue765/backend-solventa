@@ -69,6 +69,7 @@ paths:
   /v1/solicitudes-cotizacion/{solicitudId}/suscripcion:
     $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1suscripcion"
   /v1/solicitudes-cotizacion/{solicitudId}/pago-simulado:
+    description: Solo en el entorno móvil sintético. En el entorno real esta ruta no existe (404).
     $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1pago-simulado"
   /v1/polizas/{polizaId}/documento:
     $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documento"
