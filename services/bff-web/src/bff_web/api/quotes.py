@@ -297,9 +297,10 @@ def create_request() -> tuple[Response, int] | Response:
             "Revisa los datos y la clave de idempotencia.",
         )
     try:
-        client = cast(IdentityGateway, current_app.extensions["identity_gateway"]).get_client(
-            user.user_id, str(g.correlation_id)
+        identity = current_app.extensions.get(
+            "journey_identity", current_app.extensions["identity_gateway"]
         )
+        client = cast(IdentityGateway, identity).get_client(user.user_id, str(g.correlation_id))
     except IdentityUnavailableError:
         return _unavailable()
     if client is not None and (client.user_id != user.user_id or client.role != "cliente"):
@@ -653,7 +654,7 @@ def confirm_simulated_payment(request_id: str) -> Response:
             extensions={"pagoId": str(error.payment_id)},
         )
         response.headers["Location"] = url_for(
-            "quotes.get_simulated_payment", request_id=request_id
+            ".get_simulated_payment", request_id=request_id
         )
         return response
     except QuoteRequestNotFoundError:

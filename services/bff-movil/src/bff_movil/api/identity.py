@@ -7,6 +7,7 @@ from bff_movil.domain.errors import IdentityRejectedError
 from bff_movil.problems import problem_response
 
 REJECTIONS = {
+    "recuperacion_invalida": ("Enlace no valido", "Solicita un nuevo enlace de recuperacion."),
     "verificacion_no_encontrada": ("Verificacion no encontrada", "No existe la verificacion."),
     "transicion_invalida": ("Verificacion terminal", "No se admiten mas intentos."),
     "conflicto_idempotencia": ("Intento ya utilizado", "El intentoId tiene otras referencias."),

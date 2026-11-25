@@ -21,6 +21,26 @@ App ──Bearer JWT──> API Gateway ──> bff-movil ──> identidad
 
 El prefijo `/movil` permite compartir el API Gateway con `bff-web`.
 
+La imagen ejecuta `bff_movil.journey_app:create_app()` y empaqueta los handlers de cliente
+de `bff-web` de la misma revisión, sin montar el portal. El contexto de Docker es la raíz
+del repositorio: `docker build -f services/bff-movil/Dockerfile .`.
+Además de Identidad, Pólizas y `INTERNAL_API_TOKEN`, la fábrica requiere `QUOTE_SERVICE_URL`.
+
+El contrato de Android está en `contracts/openapi/bff-movil-v1.yaml`. Bajo `/movil/v1`,
+el cliente puede consultar productos y destinos, dar o retirar consentimiento, cotizar,
+retomar solicitudes propias, seleccionar una oferta, suscribirse y consultar el resultado.
+`pago-simulado` no cobra dinero: para conocer la emisión, consultar `suscripcion` con la
+misma solicitud, sin repetir el pago. Las rutas de documentos y cancelación verifican al
+titular. El buzón, las asistencias y las evidencias usan sus servicios internos; no garantizan
+push, atención externa ni cobertura de una aseguradora real.
+
+El alta completa usa `GET /usuarios/desafio` y `POST /usuarios/registro-completo`;
+mantiene explícita la decisión de perfilamiento. El acceso conserva `POST /sesiones`.
+Para recuperación sin sesión: `POST /recuperacion-contrasena`, `GET /recuperacion-contrasena/desafio`
+y `POST /recuperacion-contrasena/confirmar`. Identidad requiere cifrado JWE y transporte de correo.
+El enlace se forma con `RECOVERY_WEB_URL` (HTTPS, con su ruta base) seguido de
+`/?recuperacion=1#token=…`; no se deduce de la URL pública del API ni de `JWT_ISSUER`.
+
 | Método   | Ruta                           | Auth   | Descripción                                        |
 | -------- | ------------------------------ | ------ | -------------------------------------------------- |
 | `POST`   | `/movil/v1/usuarios`           | No     | Registra un usuario cliente (proxy a identidad)    |

@@ -10,6 +10,7 @@ from bff_movil.api import (
     claims,
     health,
     notifications,
+    password_recovery,
     policies,
     policy_modifications,
     policy_renewals,
@@ -66,6 +67,9 @@ def create_app(
         active_config.identity_url,
         active_config.identity_timeout_seconds,
     )
+    app.extensions["recovery_gateway"] = HttpIdentityGateway(
+        active_config.identity_url, active_config.identity_timeout_seconds
+    )
     app.extensions["token_verifier"] = token_verifier or JwtVerifier(
         JwksKeyStore(
             http_jwks_fetcher(active_config.jwks_endpoint, active_config.identity_timeout_seconds)
@@ -86,6 +90,7 @@ def create_app(
     app.register_blueprint(health.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(sessions.bp)
+    app.register_blueprint(password_recovery.bp)
     app.register_blueprint(biometrics.bp)
     app.register_blueprint(claims.bp)
     app.register_blueprint(notifications.bp)
@@ -102,6 +107,9 @@ def create_app(
     @app.after_request
     def include_correlation_id(response: Response) -> Response:
         response.headers["X-Correlation-ID"] = str(g.correlation_id)
+        if request.path.startswith("/movil" + password_recovery.BASE):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         if request.path.startswith(
             ("/movil/v1/biometria/", "/movil/v1/verificaciones-identidad")
         ) or (request.path == "/movil/v1/sesiones/biometria"):

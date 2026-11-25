@@ -1,7 +1,7 @@
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from uuid import UUID
 
 from bff_movil.domain.auth import CHANNEL, TokenSet, User
@@ -10,6 +10,7 @@ from bff_movil.domain.errors import IdentityRejectedError, IdentityUnavailableEr
 KNOWN_REJECTIONS = frozenset(
     {
         "solicitud_invalida",
+        "recuperacion_invalida",
         "credenciales_invalidas",
         "refresh_invalido",
         "correo_ya_registrado",
@@ -23,6 +24,13 @@ KNOWN_REJECTIONS = frozenset(
     }
 )
 DEFAULT_RETRY_AFTER = 60
+
+
+class _NoRecoveryRedirects(HTTPRedirectHandler):
+    def redirect_request(
+        self, req: Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        return None
 
 
 class HttpIdentityGateway:
@@ -82,6 +90,25 @@ class HttpIdentityGateway:
     def _post(self, path: str, body: dict[str, object], correlation_id: str) -> dict[str, Any]:
         return self._request("POST", path, body, None, correlation_id)
 
+    def recovery_request(
+        self,
+        path: str,
+        body: dict[str, object] | None,
+        internal_token: str,
+        correlation_id: str,
+        client_ip: str,
+        status: int,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST" if body is not None else "GET",
+            path,
+            body,
+            internal_token,
+            correlation_id,
+            status,
+            client_ip=client_ip,
+        )
+
     def biometric_login(self, proof: dict[str, object], correlation_id: str) -> TokenSet:
         payload = self._request(
             "POST",
@@ -118,6 +145,8 @@ class HttpIdentityGateway:
         bearer: str | None,
         correlation_id: str,
         expected_status: int | None = None,
+        *,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
@@ -126,6 +155,8 @@ class HttpIdentityGateway:
         }
         if bearer is not None:
             headers["Authorization"] = f"Bearer {bearer}"
+        if client_ip is not None:
+            headers["X-Recovery-Client-IP"] = client_ip
         request = Request(
             f"{self._base_url}{path}",
             data=json.dumps(body).encode("utf-8") if body is not None else None,
@@ -133,7 +164,9 @@ class HttpIdentityGateway:
             headers=headers,
         )
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:  # noqa: S310
+            # El bearer interno no debe salir del servicio de Identidad.
+            open_request = build_opener(_NoRecoveryRedirects).open if client_ip else urlopen
+            with open_request(request, timeout=self._timeout_seconds) as response:
                 if expected_status is not None and response.status != expected_status:
                     raise IdentityUnavailableError()
                 # urllib suppresses a 204 body, so reject its framing before reading.
@@ -144,6 +177,8 @@ class HttpIdentityGateway:
                     raise IdentityUnavailableError()
                 raw = response.read()
         except HTTPError as error:
+            if client_ip and 300 <= error.code < 400:
+                raise IdentityUnavailableError() from error
             raise _rejection_from(error) from error
         except (URLError, OSError, TimeoutError) as error:
             raise IdentityUnavailableError() from error

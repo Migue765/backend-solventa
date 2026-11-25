@@ -11,9 +11,73 @@ tags:
   - name: Notificaciones
   - name: Polizas
   - name: Asistencias
-  - name: Polizas
   - name: Renovaciones
 paths:
+  /v1/recuperacion-contrasena:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena"
+  /v1/recuperacion-contrasena/desafio:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1desafio"
+  /v1/recuperacion-contrasena/confirmar:
+    $ref: "./recuperacion-contrasena-v1.yaml#/paths/~1v1~1recuperacion-contrasena~1confirmar"
+  /v1/consentimientos/perfilamiento:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1consentimientos~1perfilamiento"
+  /v1/productos-seguro:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1productos-seguro"
+  /v1/productos-seguro/{productoId}:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1productos-seguro~1{productoId}"
+  /v1/destinos-viaje:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1destinos-viaje"
+  /v1/solicitudes-cotizacion:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion"
+  /v1/solicitudes-cotizacion/en-curso:
+    get:
+      operationId: listarSolicitudesPropiasEnCurso
+      summary: Solicitudes del titular que se pueden retomar o conciliar
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sin solicitudes reanudables se devuelve una lista vacía.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [solicitudes]
+                properties:
+                  solicitudes:
+                    type: array
+                    items:
+                      type: object
+                      required: [solicitudId, productoId, creadaEn, validaHasta]
+                      properties:
+                        solicitudId: {type: string}
+                        productoId: {type: string}
+                        creadaEn: {type: string, format: date-time}
+                        validaHasta: {type: string, format: date-time}
+        "400": {description: No admite parámetros ni cuerpo.}
+        "401": {description: Sesión móvil inválida.}
+        "403": {description: Requiere titular con alcance cliente.}
+        "503": {description: No se pudo consultar el estado.}
+  /v1/solicitudes-cotizacion/{solicitudId}:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}"
+  /v1/solicitudes-cotizacion/{solicitudId}/ofertas:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1ofertas"
+  /v1/solicitudes-cotizacion/{solicitudId}/seleccion-provisional:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1seleccion-provisional"
+  /v1/solicitudes-cotizacion/{solicitudId}/seleccion:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1seleccion"
+  /v1/solicitudes-cotizacion/{solicitudId}/suscripcion:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1suscripcion"
+  /v1/solicitudes-cotizacion/{solicitudId}/pago-simulado:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1solicitudes-cotizacion~1{solicitudId}~1pago-simulado"
+  /v1/polizas/{polizaId}/documento:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documento"
+  /v1/polizas/{polizaId}/documentos/{documentoId}/descarga:
+    $ref: "./documento-poliza-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1documentos~1{documentoId}~1descarga"
+  /v1/polizas/{polizaId}/cancelacion:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1cancelacion"
+  /v1/polizas/{polizaId}/cancelaciones:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1clientes~1me~1polizas~1{polizaId}~1cancelaciones"
   /v1/verificaciones-identidad:
     $ref: "./identidad-simulada-v1.yaml#/paths/~1verificaciones-identidad"
   /v1/verificaciones-identidad/{verificacionId}:
@@ -143,6 +207,8 @@ paths:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1configuracion-evidencias"
   /v1/siniestros/{siniestroId}:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}"
+  /v1/siniestros/{siniestroId}/estado:
+    $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1estado"
   /v1/siniestros/{siniestroId}/cargas:
     $ref: "./siniestros-v1.yaml#/paths/~1siniestros~1{siniestroId}~1cargas"
   /v1/siniestros/{siniestroId}/cargas/{cargaId}:
@@ -224,6 +290,29 @@ paths:
           $ref: "#/components/responses/PolizaNoEncontrada"
         "503":
           $ref: "#/components/responses/ServicioNoDisponible"
+  /v1/usuarios/desafio:
+    $ref: "./bff-web-v1.yaml#/paths/~1v1~1usuarios~1desafio"
+  /v1/usuarios/registro-completo:
+    post:
+      operationId: registrarClienteMovilCompleto
+      summary: Alta de cliente con datos maestros y contraseña cifrada
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./bff-web-v1.yaml#/components/schemas/NuevoUsuarioCifrado"
+      responses:
+        "201":
+          description: Cliente creado; no emite tokens de sesión.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsuarioCreado"}
+        "400": {$ref: "#/components/responses/SolicitudInvalida"}
+        "409": {$ref: "#/components/responses/Conflicto"}
+        "429": {$ref: "#/components/responses/DemasiadasSolicitudes"}
+        "503": {$ref: "#/components/responses/ServicioNoDisponible"}
   /v1/usuarios:
     post:
       tags: [Usuarios]
@@ -560,7 +649,7 @@ components:
               type: string
         estado:
           type: string
-          enum: [programada, vigente, vencida]
+          enum: [programada, vigente, vencida, cancelada]
         vigencia:
           type: object
           additionalProperties: false

@@ -14,6 +14,8 @@ import fakeredis
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from bff_movil.app import create_app as create_mobile
+from bff_movil.config import Config as MobileConfig
 from bff_web.app import create_app as create_web
 from bff_web.config import Config as WebConfig
 from botocore.stub import Stubber
@@ -75,6 +77,7 @@ class Flow:
     clock: Clock
     mail: RecordingMail
     sessions: sessionmaker[Session]
+    mobile: Flask
 
 
 @pytest.fixture
@@ -126,7 +129,14 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Flow]:
         )
     )
     try:
-        yield Flow(identity, web, clock, mail, sessionmaker(bind=engine))
+        mobile = create_mobile(
+            MobileConfig(
+                identity_url=f"http://127.0.0.1:{server.server_port}",
+                jwt_issuer="https://recovery.solventa.test",
+                internal_api_token="test-internal-recovery",
+            )
+        )
+        yield Flow(identity, web, clock, mail, sessionmaker(bind=engine), mobile)
     finally:
         server.shutdown()
         server.server_close()
@@ -158,6 +168,39 @@ def request_token(flow: Flow) -> str:
     assert token not in json.dumps(response.get_json())
     assert len(token) == 64
     return token
+
+
+def test_mobile_recovery_with_real_identity(flow: Flow) -> None:
+    client = flow.mobile.test_client()
+    base = "/movil" + BASE
+    missing = client.post(base, json={"correo": "nobody@example.com"})
+    accepted = client.post(base, json={"correo": EMAIL})
+    assert accepted.status_code == missing.status_code == 202
+    assert accepted.json == missing.json and set(accepted.get_json()) == {"mensaje"}
+    token = flow.mail.messages[-1][1]
+    assert (
+        client.post(
+            base + "/confirmar", json={"token": token, "contrasena": NEW_PASSWORD}
+        ).status_code
+        == 400
+    )
+    for status in (204, 400):
+        challenge = client.get(base + "/desafio")
+        assert challenge.status_code == 200 and challenge.headers["Cache-Control"] == "no-store"
+        envelope = encrypt(challenge.get_json(), {"token": token, "contrasena": NEW_PASSWORD})
+        result = client.post(
+            base + "/confirmar", json={"token": token, "credencialCifrada": envelope}
+        )
+        assert result.status_code == status and result.headers["Cache-Control"] == "no-store"
+        if status == 400:
+            assert result.get_json()["code"] == "recuperacion_invalida"
+    for password, expected in ((NEW_PASSWORD, 200), (OLD_PASSWORD, 401)):
+        assert (
+            client.post(
+                "/movil/v1/sesiones", json={"correo": EMAIL, "contrasena": password}
+            ).status_code
+            == expected
+        )
 
 
 def confirm_body(flow: Flow, token: str, password: str = NEW_PASSWORD) -> dict[str, object]:
