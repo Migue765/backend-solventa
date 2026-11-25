@@ -142,9 +142,25 @@ def test_purchase_flight_contract_drives_two_confirmed_indemnities_once(
         route = "/v1/backoffice/eventos-vuelo-simulados"
         assert client.post(route, json=public_event).status_code == 401
         assert client.post(route, headers=bearer(token), json=public_event).status_code == 403
-        advisor = sign_token(
-            keypair, replace(USER, role="asesor", partner_ids=("sintetico",)), scope="asesor"
+        advisor_user = replace(
+            USER, role="asesor", partner_ids=(), permissions=("siniestros:revisar",)
         )
+        without_session = sign_token(keypair, advisor_user, scope="asesor")
+        assert (
+            client.post(route, headers=bearer(without_session), json=public_event).status_code
+            == 403
+        )
+        without_permission = sign_token(
+            keypair,
+            replace(advisor_user, permissions=()),
+            scope="asesor",
+            session_id=uuid4(),
+        )
+        assert (
+            client.post(route, headers=bearer(without_permission), json=public_event).status_code
+            == 403
+        )
+        advisor = sign_token(keypair, advisor_user, scope="asesor", session_id=uuid4())
         future = deepcopy(event)
         future["ocurridoEn"] = (occurred + timedelta(minutes=2)).isoformat()
         assert (

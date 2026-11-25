@@ -7,16 +7,16 @@ from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
+from bff_web.api.client_information import _controlled_error as information_error
 from bff_web.api.security import (
     audit_rejected_response,
-    authenticate,
-    bearer_token,
-    invalid_session_response,
+    partner_claims,
 )
+from bff_web.application.client_information_ports import ClientInformationGateway
 from bff_web.application.mortgage_ports import MortgageProfilingGateway
 from bff_web.application.ports import IdentityGateway
-from bff_web.domain.auth import AccessClaims, User
-from bff_web.domain.errors import InvalidAccessTokenError
+from bff_web.domain.auth import User
+from bff_web.domain.client_information import ClientInformationError
 from bff_web.domain.mortgage_profiling import (
     MortgageClient,
     MortgageCredit,
@@ -56,24 +56,16 @@ class StartPayload(_Payload):
     credit: CreditPayload = Field(alias="credito")
     consent_id: UUID = Field(alias="consentimientoId")
     consent_version: int = Field(alias="consentimientoVersion", ge=1)
+    information_operation_id: UUID = Field(alias="consultaInformacionId")
 
 
 @bp.get("/asesor/clientes")
 def list_clients() -> Response:
-    claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
-    gateway = cast(IdentityGateway, current_app.extensions["identity_gateway"])
-    clients = gateway.list_clients(str(g.correlation_id))
-    response = jsonify(
-        clientes=[
-            {
-                "clienteId": str(client.user_id),
-                "nombre": client.name,
-                "correo": client.email,
-            }
-            for client in clients
-        ]
+    response = problem_response(
+        403,
+        "catalogo_clientes_no_autorizado",
+        "Acceso denegado",
+        "Usa la consulta exacta y consentida de informacion del cliente para el socio.",
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -81,9 +73,9 @@ def list_clients() -> Response:
 
 @bp.post("/perfilamientos-hipotecarios")
 def start() -> tuple[Response, int] | Response:
-    claims = _advisor_claims()
-    if claims is None:
-        return invalid_session_response()
+    claims = partner_claims()
+    if isinstance(claims, Response):
+        return claims
     if request.headers.get("API-Version", "1") != "1":
         return problem_response(
             400, "version_no_soportada", "Version no soportada", "Usa la version 1 de la API."
@@ -103,6 +95,30 @@ def start() -> tuple[Response, int] | Response:
             "La cuenta no esta autorizada para operar en este socio.",
         )
     g.audit_partner_id = payload.partner_id
+    information = cast(
+        ClientInformationGateway, current_app.extensions["client_information_gateway"]
+    )
+    try:
+        authorized = information.recover(
+            payload.partner_id, payload.information_operation_id, str(g.correlation_id)
+        )
+    except ClientInformationError as error:
+        return information_error(error)
+    if (
+        authorized.operation_id != payload.information_operation_id
+        or authorized.partner_id != payload.partner_id
+        or authorized.actor_id != claims.user.user_id
+        or authorized.client_id != payload.client.client_id
+        or authorized.product_id != payload.product_id
+        or authorized.consent_id != payload.consent_id
+        or authorized.consent_version != payload.consent_version
+    ):
+        return problem_response(
+            403,
+            "cliente_no_autorizado",
+            "Acceso denegado",
+            "La consulta consentida no corresponde al actor, socio, cliente o consentimiento.",
+        )
     identity = cast(IdentityGateway, current_app.extensions["identity_gateway"])
     selected = identity.get_client(payload.client.client_id, str(g.correlation_id))
     if selected is None:
@@ -112,6 +128,11 @@ def start() -> tuple[Response, int] | Response:
             "Cliente no encontrado",
             "Selecciona un cliente registrado.",
         )
+    if (
+        selected.document_type != payload.client.document_type
+        or selected.identification != payload.client.identification
+    ):
+        return _invalid_request()
     command = _command(payload, claims.user, selected)
     gateway = cast(
         MortgageProfilingGateway,
@@ -127,26 +148,11 @@ def start() -> tuple[Response, int] | Response:
     return response, 201
 
 
-def _advisor_claims() -> AccessClaims | None:
-    try:
-        claims = authenticate()
-    except InvalidAccessTokenError:
-        g.audit_rejection_reason = (
-            "credencial_ausente" if bearer_token() is None else "credencial_invalida"
-        )
-        return None
-    if claims.scope != "asesor" or claims.user.role != "asesor":
-        g.audit_rejection_reason = "alcance_insuficiente"
-        return None
-    g.audit_actor_id = str(claims.user.user_id)
-    return claims
-
-
-def _command(payload: StartPayload, advisor: User, client: User) -> MortgageProfilingCommand:
+def _command(payload: StartPayload, actor: User, client: User) -> MortgageProfilingCommand:
     return MortgageProfilingCommand(
         operation_id=payload.operation_id,
         partner_id=payload.partner_id,
-        advisor_id=advisor.user_id,
+        advisor_id=actor.user_id,
         client=MortgageClient(
             client_id=client.user_id,
             document_type=payload.client.document_type,

@@ -189,6 +189,7 @@ def create_app(
     app.register_blueprint(claims.bp)
     app.register_blueprint(claim_status.bp)
     app.register_blueprint(claim_reviews.bp)
+    app.register_blueprint(claim_reviews.bp, url_prefix="/v1/asesor", name="advisor_claim_reviews")
     app.register_blueprint(policy_renewals.bp)
     app.register_blueprint(policy_modifications.bp)
     app.register_blueprint(policy_cancellations.bp)

@@ -112,6 +112,16 @@ def test_hu44_producer_decision_application_and_requester_over_http(
             actors: dict[str, dict[str, str]] = {}
             for role, command in (("socio", "create-partner-user"), ("asesor", "create-advisor")):
                 email = f"{role}-{uuid4().hex}@example.com"
+                actor_options = (
+                    [
+                        "--partner-id",
+                        partner_id,
+                        "--partner-name",
+                        "Socio sintetico HU44",
+                    ]
+                    if role == "socio"
+                    else ["--permission", f"open_finance:resolver:{partner_id}"]
+                )
                 created = (
                     stack.apps["identity"]
                     .test_cli_runner()
@@ -124,10 +134,7 @@ def test_hu44_producer_decision_application_and_requester_over_http(
                             email,
                             "--password",
                             password,
-                            "--partner-id",
-                            partner_id,
-                            "--partner-name",
-                            "Socio sintetico HU44",
+                            *actor_options,
                         ]
                     )
                 )

@@ -327,6 +327,11 @@ def _mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
 def _user_from_json(data: dict[str, Any]) -> User:
     try:
         partners = data.get("socios", [])
+        permissions = data.get("permisos", [])
+        if not isinstance(permissions, list) or not all(
+            isinstance(value, str) and value for value in permissions
+        ):
+            raise ValueError("permisos invalidos")
         if not isinstance(partners, list) or not all(isinstance(value, str) for value in partners):
             raise ValueError("socios invalidos")
         document_type = data.get("tipoDocumento")
@@ -343,6 +348,7 @@ def _user_from_json(data: dict[str, Any]) -> User:
             phone=_optional_phone(data.get("telefono")),
             birth_date=_optional_date(data.get("fechaNacimiento")),
             partner_ids=tuple(partners),
+            permissions=tuple(permissions),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise IdentityUnavailableError() from error

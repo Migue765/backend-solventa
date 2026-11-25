@@ -7,7 +7,7 @@ from uuid import UUID
 from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
 from pydantic import ValidationError
 
-from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.api.security import authenticate, internal_authorized, invalid_session_response
 from bff_web.domain.claim_review import ClaimReviewError, ReviewInput, ReviewQueue
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.infrastructure.http_claim_review_gateway import HttpClaimReviewGateway
@@ -22,9 +22,12 @@ def authorize() -> Response | None:
         claims = authenticate()
     except InvalidAccessTokenError:
         return invalid_session_response()
-    if claims.user.role != "administrador" or claims.scope != "administrador":
+    if not internal_authorized(claims, "siniestros:revisar", admin=True):
         return problem_response(
-            403, "alcance_insuficiente", "Acceso denegado", "Requiere administrador de Solventa."
+            403,
+            "alcance_insuficiente",
+            "Acceso denegado",
+            "Requiere personal de revision autorizado.",
         )
     if claims.session_id is None or claims.user.partner_ids:
         return invalid_session_response()

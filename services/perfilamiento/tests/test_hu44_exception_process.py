@@ -176,9 +176,19 @@ def test_historical_boolean_does_not_authorize_application(
         headers={"Authorization": TOKEN},
     ).get_json()
     assert detail["proceso"] is None and detail["aplicacion"] is None
-    result = client.post(
+    unauthorized = client.post(
         f"/v1/excepciones-open-finance/{exception_id}/aplicar?socioId=BANCO-HU44",
         headers={"Authorization": TOKEN, "X-Actor-ID": str(uuid4())},
+        json={},
+    )
+    assert unauthorized.status_code == 403
+    assert unauthorized.get_json()["error"] == "actor_no_autorizado"
+    result = client.post(
+        f"/v1/excepciones-open-finance/{exception_id}/aplicar?socioId=BANCO-HU44",
+        headers={
+            "Authorization": TOKEN,
+            "X-Actor-ID": str(app.extensions["test_authorizations"].advisor),
+        },
         json={},
     )
     assert result.status_code == 409

@@ -70,7 +70,9 @@ def headers(keypair: rsa.RSAPrivateKey, key: str | None = None) -> dict[str, str
     claims = jwt.decode(
         sign_token(keypair, ADVISOR, scope="asesor"), options={"verify_signature": False}
     )
-    claims["socios"] = ["SOCIO-ACADEMICO"]
+    claims["socios"] = []
+    claims["permisos"] = ["reportes:operativos"]
+    claims["sid"] = str(uuid4())
     token = jwt.encode(claims, keypair, algorithm="RS256", headers={"kid": "dashboard-test"})
     result = {"Authorization": "Bearer " + token}
     if key:

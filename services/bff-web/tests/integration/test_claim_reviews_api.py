@@ -2,10 +2,10 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from bff_web.domain.claim_review import ClaimReviewError
+from bff_web.domain.claim_review import ClaimReviewError, ReviewAssignments
 from bff_web.infrastructure.http_claim_review_gateway import HttpClaimReviewGateway
 from flask import Flask
-from support import KeyPair, sign_token
+from support import USER, KeyPair, sign_token
 
 QUEUE = "/v1/administracion/colas-revision/revision/asignaciones"
 
@@ -98,3 +98,54 @@ def test_dependencia_caida_no_devuelve_cola_vacia(app: Flask, keypair: KeyPair) 
     assert "asignaciones" not in response.get_json()
     assert response.headers["Retry-After"] == "5"
     assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("prefix", ["/v1/asesor", "/v1/administracion"])
+def test_asesor_interno_explicito_reutiliza_revision_y_actor(
+    app: Flask, keypair: KeyPair, prefix: str
+) -> None:
+    gateway = Mock(spec=HttpClaimReviewGateway)
+    gateway.assignments.return_value = ReviewAssignments(
+        tipo="cola", destino="revision", asignaciones=[]
+    )
+    app.extensions["claim_review_gateway"] = gateway
+    token = sign_token(
+        keypair,
+        rol="asesor",
+        scope="asesor",
+        socios=[],
+        sid=str(uuid4()),
+        permisos=["siniestros:revisar"],
+    )
+    response = app.test_client().get(
+        prefix + "/colas-revision/revision/asignaciones",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert gateway.assignments.call_count == 1
+    assert gateway.assignments.call_args.args[1] == USER.user_id
+
+
+@pytest.mark.parametrize(
+    "partners,permissions",
+    [([], []), (["BANCO"], ["siniestros:revisar"]), ([], ["reportes:operativos"])],
+)
+def test_no_eleva_asesores_historicos_o_sin_capacidad(
+    app: Flask, keypair: KeyPair, partners: list[str], permissions: list[str]
+) -> None:
+    gateway = Mock(spec=HttpClaimReviewGateway)
+    app.extensions["claim_review_gateway"] = gateway
+    token = sign_token(
+        keypair,
+        rol="asesor",
+        scope="asesor",
+        socios=partners,
+        sid=str(uuid4()),
+        permisos=permissions,
+    )
+    response = app.test_client().get(
+        "/v1/asesor/colas-revision/revision/asignaciones",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert gateway.mock_calls == []

@@ -10,7 +10,7 @@ from uuid import UUID
 from flask import Blueprint, Response, current_app, g, jsonify, request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
-from bff_web.api.security import authenticate, invalid_session_response
+from bff_web.api.security import authenticate, internal_authorized, invalid_session_response
 from bff_web.config import Config
 from bff_web.domain.errors import InvalidAccessTokenError
 from bff_web.problems import problem_response
@@ -36,7 +36,7 @@ def receive() -> Response:
         claims = authenticate()
     except InvalidAccessTokenError:
         return invalid_session_response()
-    if claims.user.role != "asesor" or claims.scope != "asesor":
+    if not internal_authorized(claims, "siniestros:revisar"):
         return problem_response(
             403, "alcance_insuficiente", "Acceso denegado", "Se requiere un asesor autorizado."
         )

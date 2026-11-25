@@ -32,7 +32,7 @@ bp = Blueprint("compliance", __name__)
 @bp.before_request
 def authorize() -> Response | None:
     request.max_content_length = 2048
-    return _authorize()
+    return _authorize(admin=False)
 
 
 @bp.after_request

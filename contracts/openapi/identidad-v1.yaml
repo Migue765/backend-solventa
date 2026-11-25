@@ -41,8 +41,11 @@ paths:
     get:
       tags: [Asesores]
       operationId: consultarAutorizacionActualSocio
-      summary: Comprueba rol y pertenencia activa actuales para reanudar HU44
-      description: Lectura interna sin conceder permisos ni devolver otras pertenencias.
+      summary: Comprueba autorizacion actual de socio comercial o riesgo interno
+      description: >-
+        Para rol socio verifica usuarios_socios y organizacion activa. Para asesor exige
+        cuenta interna sin membresias comerciales, permiso exacto open_finance:resolver:{socioId}
+        y organizacion activa. No concede permisos ni devuelve otras pertenencias.
       security:
         - TokenInterno: []
       parameters:
@@ -492,9 +495,15 @@ components:
         socios:
           type: array
           uniqueItems: true
-          description: Socios activos autorizados; presente para rol asesor o socio.
+          description: Socios comerciales activos; asesor interno lleva lista vacia.
           items:
             type: string
+        permisos:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+          description: Capacidades internas explicitas; presente cuando la cuenta tiene permisos.
         tipoDocumento:
           type: string
           enum: [cc, ce, passport, ppt]

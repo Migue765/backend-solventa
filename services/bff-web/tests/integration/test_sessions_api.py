@@ -1,6 +1,9 @@
+from dataclasses import replace
 from typing import Any
+from uuid import uuid4
 
 import pytest
+from bff_web.domain.auth import TokenSet
 from bff_web.domain.errors import IdentityUnavailableError
 from flask import Flask
 from support import (
@@ -50,6 +53,49 @@ def test_login_returns_tokens_without_cookies(app: Flask, identity: FakeIdentity
     assert "Set-Cookie" not in response.headers
     assert response.headers["X-Correlation-ID"] == CID
     assert identity.calls == [("login", ("ana@solventa.co", "Solventa123!", CID))]
+
+
+def test_internal_permissions_are_returned_in_login_refresh_and_current_session(
+    app: Flask, identity: FakeIdentity, keypair: KeyPair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = replace(USER, role="asesor", permissions=("siniestros:revisar",))
+    token = sign_token(
+        keypair,
+        user=user,
+        scope="asesor",
+        socios=[],
+        permisos=list(user.permissions),
+        sid=str(uuid4()),
+    )
+    monkeypatch.setattr(
+        identity, "_tokens", lambda: TokenSet(token, "refresh-opaque", 3600, 28800, user)
+    )
+    client = app.test_client()
+    responses = [
+        client.post("/v1/sesiones", json=CREDENTIALS),
+        client.post("/v1/sesiones/renovar", json={"refreshToken": "refresh-opaque"}),
+        client.get("/v1/sesiones/actual", headers=bearer(token)),
+    ]
+    for response in responses:
+        assert response.status_code == 200
+        assert response.get_json()["usuario"]["permisos"] == ["siniestros:revisar"]
+        assert response.get_json()["usuario"]["socios"] == []
+
+
+@pytest.mark.parametrize("permissions", ["siniestros:revisar", [True], [{}]])
+def test_malformed_permissions_are_not_accepted_as_claims(
+    app: Flask, keypair: KeyPair, permissions: object
+) -> None:
+    token = sign_token(
+        keypair,
+        rol="asesor",
+        scope="asesor",
+        socios=[],
+        permisos=permissions,
+        sid=str(uuid4()),
+    )
+    response = app.test_client().get("/v1/sesiones/actual", headers=bearer(token))
+    assert response.status_code == 401
 
 
 def test_expiration_comes_from_the_value_identity_returns(

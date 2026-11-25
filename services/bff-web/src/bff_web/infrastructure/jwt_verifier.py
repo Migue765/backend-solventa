@@ -124,10 +124,13 @@ class JwtVerifier:
             role = str(claims["rol"])
             scope = str(claims.get("scope", ""))
             partners_claim = claims.get("socios", [])
+            permissions = claims.get("permisos", [])
             if (
                 not isinstance(partners_claim, list)
                 or not all(isinstance(partner, str) and partner for partner in partners_claim)
-                or (role == "asesor" and (scope != "asesor" or not partners_claim))
+                or not isinstance(permissions, list)
+                or not all(isinstance(permission, str) and permission for permission in permissions)
+                or (role == "asesor" and scope != "asesor")
                 or (
                     role == "administrador"
                     and (scope != "administrador" or partners_claim or session_id is None)
@@ -141,6 +144,7 @@ class JwtVerifier:
                     str(claims["correo"]),
                     role,
                     partner_ids=tuple(partners_claim),
+                    permissions=tuple(permissions),
                 ),
                 client_id=self._client_id,
                 scope=scope,

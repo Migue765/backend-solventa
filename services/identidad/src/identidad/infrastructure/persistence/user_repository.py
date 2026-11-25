@@ -12,6 +12,7 @@ from identidad.infrastructure.persistence.models import (
     AsesorSocioModel,
     SocioModel,
     UsuarioModel,
+    UsuarioPermisoModel,
     UsuarioSocioModel,
 )
 
@@ -43,6 +44,18 @@ class SqlUserRepository:
             )
             try:
                 session.flush()
+                for permission in user.permissions:
+                    if user.role != "asesor" or user.partner_ids:
+                        raise ValueError("Los permisos internos requieren un asesor sin socios.")
+                    if permission.startswith("open_finance:resolver:"):
+                        partner = session.get(
+                            SocioModel, permission.removeprefix("open_finance:resolver:")
+                        )
+                        if partner is None or not partner.activo:
+                            raise ValueError(
+                                "El alcance de riesgo requiere un socio activo existente."
+                            )
+                    session.add(UsuarioPermisoModel(usuario_id=user.user_id, permiso=permission))
                 if consent is not None:
                     SqlConsentRepository.append(session, consent, correlation_id)
                 session.commit()
@@ -100,26 +113,10 @@ class SqlUserRepository:
         self,
         user: User,
         password_hash: str,
-        partner_id: str,
-        partner_name: str,
     ) -> None:
-        if user.role != "asesor":
-            raise ValueError("El usuario administrativo debe tener rol asesor.")
-        with self._sessions.begin() as session:
-            partner = session.get(SocioModel, partner_id)
-            if partner is None:
-                session.add(SocioModel(socio_id=partner_id, nombre=partner_name, activo=True))
-            session.add(
-                UsuarioModel(
-                    usuario_id=user.user_id,
-                    correo=user.email.casefold(),
-                    nombre=user.name,
-                    rol=user.role,
-                    password_hash=password_hash,
-                )
-            )
-            session.flush()
-            session.add(AsesorSocioModel(asesor_id=user.user_id, socio_id=partner_id))
+        if user.role != "asesor" or user.partner_ids:
+            raise ValueError("Se requiere un asesor interno sin asociacion comercial.")
+        self.add(user, password_hash)
 
     def list_clients(self) -> tuple[User, ...]:
         with self._sessions() as session:
@@ -129,6 +126,19 @@ class SqlUserRepository:
                 .order_by(UsuarioModel.nombre, UsuarioModel.usuario_id)
             ).all()
             return tuple(self._to_user(session, row) for row in rows)
+
+    def risk_authorized(self, actor_id: UUID, partner_id: str) -> bool:
+        with self._sessions() as session:
+            row = session.get(UsuarioModel, actor_id)
+            partner = session.get(SocioModel, partner_id)
+            if row is None or partner is None or not partner.activo:
+                return False
+            actor = self._to_user(session, row)
+            return (
+                actor.role == "asesor"
+                and not actor.partner_ids
+                and f"open_finance:resolver:{partner_id}" in actor.permissions
+            )
 
     def create_partner_user(
         self, user: User, password_hash: str, partner_id: str, partner_name: str
@@ -190,4 +200,11 @@ class SqlUserRepository:
             row.numero_documento,
             row.telefono,
             row.fecha_nacimiento,
+            tuple(
+                session.scalars(
+                    select(UsuarioPermisoModel.permiso)
+                    .where(UsuarioPermisoModel.usuario_id == row.usuario_id)
+                    .order_by(UsuarioPermisoModel.permiso)
+                ).all()
+            ),
         )

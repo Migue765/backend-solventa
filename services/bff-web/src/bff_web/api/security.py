@@ -93,3 +93,11 @@ def customer_claims() -> AccessClaims | Response:
         )
     g.audit_actor_id = str(claims.user.user_id)
     return claims
+
+
+def internal_authorized(claims: AccessClaims, permission: str, *, admin: bool = False) -> bool:
+    if claims.session_id is None or claims.user.partner_ids or claims.scope != claims.user.role:
+        return False
+    if admin and claims.user.role == "administrador":
+        return True
+    return claims.user.role == "asesor" and permission in claims.user.permissions

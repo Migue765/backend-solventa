@@ -19,7 +19,7 @@ from sqlalchemy import URL
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE = "solventa_prod"
 TABLE_COUNTS = {
-    "identidad": 10,
+    "identidad": 14,
     "cotizacion": 20,
     "perfilamiento": 11,
     "polizas": 7,
