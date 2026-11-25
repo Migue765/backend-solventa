@@ -67,7 +67,13 @@ def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def sign_token(key: rsa.RSAPrivateKey, user: User = USER, *, scope: str = "cotizaciones") -> str:
+def sign_token(
+    key: rsa.RSAPrivateKey,
+    user: User = USER,
+    *,
+    scope: str = "cotizaciones",
+    session_id: UUID | None = None,
+) -> str:
     now = datetime.now(UTC)
     return jwt.encode(
         {
@@ -83,6 +89,8 @@ def sign_token(key: rsa.RSAPrivateKey, user: User = USER, *, scope: str = "cotiz
             "correo": user.email,
             "rol": user.role,
             "socios": list(user.partner_ids),
+            "permisos": list(user.permissions),
+            **({"sid": str(session_id)} if session_id is not None else {}),
         },
         key,
         algorithm="RS256",
