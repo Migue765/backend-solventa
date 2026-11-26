@@ -45,7 +45,7 @@ class RepositorioConsultas:
 
 
 def _resumen(poliza: PolizaModel, ahora: datetime) -> dict[str, object]:
-    return resumen(
+    result = resumen(
         poliza.poliza_id,
         poliza.tipo,
         poliza.fecha_inicio,
@@ -53,6 +53,9 @@ def _resumen(poliza: PolizaModel, ahora: datetime) -> dict[str, object]:
         _utc(poliza.emitida_en),
         ahora,
     )
+    if poliza.estado == "cancelada":
+        result["estado"] = "cancelada"
+    return result
 
 
 def _utc(instante: datetime) -> datetime:

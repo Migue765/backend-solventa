@@ -35,6 +35,8 @@ def audit_rejected_response(response: Response) -> Response:
 
 
 def authenticate() -> AccessClaims:
+    if isinstance(claims := g.get("journey_claims"), AccessClaims):
+        return claims
     token = bearer_token()
     if token is None:
         raise InvalidAccessTokenError()

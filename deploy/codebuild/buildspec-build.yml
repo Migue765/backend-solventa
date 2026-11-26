@@ -28,7 +28,10 @@ phases:
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%%/*}"
   build:
     commands:
-      - docker build --tag "$ECR_REPOSITORY_URL:$IMAGE_TAG" "$SERVICE_DIR"
+      - |
+        context="$SERVICE_DIR"
+        if [ "$SERVICE_NAME" = "bff-movil" ]; then context=.; fi
+        docker build --file "$SERVICE_DIR/Dockerfile" --tag "$ECR_REPOSITORY_URL:$IMAGE_TAG" "$context"
   post_build:
     commands:
       # Los tags de ECR son inmutables: repetir una version+commit falla a proposito.

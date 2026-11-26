@@ -3,7 +3,7 @@ info:
   title: Recuperacion de contrasena Solventa
   version: 1.0.0
   description: >-
-    Contrato compartido Identidad/BFF Web. Solo permite cambiar la contrasena
+    Contrato compartido por Identidad y los BFF web y movil. Solo permite cambiar la contrasena
     mediante enlace de un uso y vigencia de 15 minutos. Por defecto se envia al
     correo registrado. El modo academico administrado explicito delega la autoridad
     de recuperacion al administrador y envia todos los enlaces solo a su buzon verificado.

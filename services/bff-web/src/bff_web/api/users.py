@@ -19,6 +19,7 @@ from bff_web.api.schemas import (
     created_user_to_json,
     user_to_json,
 )
+from bff_web.application.ports import IdentityGateway
 from bff_web.config import Config
 from bff_web.domain.errors import IdentityRejectedError, IdentityUnavailableError
 
@@ -35,8 +36,12 @@ def no_store(response: Response) -> Response:
 def challenge() -> Response:
     if not _encrypted_enabled():
         raise IdentityUnavailableError()
+    return registration_challenge(identity_gateway())
+
+
+def registration_challenge(gateway: IdentityGateway) -> Response:
     try:
-        payload = identity_gateway().registration_challenge(correlation_id())
+        payload = gateway.registration_challenge(correlation_id())
         validated = RegistrationChallenge.model_validate(payload)
         now = clock()()
         if not now < validated.expiraEn <= now + timedelta(seconds=60):

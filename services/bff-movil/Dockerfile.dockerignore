@@ -1,0 +1,8 @@
+**
+!services/bff-web/pyproject.toml
+!services/bff-web/src/**
+!services/bff-movil/pyproject.toml
+!services/bff-movil/src/**
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
