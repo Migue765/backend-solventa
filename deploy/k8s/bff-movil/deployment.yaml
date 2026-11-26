@@ -55,6 +55,8 @@ spec:
               value: http://identidad.identidad.svc.cluster.local:8080
             - name: QUOTE_SERVICE_URL
               value: http://cotizacion.cotizacion.svc.cluster.local:8080
+            - name: MOVIL_ENTORNO
+              value: "real"
             - name: SINIESTROS_SERVICE_URL
               value: http://siniestros.siniestros.svc.cluster.local:8080
             - name: NOTIFICACIONES_SERVICE_URL
