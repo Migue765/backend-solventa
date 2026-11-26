@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Thread
+from typing import Never
 from uuid import UUID, uuid4
 
 import jwt
@@ -49,6 +50,23 @@ Runtime = tuple[FlaskClient, FlaskClient, sessionmaker[Session]]
 
 
 class IdentityGatewayStub:
+    def _unexpected_call(self, *args: object, **kwargs: object) -> Never:
+        raise AssertionError("Operación de identidad no prevista en este flujo")
+
+    request_password_recovery = _unexpected_call
+    recovery_challenge = _unexpected_call
+    confirm_password_recovery = _unexpected_call
+    registration_challenge = _unexpected_call
+    encrypted_register = _unexpected_call
+    login_challenge = _unexpected_call
+    encrypted_login = _unexpected_call
+    register = _unexpected_call
+    login = _unexpected_call
+    refresh = _unexpected_call
+    revoke = _unexpected_call
+    list_clients = _unexpected_call
+    get_client_by_document = _unexpected_call
+
     def session_active(self, session_id: UUID, correlation_id: str) -> bool:
         return True
 
